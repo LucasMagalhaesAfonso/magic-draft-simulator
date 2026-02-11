@@ -1,0 +1,331 @@
+===== TDM.SPEC.JS - Cards and Tests =====
+
+A-Cori-Steel Cutter:
+  - grant haste + second spell token
+
+Abzan Devotee:
+  - mana ability + GY return
+
+Abzan Monument:
+  - ETB ramp + activated sacrifice
+
+Adorned Crocodile:
+  - dies trigger + GY counter ability
+
+Aegis Sculptor:
+  - flying + ward + upkeep trigger
+
+Agent of Kotis:
+  - GY activated: +2 counters
+
+Aggressive Negotiations:
+  - reveal + exile + counter
+
+Ainok Wayfarer:
+  - ETB mill 3 + return land
+
+All-Out Assault:
+  - static buff all + deathtouch
+
+Ambling Stormshell:
+  - ward + attacks trigger: stun self + draw 3
+
+Anafenza, Unyielding Lineage:
+  - other creature dies trigger
+
+Arashin Sunshield:
+  - ETB exile GY + activated tap
+
+Armament Dragon:
+  - ETB distribute +1/+1 counters
+
+Attuned Hunter:
+  - cards leave graveyard trigger
+
+Auroral Procession:
+  - return from graveyard
+
+Avenger of the Fallen:
+  - deathtouch + attack creates 2 warriors
+
+Awaken the Honored Dead:
+  - saga with 3 chapters
+
+Barrensteppe Siege:
+  - modal enchantment with Abzan/Mardu
+
+Bearer of Glory:
+  - first strike + activated buff all
+
+Betor, Kin to All:
+  - flying + end step draw (if toughness 10+)
+
+Bewildering Blizzard:
+  - draw 3 + debuff all
+
+Bloomvine Regent:
+  - dragon enters trigger
+
+Bone-Cairn Butcher:
+  - attack tokens + grant deathtouch to tokens
+
+Boulderborn Dragon:
+  - attacks trigger: surveil 1
+
+Call the Spirit Dragons:
+  - grant indestructible to dragons + upkeep counters
+
+Caustic Exhale:
+  - debuff -3/-3
+
+Channeled Dragonfire:
+  - 2 damage to any target
+
+Clarion Conqueror:
+  - flying + prevent activated abilities
+
+Constrictor Sage:
+  - ETB tap + stun counter
+
+Coordinated Maneuver:
+  - modal: damage or destroy enchantment
+
+Cori Mountain Stalwart:
+  - second spell trigger: damage + life
+
+Cori-Steel Cutter:
+  - grants power/trample/haste + second spell token
+
+Cruel Truths:
+  - surveil 2, draw 2, lose 2 life
+
+Dalkovan Packbeasts:
+  - vigilance + attack creates 3 warriors
+
+Death Begets Life:
+  - destroy all + draw X
+
+Defibrillating Current:
+  - 4 damage + gain 2 life
+
+Delta Bloodflies:
+  - conditional attacks trigger
+
+Descendant of Storms:
+  - attacks trigger: endure 1
+
+Desperate Measures:
+  - buff +1/-1 + draw on death trigger
+
+Devoted Duelist:
+  - haste + second spell trigger
+
+Dispelling Exhale:
+  - counter spell
+
+Disruptive Stormbrood:
+  - ETB destroy artifact/enchantment
+
+Dracogenesis:
+  - cost reduction for dragon spells
+
+Dragon Sniper:
+  - vigilance + reach + deathtouch
+
+Dragonback Assault:
+  - ETB 3 damage all + landfall dragon token
+
+Dragonback Lancer:
+  - flying + attack creates 1 warrior
+
+Dragonclaw Strike:
+  - double power buff + optional fight
+
+Dragonologist:
+  - ETB look top 6
+
+Dusyut Earthcarver:
+  - ETB endure 3
+
+Duty Beyond Death:
+  - sacrifice cost + indestructible + counters
+
+Elspeth, Storm Slayer:
+  - token doubling + 3 loyalty abilities
+
+Equilibrium Adept:
+  - ETB exile top play
+
+Eshki Dragonclaw:
+  - vigilance+trample+ward + combat begin trigger
+
+Felothar, Dawn of the Abzan:
+  - enters or attacks trigger
+
+Flamehold Grappler:
+  - first strike + ETB copy next spell
+
+Focus the Mind:
+  - draw 3, discard 1 (loot)
+
+Fortress Kin-Guard:
+  - ETB endure 1
+
+Frontline Rush:
+  - modal: tokens or buff X
+
+Furious Forebear:
+  - creature dies in GY trigger
+
+Glacial Dragonhunt:
+  - draw 1 + conditional 3 damage
+
+Heritage Reclamation:
+  - modal: destroy artifact/enchantment + exile GY/draw
+
+Host of the Hereafter:
+  - creature dies with counters
+
+Inspirited Vanguard:
+  - enters or attacks: endure 2
+
+Jeskai Devotee:
+  - second spell: buff self
+
+Jeskai Revelation:
+  - 5 effects: bounce+damage+tokens+draw+life
+
+Jeskai Shrinekeeper:
+  - combat damage: gain life + draw
+
+Kheru Goldkeeper:
+  - cards leave GY: create Treasure
+
+Kin-Tree Nurturer:
+  - lifelink + ETB endure 1
+
+Kin-Tree Severance:
+  - exile permanent mv3+
+
+Kishla Skimmer:
+  - card leaves GY once per turn: draw
+
+Knockout Maneuver:
+  - counter + fight
+
+Kotis, the Fangkeeper:
+  - indestructible + combat damage trigger
+
+Krumar Initiate:
+  - activated endure X
+
+Lasyd Prowler:
+  - ETB mill X (lands controlled)
+
+Lie in Wait:
+  - return from GY + damage X
+
+Lightfoot Technique:
+  - +1/+1 counter + flying+indestructible
+
+Lotuslight Dancers:
+  - lifelink + ETB search to GY
+
+Magmatic Hellkite:
+  - flying + ETB destroy nonbasic land
+
+Mammoth Bellow:
+  - create 5/5 Elephant
+
+Marang River Regent:
+  - flying + ETB bounce 2
+
+Mardu Siegebreaker:
+  - deathtouch+haste + ETB exile + attack copy
+
+Marshal of the Lost:
+  - attacks: buff X
+
+Molten Exhale:
+  - 4 damage to creature
+
+Mox Jasper:
+  - conditional mana tap ability
+
+Naga Fleshcrafter:
+  - ETB clone
+
+Narset, Jeskai Waymaster:
+  - end step: discard hand + draw X
+
+Neriv, Heart of the Storm:
+  - flying + double damage
+
+Nightblade Brigade:
+  - deathtouch + attack token + ETB surveil
+
+Osseous Exhale:
+  - 5 damage to attacker/blocker + conditional life
+
+Overwhelming Surge:
+  - modal: 3 damage or destroy artifact
+
+Perennation:
+  - return permanent from GY with hexproof+indestructible
+
+Piercing Exhale:
+  - one-sided fight + conditional surveil
+
+Poised Practitioner:
+  - second spell: counter + scry
+
+Qarsi Revenant:
+  - flying+deathtouch+lifelink + GY ability
+
+Rally the Monastery:
+  - modal: tokens / buff all / destroy power 4+
+
+Rebellious Strike:
+  - buff +3/+0 + draw 1
+
+Reigning Victor:
+  - mobilize + ETB buff with indestructible
+
+Rite of Renewal:
+  - return 2 permanents from GY to hand
+
+Riverwalk Technique:
+  - modal: bounce to library or counter noncreature
+
+Riverwheel Sweep:
+  - tap + stun 3 + exile top play
+
+Rot-Curse Rakshasa:
+  - trample+decayed + GY activated
+
+Sage of the Skies:
+  - flying+lifelink + cast with another spell
+
+Salt Road Skirmish:
+  - destroy + create haste warriors
+
+Sandskitter Outrider:
+  - menace + ETB endure 2
+
+Sarkhan, Dragon Ascendant:
+  - ETB behold + Treasure + dragon trigger
+
+Shiko, Paragon of the Way:
+  - flying+vigilance + ETB exile GY cast
+
+Shock Brigade:
+  - menace + attack token (sacrifice at end step)
+
+Smile at Death:
+  - upkeep: return 2 creatures from GY
+
+Stormscale Scion:
+  - flying + buff other dragons + storm
+
+Taigam, Master Opportunist:
+  - second spell: copy + exile with suspend

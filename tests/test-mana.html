@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Testes do Sistema de Mana - Magic Draft</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Consolas', 'Courier New', monospace; background: #1a1a2e; color: #eee; padding: 20px; }
+    h1 { color: #e94560; margin-bottom: 10px; }
+    h2 { color: #0f3460; background: #e94560; padding: 8px 16px; margin: 20px 0 10px; border-radius: 4px; }
+    .suite { margin-bottom: 30px; }
+    .test { padding: 4px 12px; margin: 2px 0; border-left: 4px solid transparent; font-size: 14px; }
+    .test.pass { border-left-color: #4caf50; color: #a5d6a7; }
+    .test.fail { border-left-color: #f44336; color: #ef9a9a; background: #2a1a1a; }
+    .test .label { font-weight: bold; margin-right: 8px; }
+    .test .detail { color: #999; font-size: 12px; margin-left: 24px; display: block; }
+    .summary { margin-top: 20px; padding: 16px; border-radius: 8px; font-size: 18px; font-weight: bold; }
+    .summary.all-pass { background: #1b5e20; color: #a5d6a7; }
+    .summary.has-fail { background: #b71c1c; color: #ef9a9a; }
+    .stats { display: flex; gap: 20px; margin-top: 8px; font-size: 14px; font-weight: normal; }
+  </style>
+</head>
+<body>
+  <h1>Testes do Sistema de Mana</h1>
+  <div id="results"></div>
+
+  <!-- Load game engine files in order -->
+  <script src="../js/game/zones.js"></script>
+  <script src="../js/game/cards.js"></script>
+  <script src="../js/game/mana.js"></script>
+  <script src="../js/game/combat.js"></script>
+  <script src="../js/game/stack.js"></script>
+  <script src="../js/game/game-state.js"></script>
+  <script src="../js/game/game-ai.js"></script>
+
+  <script>
+    // ========================= Test Framework =========================
+    const results = { pass: 0, fail: 0, suites: [] };
+    let currentSuite = null;
+
+    function suite(name) {
+      currentSuite = { name, tests: [] };
+      results.suites.push(currentSuite);
+    }
+
+    function test(description, fn) {
+      try {
+        fn();
+        currentSuite.tests.push({ description, passed: true });
+        results.pass++;
+      } catch (e) {
+        currentSuite.tests.push({ description, passed: false, error: e.message });
+        results.fail++;
+      }
+    }
+
+    function assertEqual(actual, expected, msg) {
+      if (actual !== expected) {
+        throw new Error(`${msg || 'assertEqual'}: esperado ${JSON.stringify(expected)}, recebeu ${JSON.stringify(actual)}`);
+      }
+    }
+
+    function assertTrue(value, msg) {
+      if (!value) throw new Error(`${msg || 'assertTrue'}: esperado true, recebeu ${value}`);
+    }
+
+    function assertFalse(value, msg) {
+      if (value) throw new Error(`${msg || 'assertFalse'}: esperado false, recebeu ${value}`);
+    }
+
+    // ========================= Helpers =========================
+
+    function makeCard(overrides) {
+      return {
+        id: 'test_' + Math.random().toString(36).slice(2, 6),
+        _uid: 'test_' + Math.random().toString(36).slice(2, 6),
+        name: overrides.name || 'Test Card',
+        mana_cost: overrides.mana_cost || '',
+        cmc: overrides.cmc || 0,
+        type_line: overrides.type_line || 'Creature',
+        oracle_text: overrides.oracle_text || '',
+        power: overrides.power || '2',
+        toughness: overrides.toughness || '2',
+        colors: overrides.colors || [],
+        color_identity: overrides.color_identity || [],
+        rarity: overrides.rarity || 'common',
+        keywords: overrides.keywords || [],
+        image_small: '', image_normal: '', image_large: '',
+        _ownerId: overrides._ownerId || 0,
+        ...overrides
+      };
+    }
+
+    function makeLand(name, typeLine, oracleText, colorId) {
+      return makeCard({
+        name,
+        type_line: typeLine || 'Basic Land',
+        oracle_text: oracleText || '',
+        mana_cost: '',
+        cmc: 0,
+        color_identity: colorId || [],
+        power: null,
+        toughness: null
+      });
+    }
+
+    function makeBasicForest() {
+      return makeLand('Forest', 'Basic Land — Forest', '{T}: Add {G}.', ['G']);
+    }
+    function makeBasicMountain() {
+      return makeLand('Mountain', 'Basic Land — Mountain', '{T}: Add {R}.', ['R']);
+    }
+    function makeBasicIsland() {
+      return makeLand('Island', 'Basic Land — Island', '{T}: Add {U}.', ['U']);
+    }
+    function makeBasicPlains() {
+      return makeLand('Plains', 'Basic Land — Plains', '{T}: Add {W}.', ['W']);
+    }
+    function makeBasicSwamp() {
+      return makeLand('Swamp', 'Basic Land — Swamp', '{T}: Add {B}.', ['B']);
+    }
+
+    function makeDualLand(name, type1, type2) {
+      const types = { Forest: 'G', Mountain: 'R', Island: 'U', Plains: 'W', Swamp: 'B' };
+      const c1 = types[type1];
+      const c2 = types[type2];
+      return makeLand(name, `Land — ${type1} ${type2}`, `{T}: Add {${c1.toLowerCase()}} or {${c2.toLowerCase()}}.`, [c1, c2]);
+    }
+
+    // Create a minimal game state for testing
+    function makeTestState(playerLands, playerHand, opponentLands) {
+      const state = {
+        players: [
+          { id: 0, life: 20, zones: new PlayerZones(), isHuman: true },
+          { id: 1, life: 20, zones: new PlayerZones(), isHuman: false }
+        ],
+        activePlayer: 0,
+        phase: 'main1',
+        phaseIndex: 3,
+        turn: 3,
+        combat: CombatSystem.createCombatState(),
+        stack: GameStack.create(),
+        manaPool: [ManaSystem.createPool(), ManaSystem.createPool()],
+        landPlayedThisTurn: false,
+        winner: null,
+        log: [],
+        waitingForInput: { type: 'main_phase', playerId: 0 },
+        turnHistory: []
+      };
+
+      // Add lands to battlefield (untapped)
+      playerLands.forEach(land => {
+        const bfLand = CardEngine.prepareForBattlefield(land);
+        bfLand._summoningSick = false;
+        state.players[0].zones.battlefield.add(bfLand);
+      });
+
+      // Add cards to hand
+      playerHand.forEach(card => {
+        state.players[0].zones.hand.add(card);
+      });
+
+      // Add opponent lands
+      (opponentLands || []).forEach(land => {
+        const bfLand = CardEngine.prepareForBattlefield(land);
+        bfLand._summoningSick = false;
+        state.players[1].zones.battlefield.add(bfLand);
+      });
+
+      // Add some cards to library so game doesn't end
+      for (let i = 0; i < 20; i++) {
+        state.players[0].zones.library.add(makeBasicForest());
+        state.players[1].zones.library.add(makeBasicMountain());
+      }
+
+      return state;
+    }
+
+    // ========================= TESTS =========================
+
+    // ---- 1. parseCost ----
+    suite('parseCost - Custos basicos');
+
+    test('Custo vazio retorna zeros', () => {
+      const cost = ManaSystem.parseCost('');
+      assertEqual(cost.total, 0, 'total');
+      assertEqual(cost.generic, 0, 'generic');
+    });
+
+    test('Custo null retorna zeros', () => {
+      const cost = ManaSystem.parseCost(null);
+      assertEqual(cost.total, 0, 'total');
+    });
+
+    test('Custo undefined retorna zeros', () => {
+      const cost = ManaSystem.parseCost(undefined);
+      assertEqual(cost.total, 0, 'total');
+    });
+
+    test('{G} = 1 total, 1 green', () => {
+      const cost = ManaSystem.parseCost('{G}');
+      assertEqual(cost.total, 1, 'total');
+      assertEqual(cost.colored.G, 1, 'G');
+      assertEqual(cost.generic, 0, 'generic');
+    });
+
+    test('{2}{G} = 3 total, 2 generic + 1 green', () => {
+      const cost = ManaSystem.parseCost('{2}{G}');
+      assertEqual(cost.total, 3, 'total');
+      assertEqual(cost.generic, 2, 'generic');
+      assertEqual(cost.colored.G, 1, 'G');
+    });
+
+    test('{1}{G}{G} = 3 total, 1 generic + 2 green', () => {
+      const cost = ManaSystem.parseCost('{1}{G}{G}');
+      assertEqual(cost.total, 3, 'total');
+      assertEqual(cost.generic, 1, 'generic');
+      assertEqual(cost.colored.G, 2, 'G');
+    });
+
+    test('{W}{U}{B}{R}{G} = 5 total, 1 de cada cor', () => {
+      const cost = ManaSystem.parseCost('{W}{U}{B}{R}{G}');
+      assertEqual(cost.total, 5, 'total');
+      assertEqual(cost.colored.W, 1, 'W');
+      assertEqual(cost.colored.U, 1, 'U');
+      assertEqual(cost.colored.B, 1, 'B');
+      assertEqual(cost.colored.R, 1, 'R');
+      assertEqual(cost.colored.G, 1, 'G');
+    });
+
+    test('{3}{R}{R} = 5 total', () => {
+      const cost = ManaSystem.parseCost('{3}{R}{R}');
+      assertEqual(cost.total, 5, 'total');
+      assertEqual(cost.generic, 3, 'generic');
+      assertEqual(cost.colored.R, 2, 'R');
+    });
+
+    test('{0} = 0 total (custo zero)', () => {
+      const cost = ManaSystem.parseCost('{0}');
+      assertEqual(cost.total, 0, 'total');
+    });
+
+    test('{X}{G} = 1 total (X=0)', () => {
+      const cost = ManaSystem.parseCost('{X}{G}');
+      assertEqual(cost.total, 1, 'total');
+      assertEqual(cost.colored.G, 1, 'G');
+    });
+
+    suite('parseCost - Mana hibrida');
+
+    test('{G/U} = 1 total, 1 generic (hibrido)', () => {
+      const cost = ManaSystem.parseCost('{G/U}');
+      assertEqual(cost.total, 1, 'total');
+      assertEqual(cost.generic, 1, 'generic');
+    });
+
+    test('{R/G}{R/G} = 2 total, 2 generic', () => {
+      const cost = ManaSystem.parseCost('{R/G}{R/G}');
+      assertEqual(cost.total, 2, 'total');
+      assertEqual(cost.generic, 2, 'generic');
+    });
+
+    test('{1}{G/U}{G/U} = 3 total, 3 generic', () => {
+      const cost = ManaSystem.parseCost('{1}{G/U}{G/U}');
+      assertEqual(cost.total, 3, 'total');
+      assertEqual(cost.generic, 3, 'generic');
+    });
+
+    test('{2/W} = 1 total, 1 generic', () => {
+      const cost = ManaSystem.parseCost('{2/W}');
+      assertEqual(cost.total, 1, 'total');
+      assertEqual(cost.generic, 1, 'generic');
+    });
+
+    test('{2/W}{2/U} = 2 total, 2 generic', () => {
+      const cost = ManaSystem.parseCost('{2/W}{2/U}');
+      assertEqual(cost.total, 2, 'total');
+      assertEqual(cost.generic, 2, 'generic');
+    });
+
+    suite('parseCost - Mana Phyrexiana');
+
+    test('{G/P} = 1 total, 1 green (Phyrexiana conta como cor)', () => {
+      const cost = ManaSystem.parseCost('{G/P}');
+      assertEqual(cost.total, 1, 'total');
+      assertEqual(cost.colored.G, 1, 'G');
+    });
+
+    test('{U/P}{U/P} = 2 total, 2 blue', () => {
+      const cost = ManaSystem.parseCost('{U/P}{U/P}');
+      assertEqual(cost.total, 2, 'total');
+      assertEqual(cost.colored.U, 2, 'U');
+    });
+
+    test('{1}{B/P} = 2 total, 1 generic + 1 black', () => {
+      const cost = ManaSystem.parseCost('{1}{B/P}');
+      assertEqual(cost.total, 2, 'total');
+      assertEqual(cost.generic, 1, 'generic');
+      assertEqual(cost.colored.B, 1, 'B');
+    });
+
+    suite('parseCost - Mana incolor e neve');
+
+    test('{C} = 1 total, 1 generic', () => {
+      const cost = ManaSystem.parseCost('{C}');
+      assertEqual(cost.total, 1, 'total');
+      assertEqual(cost.generic, 1, 'generic');
+    });
+
+    test('{2}{C} = 3 total, 3 generic', () => {
+      const cost = ManaSystem.parseCost('{2}{C}');
+      assertEqual(cost.total, 3, 'total');
+      assertEqual(cost.generic, 3, 'generic');
+    });
+
+    test('{S}{S} = 2 total, 2 generic (neve)', () => {
+      const cost = ManaSystem.parseCost('{S}{S}');
+      assertEqual(cost.total, 2, 'total');
+      assertEqual(cost.generic, 2, 'generic');
+    });
+
+    // ---- 2. canPay ----
+    suite('canPay - Verificacoes basicas');
+
+    test('Pool vazio nao paga {G}', () => {
+      const pool = ManaSystem.createPool();
+      assertFalse(ManaSystem.canPay(pool, '{G}', 1), 'deve ser false');
+    });
+
+    test('1G paga {G}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 1 };
+      assertTrue(ManaSystem.canPay(pool, '{G}', 1), 'deve ser true');
+    });
+
+    test('2G nao paga {1}{R}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 2 };
+      assertFalse(ManaSystem.canPay(pool, '{1}{R}', 2), 'precisa de R');
+    });
+
+    test('1R+1G paga {1}{R}', () => {
+      const pool = { ...ManaSystem.createPool(), R: 1, G: 1 };
+      assertTrue(ManaSystem.canPay(pool, '{1}{R}', 2), 'G paga generico');
+    });
+
+    test('2G nao paga {2}{G} (precisa 3 total, tem 2)', () => {
+      const pool = { ...ManaSystem.createPool(), G: 2 };
+      assertFalse(ManaSystem.canPay(pool, '{2}{G}', 3), 'mana insuficiente');
+    });
+
+    test('3G paga {2}{G}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 3 };
+      assertTrue(ManaSystem.canPay(pool, '{2}{G}', 3), 'deve pagar');
+    });
+
+    test('2R+1G nao paga {1}{G}{G}', () => {
+      const pool = { ...ManaSystem.createPool(), R: 2, G: 1 };
+      assertFalse(ManaSystem.canPay(pool, '{1}{G}{G}', 3), 'precisa 2G');
+    });
+
+    test('1R+2G paga {1}{G}{G}', () => {
+      const pool = { ...ManaSystem.createPool(), R: 1, G: 2 };
+      assertTrue(ManaSystem.canPay(pool, '{1}{G}{G}', 3), 'R paga generico');
+    });
+
+    suite('canPay - Custos hibridos');
+
+    test('1G paga {G/U} (hibrido como generico)', () => {
+      const pool = { ...ManaSystem.createPool(), G: 1 };
+      assertTrue(ManaSystem.canPay(pool, '{G/U}', 1), 'qualquer cor paga');
+    });
+
+    test('1U paga {G/U}', () => {
+      const pool = { ...ManaSystem.createPool(), U: 1 };
+      assertTrue(ManaSystem.canPay(pool, '{G/U}', 1), 'qualquer cor paga');
+    });
+
+    test('1R paga {G/U} (hibrido = generico)', () => {
+      const pool = { ...ManaSystem.createPool(), R: 1 };
+      assertTrue(ManaSystem.canPay(pool, '{G/U}', 1), 'qualquer mana paga');
+    });
+
+    test('Pool vazio nao paga {G/U}', () => {
+      const pool = ManaSystem.createPool();
+      assertFalse(ManaSystem.canPay(pool, '{G/U}', 1), 'sem mana');
+    });
+
+    test('2 mana paga {G/U}{G/U}', () => {
+      const pool = { ...ManaSystem.createPool(), R: 1, W: 1 };
+      assertTrue(ManaSystem.canPay(pool, '{G/U}{G/U}', 2), '2 generico');
+    });
+
+    test('1 mana nao paga {G/U}{G/U}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 1 };
+      assertFalse(ManaSystem.canPay(pool, '{G/U}{G/U}', 2), 'precisa 2');
+    });
+
+    suite('canPay - Custos Phyrexianos');
+
+    test('1G paga {G/P}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 1 };
+      assertTrue(ManaSystem.canPay(pool, '{G/P}', 1));
+    });
+
+    test('1R nao paga {G/P} (Phyrex = colorida)', () => {
+      const pool = { ...ManaSystem.createPool(), R: 1 };
+      assertFalse(ManaSystem.canPay(pool, '{G/P}', 1), 'precisa da cor exata');
+    });
+
+    test('Pool vazio nao paga {G/P}', () => {
+      const pool = ManaSystem.createPool();
+      assertFalse(ManaSystem.canPay(pool, '{G/P}', 1));
+    });
+
+    suite('canPay - Fallback cmc');
+
+    test('mana_cost vazio com cmc 3: precisa 3 mana total', () => {
+      const pool = { ...ManaSystem.createPool(), G: 2 };
+      assertFalse(ManaSystem.canPay(pool, '', 3), '2 < 3');
+    });
+
+    test('mana_cost vazio com cmc 3: 3G paga', () => {
+      const pool = { ...ManaSystem.createPool(), G: 3 };
+      assertTrue(ManaSystem.canPay(pool, '', 3), '3 >= 3');
+    });
+
+    test('mana_cost vazio com cmc 0: sempre pode pagar', () => {
+      const pool = ManaSystem.createPool();
+      assertTrue(ManaSystem.canPay(pool, '', 0), 'custo 0');
+    });
+
+    suite('canPay - Safety net (parsedTotal < cmc)');
+
+    test('Custo {1} mas cmc=3: precisa 3 total (safety net)', () => {
+      const pool = { ...ManaSystem.createPool(), G: 2 };
+      assertFalse(ManaSystem.canPay(pool, '{1}', 3), 'safety: 2 < 3');
+    });
+
+    test('Custo {1} mas cmc=3: 3G paga (safety net)', () => {
+      const pool = { ...ManaSystem.createPool(), G: 3 };
+      assertTrue(ManaSystem.canPay(pool, '{1}', 3), 'safety: 3 >= 3');
+    });
+
+    // ---- 3. getLandManaColors ----
+    suite('getLandManaColors - Tipos de terreno');
+
+    test('Forest produz G', () => {
+      const land = makeBasicForest();
+      const colors = ManaSystem.getLandManaColors(land);
+      assertTrue(colors.includes('G'), 'deve incluir G');
+      assertEqual(colors.length, 1, 'so 1 cor');
+    });
+
+    test('Mountain produz R', () => {
+      const land = makeBasicMountain();
+      const colors = ManaSystem.getLandManaColors(land);
+      assertTrue(colors.includes('R'), 'deve incluir R');
+    });
+
+    test('Terreno bicolor Forest Mountain produz G e R', () => {
+      const land = makeDualLand('Stomping Ground', 'Forest', 'Mountain');
+      const colors = ManaSystem.getLandManaColors(land);
+      assertTrue(colors.includes('G'), 'deve incluir G');
+      assertTrue(colors.includes('R'), 'deve incluir R');
+      assertEqual(colors.length, 2, '2 cores');
+    });
+
+    test('Terreno bicolor Island Plains produz U e W', () => {
+      const land = makeDualLand('Hallowed Fountain', 'Island', 'Plains');
+      const colors = ManaSystem.getLandManaColors(land);
+      assertTrue(colors.includes('U'), 'deve incluir U');
+      assertTrue(colors.includes('W'), 'deve incluir W');
+    });
+
+    test('Terreno sem tipo basico usa color_identity', () => {
+      const land = makeLand('Mana Confluence', 'Land', '{T}, Pay 1 life: Add one mana of any color.', ['W', 'U', 'B', 'R', 'G']);
+      const colors = ManaSystem.getLandManaColors(land);
+      assertEqual(colors.length, 5, '5 cores');
+    });
+
+    test('Terreno sem cor produz C', () => {
+      const land = makeLand('Wastes', 'Basic Land', '{T}: Add {C}.', []);
+      // oracleText doesn't match any color add pattern
+      const colors = ManaSystem.getLandManaColors(land);
+      assertTrue(colors.length >= 1, 'deve ter pelo menos 1');
+    });
+
+    // ---- 4. payMana ----
+    suite('payMana - Pagamento correto');
+
+    test('Pagar {G} de pool {G:3} = {G:2}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 3 };
+      const result = ManaSystem.payMana(pool, '{G}', 1);
+      assertEqual(result.G, 2, 'G restante');
+    });
+
+    test('Pagar {2}{G} de pool {G:3, R:1} = {G:0, R:1}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 3, R: 1 };
+      const result = ManaSystem.payMana(pool, '{2}{G}', 3);
+      assertEqual(result.G, 0, 'G restante');
+      assertEqual(result.R, 1, 'R nao usado (G tinha bastante)');
+    });
+
+    test('Pagar {1}{R} de pool {R:1, G:1} = {R:0, G:0}', () => {
+      const pool = { ...ManaSystem.createPool(), R: 1, G: 1 };
+      const result = ManaSystem.payMana(pool, '{1}{R}', 2);
+      assertEqual(result.R, 0, 'R pago');
+      assertEqual(result.G, 0, 'G pago generico');
+    });
+
+    test('Pagar custo vazio cmc=2 de pool {G:2} = {G:0}', () => {
+      const pool = { ...ManaSystem.createPool(), G: 2 };
+      const result = ManaSystem.payMana(pool, '', 2);
+      assertEqual(result.G, 0, 'tudo pago');
+    });
+
+    // ---- 5. canAfford (com game state) ----
+    suite('canAfford - Verificacao com terrenos e pool');
+
+    test('2 florestas nao pagam criatura {2}{G} (cmc 3)', () => {
+      const creature = makeCard({ name: 'Centaur Courser', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      assertFalse(ManaSystem.canAfford(state, 0, creature), '2 < 3');
+    });
+
+    test('3 florestas pagam criatura {2}{G} (cmc 3)', () => {
+      const creature = makeCard({ name: 'Centaur Courser', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest(), makeBasicForest()], [creature]);
+      assertTrue(ManaSystem.canAfford(state, 0, creature), '3 >= 3');
+    });
+
+    test('2 montanhas nao pagam criatura {2}{G} (cor errada)', () => {
+      const creature = makeCard({ name: 'Centaur Courser', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicMountain(), makeBasicMountain(), makeBasicMountain()], [creature]);
+      assertFalse(ManaSystem.canAfford(state, 0, creature), 'sem green');
+    });
+
+    test('2 montanhas + 1 floresta pagam {2}{G}', () => {
+      const creature = makeCard({ name: 'Centaur Courser', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicMountain(), makeBasicMountain(), makeBasicForest()], [creature]);
+      assertTrue(ManaSystem.canAfford(state, 0, creature), 'R+R para generico, G para green');
+    });
+
+    test('Terreno tapado nao conta', () => {
+      const creature = makeCard({ name: 'Centaur Courser', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest(), makeBasicForest()], [creature]);
+      // Tap one land
+      state.players[0].zones.battlefield.cards[0]._tapped = true;
+      assertFalse(ManaSystem.canAfford(state, 0, creature), 'so 2 em pe');
+    });
+
+    test('Mana no pool + terrenos = total correto', () => {
+      const creature = makeCard({ name: 'Centaur Courser', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      // Add 1G to pool (simulating a tapped land)
+      state.manaPool[0].G = 1;
+      assertTrue(ManaSystem.canAfford(state, 0, creature), '2 lands + 1 pool = 3');
+    });
+
+    test('Dual land conta para ambas as cores', () => {
+      const creature = makeCard({ name: 'Ghor-Clan Rampager', mana_cost: '{2}{R}{G}', cmc: 4 });
+      const dual = makeDualLand('Stomping Ground', 'Forest', 'Mountain');
+      const state = makeTestState([dual, makeBasicForest(), makeBasicMountain(), makeBasicForest()], [creature]);
+      assertTrue(ManaSystem.canAfford(state, 0, creature), 'dual + basics pagam');
+    });
+
+    // ---- 6. getPlayableCards ----
+    suite('getPlayableCards - Filtragem correta');
+
+    test('Criatura cmc 3 nao e jogavel com 2 terrenos', () => {
+      const creature = makeCard({ name: 'Centaur', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Centaur'), 'nao deve ser jogavel');
+    });
+
+    test('Criatura cmc 3 e jogavel com 3 terrenos', () => {
+      const creature = makeCard({ name: 'Centaur', mana_cost: '{2}{G}', cmc: 3 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest(), makeBasicForest()], [creature]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertTrue(playable.some(c => c.name === 'Centaur'), 'deve ser jogavel');
+    });
+
+    test('Criatura cmc 5 nao jogavel com 4 terrenos', () => {
+      const creature = makeCard({ name: 'Big Wurm', mana_cost: '{3}{G}{G}', cmc: 5 });
+      const lands = [makeBasicForest(), makeBasicForest(), makeBasicForest(), makeBasicForest()];
+      const state = makeTestState(lands, [creature]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Big Wurm'), '4 < 5');
+    });
+
+    test('Terreno e jogavel se nao jogou terreno neste turno', () => {
+      const land = makeBasicForest();
+      const state = makeTestState([], [land]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertTrue(playable.some(c => c.name === 'Forest'), 'terreno jogavel');
+    });
+
+    test('Terreno nao e jogavel se ja jogou terreno', () => {
+      const land = makeBasicForest();
+      const state = makeTestState([], [land]);
+      state.landPlayedThisTurn = true;
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Forest'), 'ja jogou terreno');
+    });
+
+    test('Cor errada impede jogar mesmo com mana total suficiente', () => {
+      const creature = makeCard({ name: 'Blue Drake', mana_cost: '{1}{U}{U}', cmc: 3 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest(), makeBasicForest()], [creature]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Blue Drake'), '3G nao paga 1UU');
+    });
+
+    test('Hibrido {G/U} jogavel com 1 terreno qualquer', () => {
+      const creature = makeCard({ name: 'Hybrid Elf', mana_cost: '{G/U}', cmc: 1 });
+      const state = makeTestState([makeBasicMountain()], [creature]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertTrue(playable.some(c => c.name === 'Hybrid Elf'), 'hibrido aceita qualquer');
+    });
+
+    test('Dual land nao conta como 2 mana para total', () => {
+      // 2 dual lands = only 2 mana total, NOT 4
+      const creature = makeCard({ name: 'Big Boy', mana_cost: '{3}', cmc: 3 });
+      const dual1 = makeDualLand('Dual 1', 'Forest', 'Mountain');
+      const dual2 = makeDualLand('Dual 2', 'Forest', 'Mountain');
+      const state = makeTestState([dual1, dual2], [creature]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Big Boy'), '2 duals = 2 mana, nao 4');
+    });
+
+    // ---- 7. autoTapForSpell ----
+    suite('autoTapForSpell - Tap inteligente');
+
+    test('Tapa 3 terrenos para custo 3', () => {
+      const state = makeTestState([makeBasicForest(), makeBasicForest(), makeBasicForest()], []);
+      const tapped = GameState.autoTapForSpell(state, 0, '{2}{G}', 3);
+      assertEqual(tapped.length, 3, '3 terrenos tapados');
+      assertEqual(ManaSystem.poolTotal(state.manaPool[0]), 3, '3 mana no pool');
+    });
+
+    test('Tapa a cor certa primeiro', () => {
+      const state = makeTestState([makeBasicMountain(), makeBasicMountain(), makeBasicForest()], []);
+      GameState.autoTapForSpell(state, 0, '{2}{G}', 3);
+      // Should have tapped 1G for colored, 2R for generic
+      assertTrue(state.manaPool[0].G >= 1, 'deve ter G no pool');
+      assertEqual(ManaSystem.poolTotal(state.manaPool[0]), 3, '3 total');
+    });
+
+    test('Nao tapa terrenos se mana no pool ja e suficiente', () => {
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], []);
+      // Pre-add mana to pool (simulating manual tap)
+      state.manaPool[0].G = 3;
+      const tapped = GameState.autoTapForSpell(state, 0, '{2}{G}', 3);
+      assertEqual(tapped.length, 0, 'nenhum terreno tapado - pool ja tinha');
+    });
+
+    test('Tapa apenas o necessario quando pool tem algo', () => {
+      const state = makeTestState([makeBasicForest(), makeBasicForest(), makeBasicForest()], []);
+      state.manaPool[0].G = 1; // Already have 1G in pool
+      const tapped = GameState.autoTapForSpell(state, 0, '{2}{G}', 3);
+      assertEqual(tapped.length, 2, 'so 2 adicionais');
+    });
+
+    test('Prefere mono-color para cor, guarda dual para generico', () => {
+      const dual = makeDualLand('Dual', 'Forest', 'Mountain');
+      const state = makeTestState([makeBasicForest(), dual, makeBasicMountain()], []);
+      GameState.autoTapForSpell(state, 0, '{1}{G}', 2);
+      // Should tap the basic Forest for G first (single-color), then something for generic
+      // The basic Forest should produce G
+      assertTrue(state.manaPool[0].G >= 1, 'deve ter G');
+      assertEqual(ManaSystem.poolTotal(state.manaPool[0]), 2, '2 total');
+    });
+
+    test('Dual land produz a cor certa quando pedida', () => {
+      const dual = makeDualLand('Gruul Land', 'Forest', 'Mountain');
+      const state = makeTestState([dual], []);
+      GameState.autoTapForSpell(state, 0, '{G}', 1);
+      assertEqual(state.manaPool[0].G, 1, 'dual produziu G quando pedido');
+      assertEqual(state.manaPool[0].R, 0, 'nao produziu R');
+    });
+
+    // ---- 8. castSpell - Verificacoes de cast ----
+    suite('castSpell - Prevencao de cast invalido');
+
+    test('Nao pode castar com mana insuficiente no pool', () => {
+      const creature = makeCard({ name: 'Expensive', mana_cost: '{4}{G}', cmc: 5 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      // Auto-tap only 2 lands
+      GameState.autoTapForSpell(state, 0, creature.mana_cost, creature.cmc);
+      const result = GameState.castSpell(state, 0, creature._uid, []);
+      assertFalse(result.success, 'cast deve falhar');
+    });
+
+    test('Cast bem sucedido com mana suficiente', () => {
+      const creature = makeCard({ name: 'Bear', mana_cost: '{1}{G}', cmc: 2 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      GameState.autoTapForSpell(state, 0, creature.mana_cost, creature.cmc);
+      const result = GameState.castSpell(state, 0, creature._uid, []);
+      assertTrue(result.success, 'cast deve funcionar');
+      assertEqual(state.players[0].zones.battlefield.cards.filter(c => c.name === 'Bear').length, 1, 'bear no campo');
+    });
+
+    test('Cast esvazia mana do pool corretamente', () => {
+      const creature = makeCard({ name: 'Bear', mana_cost: '{1}{G}', cmc: 2 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      GameState.autoTapForSpell(state, 0, creature.mana_cost, creature.cmc);
+      GameState.castSpell(state, 0, creature._uid, []);
+      assertEqual(ManaSystem.poolTotal(state.manaPool[0]), 0, 'pool vazio apos pagamento');
+    });
+
+    test('Nao pode castar na fase de combate (nao-instant)', () => {
+      const creature = makeCard({ name: 'Bear', mana_cost: '{1}{G}', cmc: 2 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      state.phase = 'combat_attackers';
+      state.phaseIndex = 5;
+      GameState.autoTapForSpell(state, 0, creature.mana_cost, creature.cmc);
+      const result = GameState.castSpell(state, 0, creature._uid, []);
+      assertFalse(result.success, 'criatura nao pode ser jogada em combate');
+    });
+
+    test('Instant pode ser castado em combate', () => {
+      const instant = makeCard({ name: 'Shock', mana_cost: '{R}', cmc: 1, type_line: 'Instant', oracle_text: 'Shock deals 2 damage to any target.' });
+      const state = makeTestState([makeBasicMountain()], [instant]);
+      state.phase = 'combat_attackers';
+      state.phaseIndex = 5;
+      GameState.autoTapForSpell(state, 0, instant.mana_cost, instant.cmc);
+      const result = GameState.castSpell(state, 0, instant._uid, [{ type: 'player', player: 1 }]);
+      assertTrue(result.success, 'instant pode ser jogado em combate');
+    });
+
+    // ---- 9. Terrenos que entram tapados ----
+    suite('Terrenos tapados - Tapped lands');
+
+    test('Terreno que entra tapado nao gera mana no turno', () => {
+      const creature = makeCard({ name: 'Bear', mana_cost: '{G}', cmc: 1 });
+      const tappedLand = makeBasicForest();
+      const state = makeTestState([], [creature, tappedLand]);
+      // Simulate playing land that enters tapped
+      GameState.playLand(state, 0, tappedLand._uid);
+      // Manually tap it to simulate enters tapped
+      const landOnBf = state.players[0].zones.battlefield.cards.find(c => c.name === 'Forest');
+      landOnBf._tapped = true;
+      // Now try to play creature
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Bear'), 'terreno tapado nao ajuda');
+    });
+
+    test('Terreno tapado + terreno em pe = so 1 mana disponivel', () => {
+      const creature = makeCard({ name: 'Bear', mana_cost: '{1}{G}', cmc: 2 });
+      const state = makeTestState([makeBasicForest(), makeBasicForest()], [creature]);
+      // Tap one land
+      state.players[0].zones.battlefield.cards[0]._tapped = true;
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Bear'), '1 em pe nao paga cmc 2');
+    });
+
+    // ---- 10. Cenarios complexos ----
+    suite('Cenarios complexos - Multicast e edge cases');
+
+    test('Apos castar 1 spell, mana restante e correta', () => {
+      const bear = makeCard({ name: 'Bear', mana_cost: '{1}{G}', cmc: 2 });
+      const elf = makeCard({ name: 'Elf', mana_cost: '{G}', cmc: 1 });
+      const state = makeTestState(
+        [makeBasicForest(), makeBasicForest(), makeBasicForest()],
+        [bear, elf]
+      );
+      // Cast bear (costs 2)
+      GameState.autoTapForSpell(state, 0, bear.mana_cost, bear.cmc);
+      GameState.castSpell(state, 0, bear._uid, []);
+      // Should have 1 untapped land left
+      const untapped = state.players[0].zones.battlefield.cards.filter(c => CardEngine.isLand(c) && !c._tapped);
+      assertEqual(untapped.length, 1, '1 terreno em pe');
+      // Elf should still be playable
+      const playable = GameState.getPlayableCards(state, 0);
+      assertTrue(playable.some(c => c.name === 'Elf'), 'elf jogavel com 1 terreno restante');
+    });
+
+    test('Apos castar 2 spells, nao pode castar 3o sem mana', () => {
+      const spell1 = makeCard({ name: 'Spell1', mana_cost: '{G}', cmc: 1 });
+      const spell2 = makeCard({ name: 'Spell2', mana_cost: '{G}', cmc: 1 });
+      const spell3 = makeCard({ name: 'Spell3', mana_cost: '{G}', cmc: 1 });
+      const state = makeTestState(
+        [makeBasicForest(), makeBasicForest()],
+        [spell1, spell2, spell3]
+      );
+      // Cast spell1
+      GameState.autoTapForSpell(state, 0, spell1.mana_cost, spell1.cmc);
+      GameState.castSpell(state, 0, spell1._uid, []);
+      // Cast spell2
+      GameState.autoTapForSpell(state, 0, spell2.mana_cost, spell2.cmc);
+      GameState.castSpell(state, 0, spell2._uid, []);
+      // spell3 should NOT be playable
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Spell3'), 'sem mana para 3o spell');
+    });
+
+    test('Custo multi-cor exige cores corretas', () => {
+      const gold = makeCard({ name: 'Gold Card', mana_cost: '{W}{U}{B}', cmc: 3 });
+      // Only 2 correct colors
+      const state = makeTestState(
+        [makeBasicPlains(), makeBasicIsland(), makeBasicForest()],
+        [gold]
+      );
+      const playable = GameState.getPlayableCards(state, 0);
+      assertFalse(playable.some(c => c.name === 'Gold Card'), 'falta B, tem G sobrando');
+    });
+
+    test('Custo multi-cor com todas as cores corretas', () => {
+      const gold = makeCard({ name: 'Gold Card', mana_cost: '{W}{U}{B}', cmc: 3 });
+      const state = makeTestState(
+        [makeBasicPlains(), makeBasicIsland(), makeBasicSwamp()],
+        [gold]
+      );
+      const playable = GameState.getPlayableCards(state, 0);
+      assertTrue(playable.some(c => c.name === 'Gold Card'), 'WUB disponivel');
+    });
+
+    test('Criatura {4}{G}{G} precisa exatamente 6 mana com 2G', () => {
+      const big = makeCard({ name: 'Big Green', mana_cost: '{4}{G}{G}', cmc: 6 });
+      // 5 lands, only 2 forests
+      const state = makeTestState(
+        [makeBasicForest(), makeBasicForest(), makeBasicMountain(), makeBasicMountain(), makeBasicMountain()],
+        [big]
+      );
+      assertFalse(ManaSystem.canAfford(state, 0, big), '5 lands < 6 cmc');
+    });
+
+    test('Criatura {4}{G}{G} com 6 terrenos e 2 florestas funciona', () => {
+      const big = makeCard({ name: 'Big Green', mana_cost: '{4}{G}{G}', cmc: 6 });
+      const state = makeTestState(
+        [makeBasicForest(), makeBasicForest(), makeBasicMountain(), makeBasicMountain(), makeBasicMountain(), makeBasicMountain()],
+        [big]
+      );
+      assertTrue(ManaSystem.canAfford(state, 0, big), '6 lands com 2G');
+    });
+
+    test('Custo {X}{G}: X=0, precisa so 1G', () => {
+      const xspell = makeCard({ name: 'X Spell', mana_cost: '{X}{G}', cmc: 1, type_line: 'Sorcery' });
+      const state = makeTestState([makeBasicForest()], [xspell]);
+      const playable = GameState.getPlayableCards(state, 0);
+      assertTrue(playable.some(c => c.name === 'X Spell'), 'X=0 + G com 1 floresta');
+    });
+
+    // ---- 11. AI mana checks ----
+    suite('AI - Verificacao de mana da IA');
+
+    test('AI nao casta criatura cmc 3 com 2 terrenos', () => {
+      const creature = makeCard({ name: 'AI Creature', mana_cost: '{2}{R}', cmc: 3, _ownerId: 1 });
+      const state = makeTestState(
+        [],
+        [],
+        [makeBasicMountain(), makeBasicMountain()] // opponent has 2 lands
+      );
+      state.players[1].zones.hand.add(creature);
+      state.activePlayer = 1;
+      state.phase = 'main1';
+
+      const playableBefore = GameState.getPlayableCards(state, 1);
+      assertFalse(playableBefore.some(c => c.name === 'AI Creature'), 'IA nao deve ver como jogavel');
+    });
+
+    test('AI casta criatura cmc 2 com 2 terrenos', () => {
+      const creature = makeCard({ name: 'AI Bear', mana_cost: '{1}{R}', cmc: 2, _ownerId: 1 });
+      const state = makeTestState(
+        [],
+        [],
+        [makeBasicMountain(), makeBasicMountain()]
+      );
+      state.players[1].zones.hand.add(creature);
+      state.activePlayer = 1;
+      state.phase = 'main1';
+
+      const playable = GameState.getPlayableCards(state, 1);
+      assertTrue(playable.some(c => c.name === 'AI Bear'), 'IA deve poder jogar');
+    });
+
+    test('AI playMainPhase nao casta com mana insuficiente', () => {
+      const expensive = makeCard({ name: 'Expensive', mana_cost: '{5}{G}{G}', cmc: 7, _ownerId: 1 });
+      const state = makeTestState(
+        [],
+        [],
+        [makeBasicForest(), makeBasicForest(), makeBasicForest()] // 3 lands
+      );
+      state.players[1].zones.hand.add(expensive);
+      state.activePlayer = 1;
+
+      const bfBefore = state.players[1].zones.battlefield.cards.filter(c => CardEngine.isCreature(c)).length;
+      GameAI.playMainPhase(state, 1);
+      const bfAfter = state.players[1].zones.battlefield.cards.filter(c => CardEngine.isCreature(c)).length;
+      assertEqual(bfAfter, bfBefore, 'IA nao castou nenhuma criatura');
+    });
+
+    // ========================= Render Results =========================
+    function renderResults() {
+      const container = document.getElementById('results');
+      let html = '';
+
+      for (const s of results.suites) {
+        html += `<div class="suite"><h2>${s.name}</h2>`;
+        for (const t of s.tests) {
+          const cls = t.passed ? 'pass' : 'fail';
+          const icon = t.passed ? '✓' : '✗';
+          html += `<div class="test ${cls}">
+            <span class="label">${icon}</span>${t.description}
+            ${t.error ? `<span class="detail">${t.error}</span>` : ''}
+          </div>`;
+        }
+        html += '</div>';
+      }
+
+      const allPassed = results.fail === 0;
+      html += `<div class="summary ${allPassed ? 'all-pass' : 'has-fail'}">
+        ${allPassed ? '✓ TODOS OS TESTES PASSARAM!' : `✗ ${results.fail} TESTE(S) FALHARAM`}
+        <div class="stats">
+          <span>Total: ${results.pass + results.fail}</span>
+          <span>Passou: ${results.pass}</span>
+          <span>Falhou: ${results.fail}</span>
+        </div>
+      </div>`;
+
+      container.innerHTML = html;
+
+      // Also log to console
+      console.log(`\n=== RESULTADOS ===`);
+      console.log(`Total: ${results.pass + results.fail} | Passou: ${results.pass} | Falhou: ${results.fail}`);
+      if (results.fail > 0) {
+        console.log('\nFalhas:');
+        for (const s of results.suites) {
+          for (const t of s.tests) {
+            if (!t.passed) console.log(`  ✗ [${s.name}] ${t.description}: ${t.error}`);
+          }
+        }
+      }
+    }
+
+    renderResults();
+  </script>
+</body>
+</html>

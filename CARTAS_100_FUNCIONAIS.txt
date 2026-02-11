@@ -1,0 +1,20 @@
+=== CARTAS TDM 100% FUNCIONAIS ===
+Data: 10/02/2026
+
+SISTEMAS IMPLEMENTADOS NO ENGINE:
+✅ exile_top_choose - Escolha interativa de cartas exiladas
+✅ for_each_opponent - Múltiplos tokens para cada oponente
+✅ damage_divided - Dano distribuído entre criaturas/planeswalkers
+✅ duration next_turn - Cleanup baseado em durations para exiled cards
+
+CARTAS 100% FUNCIONAIS:
+✅ Rakshasa's Bargain - CORRIGIDA: look_top com pick: 2
+✅ Shiko, Paragon of the Way - VALIDADA: exile_graveyard_cast_copy funcional
+✅ Songcrafter Mage - VALIDADA: grant_harmonize funcional
+✅ Zurgo's Vanguard - VALIDADA: power_equals + mobilize funcional
+✅ Marang River Regent - VALIDADA: DFC + omen + loot + bounce funcional
+✅ Riverwheel Sweep - IMPLEMENTADA: Tap + stun + exile_top_choose(2,1) + duration next_turn
+✅ Mardu Siegebreaker - IMPLEMENTADA: ETB exile own_creature + attacks create_token_copy for_each_opponent + sacrificeAtEndStep
+✅ Ureni, the Song Unending - IMPLEMENTADA: Flying + protection white/black + ETB damage_divided lands_count
+
+TOTAL: 8 cartas TDM 100% funcionais e testadas

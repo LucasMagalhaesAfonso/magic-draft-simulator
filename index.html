@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Magic Draft Simulator</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/game.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-title-group">
+      <img class="header-guild-wheel" src="img/pagina/todas.png" alt="">
+      <h1 onclick="App.goHome()">Magic Draft Simulator</h1>
+    </div>
+    <img class="header-logo" src="img/pagina/todas2.png" alt="">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="btn-theme-header" onclick="App.showThemePicker()" title="Tema">🎨</button>
+      <div id="header-info"></div>
+    </div>
+  </header>
+
+  <!-- Screen: Home - Set Selection -->
+  <div id="screen-home" class="hidden">
+    <div class="home-container">
+      <input type="text" id="set-search" class="search-bar" placeholder="Buscar edicao... (ex: Duskmourn, MKM, Dominaria)">
+      <div id="sets-grid" class="sets-grid"></div>
+    </div>
+  </div>
+
+  <!-- Screen: Loading -->
+  <div id="screen-loading" class="hidden">
+    <div class="loading-container">
+      <div class="spinner"></div>
+      <p id="loading-progress">Carregando...</p>
+      <div id="set-stats" class="set-stats"></div>
+      <div id="start-draft-section" class="start-section hidden">
+        <button class="btn btn-primary" onclick="App.startDraft()">Iniciar Draft</button>
+        <button class="btn btn-secondary" onclick="App.startSealed()">Sealed</button>
+        <button class="btn btn-secondary" onclick="App.goHome()">Voltar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screen: Draft -->
+  <div id="screen-draft" class="hidden">
+    <div class="draft-container">
+      <div class="draft-header">
+        <div class="draft-info">
+          <span>Rodada: <strong id="draft-round">1</strong>/3</span>
+          <span>Pick: <strong id="draft-pick">1</strong>/14</span>
+          <span>Cartas no pack: <strong id="draft-remaining">14</strong></span>
+        </div>
+        <button class="btn btn-secondary" id="draft-confirm-btn" onclick="Draft.confirmPick()" disabled>Confirmar Pick</button>
+        <button class="btn btn-secondary" onclick="Draft.simulateRest()" style="margin-left:8px;">Simular Resto</button>
+        <button class="btn btn-primary" onclick="Draft.skipToGame()" style="margin-left:4px;">Pular pro Jogo</button>
+      </div>
+
+      <div id="pack-grid" class="pack-grid"></div>
+
+      <div class="pool-section">
+        <h3>Pool draftada (<span id="pool-count">0</span> cartas)</h3>
+        <div id="pool-colors" class="pool-colors"></div>
+      </div>
+    </div>
+
+    <div class="card-preview" id="card-preview">
+      <img id="card-preview-img" src="" alt="Preview">
+    </div>
+  </div>
+
+  <!-- Screen: Deck Builder -->
+  <div id="screen-deckbuilder" class="hidden"></div>
+
+  <!-- Screen: Game -->
+  <div id="screen-game" class="hidden"></div>
+
+  <!-- Scripts: Core -->
+  <script src="js/card-zoom.js"></script>
+  <script src="js/cache.js"></script>
+  <script src="js/scryfall.js"></script>
+  <script src="js/booster.js"></script>
+  <script src="js/bot-ai.js"></script>
+  <script src="js/draft.js"></script>
+  <script src="js/deckbuilder.js"></script>
+
+  <!-- Scripts: Game Engine -->
+  <script src="js/data/card-effects.js"></script>
+  <script src="js/ai-processor.js"></script>
+  <script src="js/game/zones.js"></script>
+  <script src="js/game/mana.js"></script>
+  <script src="js/game/cards.js"></script>
+  <script src="js/game/combat.js"></script>
+  <script src="js/game/combat-sim.js"></script>
+  <script src="js/game/stack.js"></script>
+  <script src="js/game/game-state.js"></script>
+  <script src="js/game/game-ai.js"></script>
+  <script src="js/game/vfx.js"></script>
+  <script src="js/ui-game.js"></script>
+
+  <!-- Scripts: App -->
+  <script src="js/app.js"></script>
+
+</body>
+</html>

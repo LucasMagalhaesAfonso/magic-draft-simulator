@@ -383,7 +383,7 @@ const GameState = {
         return state.players[pid].zones.graveyard.count() >= 7;
       case 'control_creature_with_counter':
         return bf.some(c => CardEngine.isCreature(c) && c._counters &&
-          ((c._counters['+1/+1'] || 0) > 0 || (c._counters['-1/-1'] || 0) > 0));
+          Object.values(c._counters).some(count => count > 0));
       case 'creature_with_counter':
         return bf.some(c => CardEngine.isCreature(c) && c._counters && (c._counters['+1/+1'] || 0) > 0);
       case 'creature_died':
@@ -453,7 +453,7 @@ const GameState = {
         return !!state._exiledThisResolution;
       case 'control_creature_with_counter':
         return bf.some(c => CardEngine.isCreature(c) && c._counters &&
-          ((c._counters['+1/+1'] || 0) > 0 || (c._counters['-1/-1'] || 0) > 0));
+          Object.values(c._counters).some(count => count > 0));
       case 'control_faerie':
         return bf.some(c => CardEngine.hasCreatureType(c, 'Faerie'));
       case 'control_kithkin':
@@ -1208,7 +1208,7 @@ const GameState = {
         let toTop = effect.to_top || false;
         let toBattlefield = false;
         if (toTop && effect.condition === 'control_dragon' && effect.condition_dest === 'battlefield_tapped') {
-          const hasDragon = bf.cards.some(c => CardEngine.hasCreatureType && CardEngine.hasCreatureType(c, 'Dragon'));
+          const hasDragon = bf.cards.some(c => CardEngine.hasCreatureType(c, 'Dragon'));
           if (hasDragon) {
             toBattlefield = true;
             toTop = false;
@@ -1377,6 +1377,80 @@ const GameState = {
           discarded.push(worst.name);
         }
         return discarded.length > 0 ? `${opponentId === 0 ? 'Voce descarta' : 'Oponente descarta'}: ${discarded.join(', ')}.` : null;
+      }
+      case 'optional_discard_draw': {
+        // Rescue Leopard effect: "you may discard a card. If you do, draw a card"
+        const hand = state.players[controllerId].zones.hand;
+
+        if (hand.count() === 0) {
+          return null; // Can't discard if no cards in hand
+        }
+
+        if (state.players[controllerId].isHuman && controllerId === 0) {
+          // Human: set up optional discard choice
+          state._pendingOptionalDiscard = {
+            controller: controllerId,
+            amount: 1,
+            drawOnDiscard: true // Flag to draw after discarding
+          };
+          state.waitingForInput = { type: 'optional_discard_choice', playerId: controllerId };
+          return null; // Pause for human choice
+        } else {
+          // AI: auto-discard worst card in hand if beneficial
+          const cards = hand.getAll();
+          if (cards.length > 0) {
+            // AI discards least valuable card
+            const worst = cards.reduce((prev, curr) => {
+              const prevCmc = prev.cmc || 0;
+              const currCmc = curr.cmc || 0;
+              // Prefer higher CMC for discarding (less valuable in hand typically)
+              return currCmc > prevCmc ? curr : prev;
+            });
+
+            hand.remove(worst._uid);
+            state.players[controllerId].zones.graveyard.add(worst);
+
+            // Draw a card
+            const drawn = state.players[controllerId].zones.library.drawFromTop();
+            if (drawn) state.players[controllerId].zones.hand.add(drawn);
+
+            return `Descarta ${worst.name} e compra uma carta.`;
+          }
+        }
+        return null;
+      }
+      case 'traveling_botanist_ability': {
+        // Traveling Botanist: "look at the top card. If it's a land, you may reveal it and put it into your hand. If you don't put the card into your hand, you may put it into your graveyard"
+        const lib = state.players[controllerId].zones.library;
+
+        if (lib.count() === 0) {
+          return "Biblioteca vazia.";
+        }
+
+        const topCard = lib.drawFromTop();
+        const isLand = CardEngine.isLand(topCard);
+
+        if (!isLand) {
+          // Not a land: put back on top automatically
+          lib.addToTop(topCard);
+          return `Olha o topo da biblioteca (${topCard.name} - nao e terreno).`;
+        }
+
+        // Is a land: player can choose hand or graveyard
+        if (state.players[controllerId].isHuman && controllerId === 0) {
+          // Human: show interactive choice for land
+          state._pendingTravelingBotanist = {
+            card: topCard,
+            isLand: true,
+            controller: controllerId
+          };
+          state.waitingForInput = { type: 'traveling_botanist_choice', playerId: controllerId };
+          return null; // Pause for human choice
+        } else {
+          // AI: always takes lands to hand
+          state.players[controllerId].zones.hand.add(topCard);
+          return `Revela ${topCard.name} (terreno) e bota na mao.`;
+        }
       }
       case 'return_from_graveyard': {
         const gy = state.players[controllerId].zones.graveyard;
@@ -2089,6 +2163,34 @@ const GameState = {
             if (!card._counters) card._counters = { '+1/+1': 0, '-1/-1': 0 };
             card._counters[effect.counter || '+1/+1'] += 1;
             return `+1 contador ${effect.counter || '+1/+1'} (nenhuma carta comprada extra).`;
+          }
+        }
+        return null;
+      }
+      case 'trade_route_envoy_ability': {
+        // Trade Route Envoy: "draw a card if you control a creature with a counter on it. If you don't draw a card this way, put a +1/+1 counter on this creature"
+        const bf = state.players[controllerId].zones.battlefield;
+        const hasCounterCreature = bf.cards.some(c =>
+          CardEngine.isCreature(c) && c._counters &&
+          Object.values(c._counters).some(count => count > 0)
+        );
+
+        if (hasCounterCreature) {
+          // Draw a card
+          const drawn = state.players[controllerId].zones.library.drawFromTop();
+          if (drawn) {
+            state.players[controllerId].zones.hand.add(drawn);
+            return `Compra ${drawn.name} (controla criatura com marcador).`;
+          } else {
+            return `Biblioteca vazia.`;
+          }
+        } else {
+          // Put +1/+1 counter on this creature
+          const card = state.players[controllerId].zones.battlefield.get(data.cardUid);
+          if (card) {
+            if (!card._counters) card._counters = { '+1/+1': 0, '-1/-1': 0 };
+            card._counters['+1/+1'] += 1;
+            return `${card.name} recebe +1/+1 counter (nenhuma criatura com marcador).`;
           }
         }
         return null;
@@ -5544,7 +5646,6 @@ const GameState = {
 
     return targetingEffects.includes(effect.type) &&
            effect.target &&
-           !effect.optional &&
            !effect.target.includes('all') &&
            !effect.target.includes('each');
   },
@@ -5599,8 +5700,8 @@ const GameState = {
       /deal \d+ damage to target/
     ];
 
-    // Skip if it says "up to" (optional targeting)
-    if (oracleText.includes('up to')) {
+    // Skip only if it says "up to" without specific targeting
+    if (oracleText.includes('up to') && !oracleText.includes('target')) {
       return false;
     }
 

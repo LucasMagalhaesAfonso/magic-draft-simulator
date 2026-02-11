@@ -336,6 +336,12 @@ const UIGame = {
           if (digit === 1) this.resolveMillLandChoice('land');
           else if (digit === 2) this.resolveMillLandChoice('counter');
         }
+        if (wi.type === 'traveling_botanist_choice' && gs._pendingTravelingBotanist) {
+          e.preventDefault();
+          const digit = parseInt(e.code.replace('Digit', ''));
+          if (digit === 1) this.resolveTravelingBotanist('hand');
+          else if (digit === 2) this.resolveTravelingBotanist('graveyard');
+        }
         if (wi.type === 'mana_color_choice' && gs._pendingManaChoice) {
           e.preventDefault();
           const idx = parseInt(e.code.replace('Digit', '')) - 1;
@@ -500,7 +506,7 @@ const UIGame = {
               <span class="mana-used" title="Terrenos virados">${totalLands - untappedLands} <small>usada</small></span>
               ${poolTotal > 0 ? `<div class="mana-pool-colors" title="Mana na pool">${poolDots}</div>` : ''}
             </div>
-            ${this._manaUndoStack.length > 0 ? `<div class="mana-undo-hint" onclick="UIGame.undoMana()"><kbd>⌫</kbd> Desfazer (${this._manaUndoStack.length})</div>` : ''}
+            ${(this._manaUndoStack.length > 0 || gs._undoableAction) ? `<div class="mana-undo-hint" onclick="UIGame.undoLastAction()"><kbd>⌫</kbd> Desfazer ${this._manaUndoStack.length > 0 ? `(${this._manaUndoStack.length})` : ''}</div>` : ''}
           </div>
           <div class="sidebar-section sidebar-controls ${this._aiThinking ? 'ai-thinking' : ''}">
             ${controlsHtml}
@@ -658,6 +664,15 @@ const UIGame = {
 
         <!-- Player choice overlay (any_player targeting) -->
         ${gs._pendingPlayerChoice ? this._renderPlayerChoiceOverlay(gs._pendingPlayerChoice) : ''}
+
+        <!-- Graveyard choice overlay -->
+        ${gs._pendingGraveyardChoice ? this._renderGraveyardChoiceOverlay(gs._pendingGraveyardChoice) : ''}
+
+        <!-- Graveyard card choice overlay -->
+        ${gs._pendingGraveyardCardChoice ? this._renderGraveyardCardChoiceOverlay(gs._pendingGraveyardCardChoice) : ''}
+
+        <!-- Traveling Botanist choice overlay -->
+        ${gs._pendingTravelingBotanist ? this._renderTravelingBotanistOverlay(gs._pendingTravelingBotanist) : ''}
 
         <!-- Sacrifice cost overlay -->
         ${this._pendingSacrificeCast ? this._renderSacrificeCostOverlay() : ''}
@@ -1341,8 +1356,38 @@ const UIGame = {
     const color = ManaSystem.getLandManaColor(card);
     let clickAction = '';
     let clickable = '';
+    let abilityIndicator = '';
+    let hasAbilityClass = '';
+    const gs = this.gameState;
 
-    if (this.gameState && this.gameState.activePlayer === 0 && !card._tapped && playerId === 0) {
+    // Check for activated abilities first (like Evolving Wilds)
+    const abilities = CardEngine.getActivatedAbilities(card);
+    const hasActivated = abilities.length > 0 && playerId === 0;
+
+    if (hasActivated && gs && gs.waitingForInput &&
+        (gs.waitingForInput.type === 'main_phase' || gs.waitingForInput.type === 'instant_priority' || gs.waitingForInput.type === 'stack_priority') &&
+        gs.waitingForInput.playerId === 0) {
+      // Check if any ability can be afforded
+      const canAffordAny = abilities.some(ab => {
+        if (ab.cost.tap && card._tapped) return false;
+        const { manaCost, cmc } = UIGame._getAbilityManaCost(ab);
+        if (cmc > 0) {
+          const fakeCard = { mana_cost: manaCost, cmc };
+          if (!ManaSystem.canAfford(gs, 0, fakeCard)) return false;
+        }
+        return true;
+      });
+      if (canAffordAny) {
+        hasAbilityClass = 'has-ability';
+        abilityIndicator = `<div class="ability-indicator">!</div>`;
+        // Activated abilities take precedence over mana production
+        clickAction = `onclick="UIGame.openAbilityModal('${card._uid}')"`;
+        clickable = 'clickable';
+      }
+    }
+
+    // If no activated abilities or can't afford them, set up mana tapping
+    if (!clickAction && gs && gs.activePlayer === 0 && !card._tapped && playerId === 0) {
       clickAction = `onclick="UIGame.tapLand('${card._uid}')"`;
       clickable = 'clickable';
     }
@@ -1355,9 +1400,10 @@ const UIGame = {
 
     const si = stackIndex || 0;
     return `
-      <div class="bf-land ${tapped} ${clickable}" data-uid="${card._uid}" style="--stack-i:${si}" ${CardZoom.attr(card)} ${clickAction}
-           title="${card.name} - Tap: add {${color}}">
+      <div class="bf-land ${tapped} ${clickable} ${hasAbilityClass}" data-uid="${card._uid}" style="--stack-i:${si}" ${CardZoom.attr(card)} ${clickAction}
+           title="${hasAbilityClass ? card.name + ' - Ativar habilidade' : card.name + ' - Tap: add {' + color + '}'}">
         ${imageHtml}
+        ${abilityIndicator}
       </div>
     `;
   },
@@ -1616,8 +1662,13 @@ const UIGame = {
         `;
       }
       case 'optional_discard_choice': {
+        const drawOnDiscard = gs._pendingOptionalDiscard && gs._pendingOptionalDiscard.drawOnDiscard;
+        const hintText = drawOnDiscard
+          ? "&#9888; Rescue Leopard: voce pode descartar uma carta para comprar outra - clique nela ou <kbd>Esc</kbd> para pular"
+          : "&#9888; Voce pode descartar uma carta - clique nela ou <kbd>Esc</kbd> para pular";
+
         return `
-          <span class="hint-text hint-discard">&#9888; Voce pode descartar uma carta - clique nela ou <kbd>Esc</kbd> para pular</span>
+          <span class="hint-text hint-discard">${hintText}</span>
           <button class="btn btn-secondary btn-sm" onclick="UIGame.skipOptionalDiscard()">Pular <kbd>Esc</kbd></button>
         `;
       }
@@ -2931,6 +2982,15 @@ const UIGame = {
     }
 
     // Single color — tap directly
+    // Save undoable action
+    gs._undoableAction = {
+      type: 'mana_tap',
+      playerId: 0,
+      landUid: uid,
+      prevTapped: land._tapped,
+      prevManaPool: { ...gs.manaPool[0] }
+    };
+
     this._manaUndoStack.push({
       type: 'tap_land',
       landUid: uid,
@@ -2979,6 +3039,17 @@ const UIGame = {
     if (!gs) return;
 
     this._closeManaChoice();
+
+    const land = gs.players[0].zones.battlefield.get(uid);
+
+    // Save undoable action
+    gs._undoableAction = {
+      type: 'mana_tap',
+      playerId: 0,
+      landUid: uid,
+      prevTapped: land._tapped,
+      prevManaPool: { ...gs.manaPool[0] }
+    };
 
     this._manaUndoStack.push({
       type: 'tap_land',
@@ -3973,6 +4044,15 @@ const UIGame = {
 
     gs.log.push(`Voce descarta ${card.name}.`);
 
+    // Check if this should also draw a card (Rescue Leopard)
+    if (gs._pendingOptionalDiscard.drawOnDiscard) {
+      const drawn = gs.players[0].zones.library.drawFromTop();
+      if (drawn) {
+        gs.players[0].zones.hand.add(drawn);
+        gs.log.push(`Voce compra uma carta.`);
+      }
+    }
+
     // Cleanup
     gs._pendingOptionalDiscard = null;
     gs.waitingForInput = null;
@@ -4013,6 +4093,7 @@ const UIGame = {
     const gs = this.gameState;
     if (!gs || gs.winner !== null) return;
     this._clearManaUndo();
+    gs._undoableAction = null; // Clear undoable actions when advancing phase
     gs.waitingForInput = null;
     gs.manaPool[0] = ManaSystem.emptyPool();
     try {
@@ -4032,6 +4113,7 @@ const UIGame = {
     const gs = this.gameState;
     // Clear mana undo stack - passing priority commits the action
     this._clearManaUndo();
+    gs._undoableAction = null; // Clear undoable actions when passing priority
     const wasInstantPriority = gs.waitingForInput && gs.waitingForInput.type === 'instant_priority';
     gs.waitingForInput = null;
     gs.manaPool[0] = ManaSystem.emptyPool();
@@ -4678,6 +4760,113 @@ const UIGame = {
     `;
   },
 
+  _renderGraveyardChoiceOverlay(pending) {
+    const gs = this.gameState;
+    const myGy = gs.players[0].zones.graveyard.getAll();
+    const oppGy = gs.players[1].zones.graveyard.getAll();
+
+    return `
+      <div class="hideaway-overlay">
+        <div class="hideaway-box">
+          <h3>Escolha o Cemiterio</h3>
+          <p class="hideaway-hint">Exilar cartas - escolha de qual cemiterio:</p>
+          <div class="hideaway-cards" style="justify-content:center;gap:20px">
+            <div class="hideaway-card" onclick="UIGame.resolveGraveyardChoice('self')" style="cursor:pointer;padding:20px;text-align:center;min-width:140px">
+              <div style="font-size:28px;margin-bottom:8px">&#129686;</div>
+              <div class="hideaway-card-name" style="font-size:14px;font-weight:bold">Seu Cemiterio</div>
+              <div style="font-size:11px;color:#aaa;margin-top:4px">${myGy.length} cartas</div>
+            </div>
+            <div class="hideaway-card" onclick="UIGame.resolveGraveyardChoice('opponent')" style="cursor:pointer;padding:20px;text-align:center;min-width:140px">
+              <div style="font-size:28px;margin-bottom:8px">&#128128;</div>
+              <div class="hideaway-card-name" style="font-size:14px;font-weight:bold">Cemiterio Oponente</div>
+              <div style="font-size:11px;color:#aaa;margin-top:4px">${oppGy.length} cartas</div>
+            </div>
+          </div>
+          ${gs._undoableAction ? `<div class="hideaway-buttons" style="margin-top:15px;text-align:center">
+            <button onclick="UIGame.undoLastAction()" style="background:#666;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer">&#x2190; Voltar</button>
+          </div>` : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  _renderGraveyardCardChoiceOverlay(pending) {
+    if (!pending || !pending.cards) return '';
+
+    const playerName = pending.playerId === 0 ? 'Seu cemiterio' : 'Cemiterio do oponente';
+    const selectedCards = this._selectedGraveyardCards || [];
+    const minAmount = pending.minAmount || 0;
+    const isUpTo = minAmount === 0;
+    const canConfirm = selectedCards.length >= minAmount && selectedCards.length <= pending.amount;
+
+    const chooseText = isUpTo ? `Escolha até ${pending.amount} carta(s)` : `Escolha ${pending.amount} carta(s)`;
+
+    return `
+      <div class="scry-overlay">
+        <div class="scry-box" style="max-width: 90vw">
+          <h3>Escolha cartas para exilar</h3>
+          <p class="scry-hint">${chooseText} de ${playerName} para exilar:</p>
+          <div class="scry-cards" style="max-height: 60vh; overflow-y: auto">
+            ${pending.cards.map(card => {
+              const isSelected = selectedCards.includes(card._uid);
+              return `
+                <div class="scry-card ${isSelected ? 'selected' : ''}" onclick="UIGame.toggleGraveyardCard('${card._uid}')" style="opacity: ${isSelected ? '1' : '0.7'}; border: ${isSelected ? '2px solid #4CAF50' : '1px solid #666'}">
+                  <div class="scry-card-content">
+                    <div class="scry-card-name">${card.name}</div>
+                    <div class="scry-card-cost">${card.mana_cost || '{0}'}</div>
+                    <div class="scry-card-type">${card.type_line || 'Unknown'}</div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          <div class="scry-buttons">
+            <button onclick="UIGame.confirmGraveyardCardChoice()" ${!canConfirm ? 'disabled' : ''}>
+              Confirmar (${selectedCards.length}/${pending.amount})
+            </button>
+            ${isUpTo && selectedCards.length === 0 ? '<button onclick="UIGame.confirmGraveyardCardChoice()">Não Exilar</button>' : ''}
+            <button onclick="UIGame.undoGraveyardChoice()" style="background:#666;margin-left:10px">&#x2190; Voltar</button>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  _renderTravelingBotanistOverlay(pending) {
+    if (!pending || !pending.card) return '';
+
+    const card = pending.card;
+    const isLand = pending.isLand;
+
+    return `
+      <div class="hideaway-overlay">
+        <div class="hideaway-box">
+          <h3>Traveling Botanist</h3>
+          <p class="hideaway-hint">Topo da biblioteca:</p>
+          <div class="hideaway-cards" style="justify-content:center;gap:20px;margin:20px 0">
+            <div class="hideaway-card" style="padding:15px;text-align:center;min-width:200px;border:2px solid ${isLand ? '#4CAF50' : '#666'}">
+              <div class="hideaway-card-name" style="font-size:16px;font-weight:bold;margin-bottom:8px">${card.name}</div>
+              <div class="hideaway-card-cost" style="margin-bottom:8px">${card.mana_cost || '{0}'}</div>
+              <div class="hideaway-card-type" style="color:#ccc;font-size:12px">${card.type_line || 'Unknown'}</div>
+              ${isLand ? '<div style="color:#4CAF50;margin-top:8px;font-weight:bold">✓ É Terreno!</div>' : '<div style="color:#999;margin-top:8px">Não é terreno</div>'}
+            </div>
+          </div>
+          <div class="hideaway-buttons" style="text-align:center;gap:10px">
+            <button onclick="UIGame.resolveTravelingBotanist('hand')" style="background:#4CAF50;color:white;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;margin:5px">
+              📥 Revelar e Botar na Mão (1)
+            </button>
+            <button onclick="UIGame.resolveTravelingBotanist('graveyard')" style="background:#9C27B0;color:white;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;margin:5px">
+              ⚰️ Botar no Cemitério (2)
+            </button>
+            <div style="color:#888;font-size:12px;margin-top:10px">
+              Pressione (1) ou (2) para escolher
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
   resolvePlayerChoice(choice) {
     const gs = this.gameState;
     if (!gs || !gs._pendingPlayerChoice) return;
@@ -4714,6 +4903,189 @@ const UIGame = {
 
     this.render();
     this._continueIfAI();
+  },
+
+  resolveGraveyardChoice(choice) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingGraveyardChoice) return;
+
+    const pending = gs._pendingGraveyardChoice;
+    const effect = pending.effect;
+    const controller = pending.controller;
+    const opponent = pending.opponent;
+
+    // Save undoable state before proceeding to card selection
+    gs._undoableAction = {
+      type: 'graveyard_choice',
+      pendingState: { ...pending }
+    };
+
+    gs._pendingGraveyardChoice = null;
+
+    // Determine target player based on choice
+    const efgPid = choice === 'opponent' ? opponent : controller;
+
+    // Execute the exile from graveyard effect
+    const efgGy = gs.players[efgPid].zones.graveyard;
+    const efgExile = gs.players[efgPid].zones.exile;
+    const efgAmt = effect.amount || 1;
+    const efgCards = efgGy.getAll();
+
+    if (efgCards.length > 0) {
+      // Pick highest CMC cards
+      efgCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+      for (let efgI = 0; efgI < efgAmt && efgI < efgCards.length; efgI++) {
+        const picked = efgCards[efgI];
+        efgGy.remove(picked._uid);
+        efgExile.add(picked);
+        gs.log.push(`${picked.name} exilado do cemiterio.`);
+      }
+    }
+
+    this.render();
+    this._continueIfAI();
+  },
+
+  toggleGraveyardCard(uid) {
+    const gs = this.gameState;
+    if (!gs._pendingGraveyardCardChoice) return;
+
+    if (!this._selectedGraveyardCards) this._selectedGraveyardCards = [];
+
+    const idx = this._selectedGraveyardCards.indexOf(uid);
+    if (idx >= 0) {
+      // Deselect
+      this._selectedGraveyardCards.splice(idx, 1);
+    } else if (this._selectedGraveyardCards.length < gs._pendingGraveyardCardChoice.amount) {
+      // Select if under limit
+      this._selectedGraveyardCards.push(uid);
+    }
+
+    this.render();
+  },
+
+  confirmGraveyardCardChoice() {
+    const gs = this.gameState;
+    if (!gs._pendingGraveyardCardChoice || !this._selectedGraveyardCards) return;
+
+    const pending = gs._pendingGraveyardCardChoice;
+    const selectedCards = this._selectedGraveyardCards;
+
+    // Clear state
+    gs._pendingGraveyardCardChoice = null;
+    gs.waitingForInput = null;
+    this._selectedGraveyardCards = [];
+
+    // Exile selected cards
+    const gy = gs.players[pending.playerId].zones.graveyard;
+    const exile = gs.players[pending.playerId].zones.exile;
+
+    selectedCards.forEach(uid => {
+      const card = gy.getCard(uid);
+      if (card) {
+        gy.remove(uid);
+        exile.add(card);
+        gs.log.push(`${card.name} exilado do cemiterio.`);
+      }
+    });
+
+    // Continue with remaining effects if any
+    if (pending.remainingEffects && pending.remainingEffects.length > 0) {
+      GameStack.resolveEffects(gs, pending.controller, pending.card, pending.remainingEffects, pending.targets || []);
+    }
+
+    this.render();
+    this._continueIfAI();
+  },
+
+  resolveTravelingBotanist(choice) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingTravelingBotanist) return;
+
+    const pending = gs._pendingTravelingBotanist;
+    const card = pending.card;
+    const controller = pending.controller;
+
+    gs._pendingTravelingBotanist = null;
+    gs.waitingForInput = null;
+
+    switch (choice) {
+      case 'hand':
+        gs.players[controller].zones.hand.add(card);
+        gs.log.push(`Revela ${card.name} (terreno) e bota na mao.`);
+        break;
+      case 'graveyard':
+        gs.players[controller].zones.graveyard.add(card);
+        gs.log.push(`${card.name} (terreno) vai para o cemiterio.`);
+        break;
+    }
+
+    this.render();
+    this._continueIfAI();
+  },
+
+  undoGraveyardChoice() {
+    const gs = this.gameState;
+
+    // Clear the card selection and go back to graveyard choice
+    this._selectedGraveyardCards = [];
+    gs._pendingGraveyardCardChoice = null;
+    gs.waitingForInput = 'graveyard_choice';
+
+    this.render();
+  },
+
+  undoLastAction() {
+    const gs = this.gameState;
+
+    // Try new undo system first
+    if (gs._undoableAction) {
+      const undoInfo = gs._undoableAction;
+
+      switch (undoInfo.type) {
+        case 'mana_tap':
+          this._undoManaTap(undoInfo);
+          break;
+        case 'graveyard_choice':
+          this._undoGraveyardChoice(undoInfo);
+          break;
+      }
+
+      gs._undoableAction = null;
+      this.render();
+      return;
+    }
+
+    // Fallback to legacy mana undo system
+    if (this._manaUndoStack.length > 0) {
+      this.undoMana();
+    }
+  },
+
+  _undoManaTap(undoInfo) {
+    const gs = this.gameState;
+    const { playerId, landUid, prevTapped, prevManaPool } = undoInfo;
+
+    // Restore land tapped state
+    const land = gs.players[playerId].zones.battlefield.getCard(landUid);
+    if (land) {
+      land._tapped = prevTapped;
+    }
+
+    // Restore mana pool
+    gs.manaPool[playerId] = { ...prevManaPool };
+
+    gs.log.push("Mana desfeita.");
+  },
+
+  _undoGraveyardChoice(undoInfo) {
+    const gs = this.gameState;
+
+    // Restore previous state before graveyard choice
+    gs._pendingGraveyardChoice = undoInfo.pendingState;
+    gs._pendingGraveyardCardChoice = null;
+    gs.waitingForInput = 'graveyard_choice';
+    this._selectedGraveyardCards = [];
   },
 
   // === Sacrifice as Additional Cost ===

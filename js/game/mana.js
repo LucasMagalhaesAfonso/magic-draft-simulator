@@ -259,16 +259,53 @@ const ManaSystem = {
     const oracleText = (card.oracle_text || '').toLowerCase();
     const colors = [];
 
-    if (typeLine.includes('plains') || oracleText.includes('add {w}')) colors.push('W');
-    if (typeLine.includes('island') || oracleText.includes('add {u}')) colors.push('U');
-    if (typeLine.includes('swamp') || oracleText.includes('add {b}')) colors.push('B');
-    if (typeLine.includes('mountain') || oracleText.includes('add {r}')) colors.push('R');
-    if (typeLine.includes('forest') || oracleText.includes('add {g}')) colors.push('G');
+    // Check for basic land types first
+    if (typeLine.includes('plains')) colors.push('W');
+    if (typeLine.includes('island')) colors.push('U');
+    if (typeLine.includes('swamp')) colors.push('B');
+    if (typeLine.includes('mountain')) colors.push('R');
+    if (typeLine.includes('forest')) colors.push('G');
 
+    // If basic land types found, return them
     if (colors.length > 0) return colors;
 
-    // Check color identity as fallback
-    if (card.color_identity && card.color_identity.length > 0) {
+    // Check for "any color" mana first (before individual color checks)
+    if (oracleText.includes('add one mana of any color') ||
+        oracleText.includes('add mana of any color') ||
+        oracleText.includes('add any color') ||
+        oracleText.includes('add one mana of any type')) {
+      // Use color identity for "any color" lands
+      if (card.color_identity && card.color_identity.length > 0) {
+        return [...card.color_identity];
+      }
+      return ['W', 'U', 'B', 'R', 'G']; // All colors if no identity
+    }
+
+    // Check for dual/multi color patterns like "{B} or {R}" before individual colors
+    if (oracleText.includes(' or ') && oracleText.includes('add ')) {
+      // This is likely a dual/multi land - use color identity instead of text parsing
+      if (card.color_identity && card.color_identity.length > 1) {
+        return [...card.color_identity];
+      }
+    }
+
+    // Check for mana production in oracle text
+    if (oracleText.includes('add {w}') || oracleText.includes('add one or more {w}')) colors.push('W');
+    if (oracleText.includes('add {u}') || oracleText.includes('add one or more {u}')) colors.push('U');
+    if (oracleText.includes('add {b}') || oracleText.includes('add one or more {b}')) colors.push('B');
+    if (oracleText.includes('add {r}') || oracleText.includes('add one or more {r}')) colors.push('R');
+    if (oracleText.includes('add {g}') || oracleText.includes('add one or more {g}')) colors.push('G');
+
+    // If we found mana colors in text, return them
+    if (colors.length > 0) return colors;
+
+    // Use color identity as fallback for dual/tri lands
+    if (card.color_identity && card.color_identity.length > 1) {
+      return [...card.color_identity];
+    }
+
+    // Single color identity
+    if (card.color_identity && card.color_identity.length === 1) {
       return [...card.color_identity];
     }
 

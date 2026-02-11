@@ -613,6 +613,7 @@ const GameStack = {
         }
 
         case 'ramp': {
+          console.log('[RAMP DEBUG] Stack.js ramp effect called:', effect);
           const lib = gameState.players[controller].zones.library;
           const bf = gameState.players[controller].zones.battlefield;
           const isBasicOnly = effect.landType === 'basic' || !effect.landType;
@@ -628,7 +629,7 @@ const GameStack = {
           let toTop = effect.to_top || false;
           let toBattlefield = false;
           if (toTop && effect.condition === 'control_dragon' && effect.condition_dest === 'battlefield_tapped') {
-            const hasDragon = bf.cards.some(c => CardEngine.hasCreatureType && CardEngine.hasCreatureType(c, 'Dragon'));
+            const hasDragon = bf.cards.some(c => CardEngine.hasCreatureType(c, 'Dragon'));
             if (hasDragon) {
               toBattlefield = true;
               toTop = false;
@@ -684,7 +685,9 @@ const GameStack = {
             land = bestLand;
             const idx = lib.cards.indexOf(land);
             if (idx !== -1) lib.cards.splice(idx, 1);
+            console.log(`[RAMP DEBUG] to_hand: ${effect.to_hand}, toTop: ${toTop}, toBattlefield: ${toBattlefield}`);
             if (effect.to_hand) {
+              console.log('[RAMP DEBUG] Adding to HAND');
               gameState.players[controller].zones.hand.add(land);
               lib.shuffle();
               log.push(`Oponente busca ${land.name} no grimorio e coloca na mao.`);
@@ -700,6 +703,7 @@ const GameStack = {
               lib.shuffle();
               log.push(`Oponente busca ${land.name} e coloca no campo virado.`);
             } else {
+              console.log('[RAMP DEBUG] Adding to BATTLEFIELD (default case)');
               const bfLand = CardEngine.prepareForBattlefield(land);
               bfLand._tapped = effect.tapped ? true : false;
               bfLand._summoningSick = false;
@@ -1556,8 +1560,25 @@ const GameStack = {
         case 'exile_from_graveyard': {
           let efgPid;
           if (effect.target === 'any_graveyard') {
-            // TODO: Implement graveyard choice - for now use opponent
-            efgPid = opponent;
+            // Check if graveyard choice is needed
+            const myGy = gameState.players[controller].zones.graveyard.getAll();
+            const oppGy = gameState.players[opponent].zones.graveyard.getAll();
+
+            if (myGy.length > 0 && oppGy.length > 0) {
+              // Both graveyards have cards - need choice
+              if (controller === 0) { // Human player
+                gameState.waitingForInput = 'graveyard_choice';
+                gameState._pendingGraveyardChoice = { effect, controller, opponent };
+                return; // Pause for human choice
+              } else {
+                // AI chooses opponent graveyard (more aggressive)
+                efgPid = opponent;
+              }
+            } else if (myGy.length > 0) {
+              efgPid = controller;
+            } else {
+              efgPid = opponent;
+            }
           } else {
             efgPid = effect.target === 'opponent' ? opponent : controller;
           }
@@ -1565,14 +1586,36 @@ const GameStack = {
           const efgExile = gameState.players[efgPid].zones.exile;
           const efgAmt = resolveAmount(effect.amount) || 1;
           const efgCards = efgGy.getAll();
+
           if (efgCards.length > 0) {
-            // Pick highest CMC cards
-            efgCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
-            for (let efgI = 0; efgI < efgAmt && efgI < efgCards.length; efgI++) {
-              const picked = efgCards[efgI];
-              efgGy.remove(picked._uid);
-              efgExile.add(picked);
-              log.push(`${picked.name} exilado do cemiterio.`);
+            // Check if human player needs to choose specific cards
+            if (effect.choose_cards && controller === 0) {
+              // For "up to X" effects, allow choosing 0 to X cards
+              const maxAmount = effect.up_to_max ? efgAmt : efgAmt;
+              const minAmount = effect.up_to_max ? 0 : efgAmt;
+
+              gameState.waitingForInput = 'graveyard_card_choice';
+              gameState._pendingGraveyardCardChoice = {
+                playerId: efgPid,
+                amount: maxAmount,
+                minAmount: minAmount,
+                cards: efgCards,
+                effect,
+                controller,
+                remainingEffects: effects ? effects.slice(ei + 1) : [],
+                targets: targets
+              };
+              return; // Pause for human choice
+            } else {
+              // Auto-pick highest CMC cards (AI or forced)
+              efgCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+              const pickedCount = Math.min(efgAmt, efgCards.length);
+              for (let efgI = 0; efgI < pickedCount; efgI++) {
+                const picked = efgCards[efgI];
+                efgGy.remove(picked._uid);
+                efgExile.add(picked);
+                log.push(`${picked.name} exilado do cemiterio.`);
+              }
             }
           }
           break;
@@ -1859,7 +1902,13 @@ const GameStack = {
           let slFilter = null;
           if (effect.target === 'creature') slFilter = c => CardEngine.isCreature(c);
           else if (effect.target === 'land' || effect.target === 'basic_land') slFilter = c => CardEngine.isLand(c);
-          else if (effect.target === 'named_card' && effect.name) slFilter = c => c.name === effect.name;
+          else if (effect.target === 'named_card' && (effect.name || effect.names)) {
+            if (effect.name) {
+              slFilter = c => c.name === effect.name;
+            } else if (effect.names) {
+              slFilter = c => effect.names.includes(c.name);
+            }
+          }
           else slFilter = () => true;
 
           const slCandidates = slLib.cards.filter(slFilter);

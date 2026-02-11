@@ -302,6 +302,13 @@ const CardEffectsDB = {
     activated: [{ cost: { mana: "XB", tap: true, life: "X" }, effects: [{ type: "endure", amount: "X" }], sorcerySpeed: true }]
   },
 
+  "sunset strikemaster": {
+    activated: [
+      { cost: { tap: true }, effects: [{ type: "add_mana", color: "R", amount: 1 }] },
+      { cost: { mana: "2R", tap: true, sacrifice: true }, effects: [{ type: "damage", amount: 6, target: "creature" }] }
+    ]
+  },
+
   // =================== TARKIR DRAGONSTORM - ENCHANTMENTS ===================
 
   "all-out assault": {
@@ -1283,7 +1290,7 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keyword: "deathtouch" }]
   },
   "trade route envoy": {
-    etb: [{ type: "draw", amount: 1, condition: "control_creature_with_counter" }, { type: "counter_self_if_no_draw", counter: "+1/+1" }]
+    etb: [{ type: "trade_route_envoy_ability" }]
   },
   "gurmag nightwatch": {
     etb: [{ type: "look_top", amount: 3, pick: 1, rest_to: "graveyard" }]
@@ -1324,10 +1331,10 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keyword: "flying" }]
   },
   "rescue leopard": {
-    triggered: [{ event: "becomes_tapped", self: true, effects: [{ type: "rummage", amount: 1, optional: true }] }]
+    triggered: [{ event: "becomes_tapped", self: true, effects: [{ type: "optional_discard_draw" }] }]
   },
   "traveling botanist": {
-    triggered: [{ event: "becomes_tapped", self: true, effects: [{ type: "look_top", amount: 1, condition: "land_to_hand" }] }]
+    triggered: [{ event: "becomes_tapped", self: true, effects: [{ type: "traveling_botanist_ability" }] }]
   },
   "sinkhole surveyor": {
     triggered: [{ event: "attacks", self: true, effects: [{ type: "loseLife", amount: 1 }, { type: "endure", amount: 1 }] }],
@@ -1468,12 +1475,6 @@ const CardEffectsDB = {
 
   // =================== TDM - DFC STORMBROODS & DRAGONS ===================
 
-  "feral deathgorger": {
-    cast: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }, { type: "draw", amount: 1 }],
-    omen: true,
-    etb: [{ type: "exile_from_graveyard", target: "opponent", amount: 2 }],
-    static: [{ type: "has_keyword", keywords: ["flying", "deathtouch"] }]
-  },
   "purging stormbrood": {
     cast: [{ type: "buff", power: 2, toughness: 2, target: "own_creature", duration: "end_of_turn" }, { type: "grant", keyword: "lifelink", target: "own_creature", duration: "end_of_turn" }, { type: "grant", keyword: "hexproof", target: "own_creature", duration: "end_of_turn" }],
     omen: true,
@@ -1487,6 +1488,12 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keyword: "flying" }]
   },
   "sagu wildling": {
+    cast: [{ type: "ramp", target: "basic_land", to_hand: true }],
+    omen: true,
+    etb: [{ type: "gainLife", amount: 3 }],
+    static: [{ type: "has_keyword", keyword: "flying" }]
+  },
+  "sagu wildling // roost seek": {
     cast: [{ type: "ramp", target: "basic_land", to_hand: true }],
     omen: true,
     etb: [{ type: "gainLife", amount: 3 }],
@@ -1518,6 +1525,12 @@ const CardEffectsDB = {
     cast: [{ type: "tap", target: "creature" }, { type: "draw", amount: 1 }],
     omen: true,
     static: [{ type: "has_keyword", keywords: ["flying", "ward"] }]
+  },
+  "feral deathgorger": {
+    cast: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature", optional: true }, { type: "draw", amount: 1 }],
+    omen: true,
+    etb: [{ type: "exile_from_graveyard", amount: 2, target: "any_graveyard", choose_cards: true, up_to_max: true }],
+    static: [{ type: "has_keyword", keywords: ["flying", "deathtouch"] }]
   },
 
   // =================== METADATA ===================

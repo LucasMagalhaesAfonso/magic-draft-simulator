@@ -6227,23 +6227,19 @@ test.describe('TDM Card Scenarios', () => {
   });
 
   test.describe('Trade Route Envoy (Runtime)', () => {
-    test('DB has conditional draw + counter_self_if_no_draw ETB', async () => {
+    test('DB has trade_route_envoy_ability ETB', async () => {
       const r = await page.evaluate(() => {
         const db = CardEffectsDB["trade route envoy"];
         return {
-          etb0: db?.etb?.[0]?.type,
-          etb0cond: db?.etb?.[0]?.condition,
-          etb1: db?.etb?.[1]?.type
+          etbType: db?.etb?.[0]?.type
         };
       });
-      expect(r.etb0).toBe('draw');
-      expect(r.etb0cond).toBe('control_creature_with_counter');
-      expect(r.etb1).toBe('counter_self_if_no_draw');
+      expect(r.etbType).toBe('trade_route_envoy_ability');
     });
   });
 
   test.describe('Traveling Botanist (Runtime)', () => {
-    test('DB has becomes_tapped look_top trigger', async () => {
+    test('DB has becomes_tapped traveling_botanist_ability trigger', async () => {
       const r = await page.evaluate(() => {
         const db = CardEffectsDB["traveling botanist"];
         return {
@@ -6254,7 +6250,7 @@ test.describe('TDM Card Scenarios', () => {
       });
       expect(r.trigEvent).toBe('becomes_tapped');
       expect(r.trigSelf).toBe(true);
-      expect(r.effect).toBe('look_top');
+      expect(r.effect).toBe('traveling_botanist_ability');
     });
   });
 

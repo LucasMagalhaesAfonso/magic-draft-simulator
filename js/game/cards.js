@@ -72,13 +72,18 @@ const CardEngine = {
   // Get spell effects (for instants/sorceries) - check database first
   getSpellEffects(card) {
     const db = this.getPreprocessedEffects(card);
+    console.log(`[SPELL EFFECTS DEBUG] Card: ${card.name}, DB found:`, !!db, db ? 'cast:' : 'no db', db?.cast);
     if (db) {
       // If card is modal, inject a modal effect with modes
       if (db.modal && db.modes) {
         return [{ type: 'modal', modes: db.modes, chooseTwo: db.chooseTwo || false }];
       }
-      if (db.cast) return db.cast;
+      if (db.cast) {
+        console.log('[SPELL EFFECTS DEBUG] Returning db.cast:', db.cast);
+        return db.cast;
+      }
     }
+    console.log('[SPELL EFFECTS DEBUG] Falling back to parseSpellEffects');
     return this.parseSpellEffects(card);
   },
 
@@ -181,7 +186,7 @@ const CardEngine = {
 
   hasKeyword(card, keyword, gameState = null) {
     // Check regular keywords
-    if ((card.keywords || []).some(k => k.toLowerCase() === keyword.toLowerCase())) {
+    if ((card.keywords || []).some(k => k && typeof k === 'string' && k.toLowerCase() === keyword.toLowerCase())) {
       return true;
     }
 
@@ -194,7 +199,7 @@ const CardEngine = {
     }
 
     // Check temporary keywords (end-of-turn grants)
-    if (card._tempKeywords && card._tempKeywords.some(k => k.toLowerCase() === keyword.toLowerCase())) {
+    if (card._tempKeywords && card._tempKeywords.some(k => k && typeof k === 'string' && k.toLowerCase() === keyword.toLowerCase())) {
       return true;
     }
 
@@ -205,7 +210,7 @@ const CardEngine = {
       if (cardController !== null) {
         const battlefield = gameState.players[cardController].zones.battlefield.cards;
         for (const granter of battlefield) {
-          if (granter._grantAttackingTokens && granter._grantAttackingTokens.toLowerCase() === keyword.toLowerCase()) {
+          if (granter._grantAttackingTokens && typeof granter._grantAttackingTokens === 'string' && granter._grantAttackingTokens.toLowerCase() === keyword.toLowerCase()) {
             return true;
           }
         }

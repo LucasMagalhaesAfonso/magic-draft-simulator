@@ -29,8 +29,10 @@ const GameState = {
     };
 
     // Shuffle and draw opening hands
-    state.players.forEach(p => {
+    state.players.forEach((p, playerId) => {
       p.zones.library.shuffle();
+
+      // Draw opening hand (7 cards)
       for (let i = 0; i < 7; i++) {
         const card = p.zones.library.drawFromTop();
         if (card) p.zones.hand.add(card);
@@ -3858,6 +3860,7 @@ const GameState = {
       // Resolve adventure spell effects (check original card name in DB first)
       const db = CardEngine.getPreprocessedEffects(card);
       const effects = (db && db.cast) ? db.cast : CardEngine.getSpellEffects(adventureSpell);
+      console.log(`[ADVENTURE DEBUG] Final effects passed to stack:`, effects);
       if (effects.length > 0) {
         GameStack.resolveEffects(state, playerId, adventureSpell, effects, targets || []);
       }

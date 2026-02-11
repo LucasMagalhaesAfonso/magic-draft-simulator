@@ -25,6 +25,77 @@ const UIGame = {
   _showingAIAction: null, // Currently displayed AI action overlay
 
   startGame(playerDeck, opponentDeck) {
+    console.log('🎮 UIGame.startGame() called');
+    console.log('📍 Current screen:', document.getElementById('screen-game')?.style.display);
+    console.log('🌍 Window objects available:', Object.keys(window).length);
+
+    // DEBUG: Check if objects exist in global scope RIGHT NOW
+    console.log('🔍 IMMEDIATE CHECK:');
+    console.log('  window.GameState:', window.GameState);
+    console.log('  window.CardEngine:', window.CardEngine);
+    console.log('  window.ManaSystem:', window.ManaSystem);
+    console.log('  window.CombatSystem:', window.CombatSystem);
+    console.log('  window.GameStack:', window.GameStack);
+    console.log('  window.GameAI:', window.GameAI);
+
+    // Check if they exist but are not enumerable
+    console.log('🔍 PROPERTY DESCRIPTOR CHECK:');
+    const objects = ['GameState', 'CardEngine', 'ManaSystem', 'CombatSystem', 'GameStack', 'GameAI'];
+    objects.forEach(name => {
+      const descriptor = Object.getOwnPropertyDescriptor(window, name);
+      console.log(`  ${name} descriptor:`, descriptor);
+    });
+
+    // Wait a bit for dependencies to fully load
+    const checkDependencies = () => {
+      const requiredGlobals = ['GameState', 'CardEngine', 'ManaSystem', 'CombatSystem', 'GameStack', 'GameAI'];
+      // Direct access check instead of typeof window[name]
+      const missing = requiredGlobals.filter(name => {
+        try {
+          const obj = eval(name);
+          return !obj || typeof obj !== 'object';
+        } catch (e) {
+          return true;
+        }
+      });
+
+      console.log('🔍 Dependency check:');
+      requiredGlobals.forEach(name => {
+        try {
+          const obj = eval(name);
+          const exists = obj && typeof obj === 'object';
+          console.log(`  ${name}: ${typeof obj} ${exists ? '✅' : '❌'}`);
+        } catch (e) {
+          console.log(`  ${name}: undefined ❌`);
+        }
+      });
+
+      if (missing.length > 0) {
+        console.error('❌ Missing required dependencies:', missing);
+        console.error('Available game-related globals:', Object.keys(window).filter(k =>
+          k.includes('Game') || k.includes('Card') || k.includes('Mana') || k.includes('Zone') || k.includes('Combat')
+        ));
+
+        // Try again in 100ms (maybe timing issue)
+        if (!this._retryAttempted) {
+          this._retryAttempted = true;
+          console.log('⏳ Retrying dependency check in 100ms...');
+          setTimeout(() => checkDependencies(), 100);
+          return;
+        }
+
+        alert(`ERRO: Dependências não carregadas: ${missing.join(', ')}. Verifique o console para mais detalhes.`);
+        return;
+      }
+
+      console.log('✅ All dependencies loaded successfully');
+      this._actualStartGame(playerDeck, opponentDeck);
+    };
+
+    checkDependencies();
+  },
+
+  _actualStartGame(playerDeck, opponentDeck) {
     this.gameState = GameState.create(playerDeck, opponentDeck);
     this.selectedCard = null;
     this.selectedAttackers = new Set();

@@ -1246,65 +1246,7 @@ const GameAI = {
     return score;
   },
 
-  // Pick the best card to exile from opponent's revealed hand (used by Aggressive Negotiations)
-  /*_pickBestCardToExileFromHand(state, controllerId, nonlandCards) {
-    // Score cards by their potential impact/value to the opponent
-    const scoredCards = nonlandCards.map(card => {
-      let score = 0;
-
-      // High-value spell types
-      if (CardEngine.isInstant(card) || CardEngine.isSorcery(card)) {
-        // Removal spells are high priority to exile
-        if (card.oracle_text && (
-          card.oracle_text.includes('destroy') ||
-          card.oracle_text.includes('exile') ||
-          card.oracle_text.includes('damage')
-        )) {
-          score += 15;
-        }
-
-        // Card draw is valuable
-        if (card.oracle_text && card.oracle_text.includes('draw')) {
-          score += 12;
-        }
-
-        // Board wipes
-        if (card.oracle_text && card.oracle_text.includes('all creatures')) {
-          score += 20;
-        }
-
-        // CMC matters for spells - higher cost = more impact
-        score += (card.cmc || 0) * 2;
-      }
-
-      // Creatures: use threat score
-      if (CardEngine.isCreature(card)) {
-        score += this._threatScore ? this._threatScore(card) : (card.power || 0) + (card.toughness || 0);
-      }
-
-      // Planeswalkers are always high-value
-      if (CardEngine.isPlaneswalker && CardEngine.isPlaneswalker(card)) {
-        score += 25;
-      }
-
-      // Artifacts and enchantments by CMC and text hints
-      if (CardEngine.isArtifact(card) || CardEngine.isEnchantment(card)) {
-        score += (card.cmc || 0) * 1.5;
-        if (card.oracle_text && card.oracle_text.includes('draw')) score += 8;
-      }
-
-      // Rarity indicates power level
-      if (card.rarity === 'mythic') score += 10;
-      else if (card.rarity === 'rare') score += 5;
-      else if (card.rarity === 'uncommon') score += 2;
-
-      return { card, score };
-    });
-
-    // Sort by score (highest first) and return the best card
-    scoredCards.sort((a, b) => b.score - a.score);
-    return scoredCards[0].card;
-  },*/
+  // Removed problematic commented function that was causing syntax error
 
   declareAttackers(state, playerId) {
     const bf = state.players[playerId].zones.battlefield;

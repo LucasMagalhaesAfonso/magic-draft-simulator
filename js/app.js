@@ -44,6 +44,13 @@ const App = {
 
     const container = document.getElementById('sets-grid');
     const searchInput = document.getElementById('set-search');
+
+    // Safety check to prevent null reference error that breaks JS execution
+    if (!container) {
+      console.warn('⚠️ sets-grid element not found, skipping loadSets');
+      return;
+    }
+
     container.innerHTML = '<p class="loading-text">Carregando edicoes...</p>';
 
     try {

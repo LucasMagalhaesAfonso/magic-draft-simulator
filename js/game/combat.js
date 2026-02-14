@@ -80,10 +80,15 @@ const CombatSystem = {
     delete combatState.blockers[uid];
   },
 
-  declareBlocker(combatState, blocker, attackerUid) {
+  declareBlocker(combatState, blocker, attackerUid, gameState = null) {
     const attacker = combatState.attackers.find(a => a.uid === attackerUid);
     if (!attacker) return false;
-    if (!CardEngine.canBlock(blocker, attacker.card)) return false;
+    if (!CardEngine.canBlock(blocker, attacker.card, gameState)) return false;
+
+    // CRITICAL: Each creature can only block ONE attacker per combat
+    if (blocker._blocking) {
+      return false; // Already blocking another attacker
+    }
 
     // Menace check: need at least 2 blockers
     // (We allow assigning, the check happens at confirm)

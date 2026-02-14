@@ -519,7 +519,7 @@ const CardEffectsDB = {
 
   "mardu siegebreaker": {
     static: [{ type: "has_keyword", keywords: ["deathtouch", "haste"] }],
-    etb: [{ type: "exile", target: "own_creature" }],
+    etb: [{ type: "exile", target: "own_creature", other: true, up_to: 1, until_leaves: true }],
     triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token_copy", target: "exiled_creature", tapped: true, attacking: true, sacrificeAtEndStep: true, for_each_opponent: true }] }]
   },
 
@@ -538,7 +538,7 @@ const CardEffectsDB = {
 
   "sage of the skies": {
     static: [{ type: "has_keyword", keywords: ["flying", "lifelink"] }],
-    triggered: [{ event: "cast_with_another_spell", effects: [{ type: "copy_self" }] }]
+    triggered: [{ event: "second_spell", effects: [{ type: "copy_self" }] }]
   },
 
   "sarkhan, dragon ascendant": {
@@ -746,7 +746,9 @@ const CardEffectsDB = {
   },
 
   "molten exhale": {
-    cast: [{ type: "damage", amount: 4, target: "creature" }]
+    cast: [{ type: "damage", amount: 4, target: "creature" }],
+    additional_costs: [{ type: "behold", subtype: "Dragon", optional: true }],
+    static: [{ type: "conditional_flash", condition: "behold_dragon" }]
   },
 
   "narset's rebuke": {
@@ -851,7 +853,7 @@ const CardEffectsDB = {
   },
 
   "teeming dragonstorm": {
-    etb: [{ type: "create_token", power: 2, toughness: 2, name: "Soldier", count: 2 }],
+    etb: [{ type: "create_token", power: 2, toughness: 2, name: "Soldier", count: 2, colors: ["W"], type_line: "Creature — Soldier" }],
     triggered: [{ event: "dragon_enters", effects: [{ type: "bounce_self" }] }]
   },
 
@@ -1109,7 +1111,7 @@ const CardEffectsDB = {
   // =================== TDM - DRAGONSTORM ENCHANTMENTS ===================
 
   "breaching dragonstorm": {
-    etb: [{ type: "exile_top_play", condition: "nonland", free_cast: true, max_mv: 8, duration: "end_of_turn" }],
+    etb: [{ type: "exile_top_play", condition: "nonland", free: true, max_mv: 8, duration: "end_of_turn" }],
     triggered: [{ event: "dragon_enters", effects: [{ type: "bounce_self" }] }]
   },
   "corroding dragonstorm": {
@@ -1334,8 +1336,8 @@ const CardEffectsDB = {
     etb: [{ type: "look_top", amount: 3, pick: 1, rest_to: "graveyard" }]
   },
   "monastery messenger": {
-    etb: [{ type: "return_from_graveyard", target: "noncreature_nonland", to_top_library: true }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    etb: [{ type: "return_from_graveyard", target: "noncreature_nonland", to_top_library: true, optional: true }],
+    static: [{ type: "has_keyword", keywords: ["flying", "vigilance"] }]
   },
   "reputable merchant": {
     etb: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }],

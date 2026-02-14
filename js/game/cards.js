@@ -933,7 +933,36 @@ const CardEngine = {
   },
 
   hasFlash(card) {
-    return this.hasKeyword(card, 'Flash');
+    if (this.hasKeyword(card, 'Flash')) return true;
+
+    // Check conditional flash (e.g., Molten Exhale with behold Dragon)
+    const db = this.getPreprocessedEffects(card);
+    if (db && db.static) {
+      return db.static.some(s => s.type === 'conditional_flash');
+    }
+    return false;
+  },
+
+  // Check if card can be cast with flash due to conditional flash ability
+  canCastWithConditionalFlash(card, gameState, playerId) {
+    const db = this.getPreprocessedEffects(card);
+    if (!db || !db.static) return false;
+
+    const conditionalFlash = db.static.find(s => s.type === 'conditional_flash');
+    if (!conditionalFlash) return false;
+
+    // Check condition
+    if (conditionalFlash.condition === 'behold_dragon') {
+      const bf = gameState.players[playerId].zones.battlefield;
+      const hasDragonBF = bf.cards.some(c => CardEngine.isCreature(c) && CardEngine.hasCreatureType(c, 'Dragon'));
+
+      const hand = gameState.players[playerId].zones.hand;
+      const hasDragonHand = hand.getAll().some(c => CardEngine.hasCreatureType(c, 'Dragon') && c._uid !== card._uid);
+
+      return hasDragonBF || hasDragonHand;
+    }
+
+    return false;
   },
 
   hasLifelink(card) {
@@ -952,6 +981,14 @@ const CardEngine = {
    */
   hasCreatureType(card, type) {
     if (this.hasChangeling(card)) return true;
+    const typeLine = (card.type_line || '');
+    if (!typeLine.includes('—')) return false;
+    const subtypes = typeLine.split('—').pop().trim().toLowerCase();
+    return subtypes.includes(type.toLowerCase());
+  },
+
+  // Check if a land has a specific land subtype (Plains, Swamp, Forest, Island, Mountain)
+  hasLandType(card, type) {
     const typeLine = (card.type_line || '');
     if (!typeLine.includes('—')) return false;
     const subtypes = typeLine.split('—').pop().trim().toLowerCase();
@@ -1186,6 +1223,31 @@ const CardEngine = {
     const match = text.match(/champion (?:a|an) (\w+)/);
     if (match) return match[1];
     return 'creature'; // Fallback
+  },
+
+  /**
+   * Parse "enters tapped unless" condition for lands.
+   * Returns array of land types needed to enter untapped, or null if no such condition.
+   * E.g., "enters tapped unless you control a Swamp or a Mountain" -> ["Swamp", "Mountain"]
+   */
+  getEntersTappedUnlessCondition(card) {
+    const text = (card.oracle_text || '').toLowerCase();
+    const match = text.match(/enters tapped unless you control (?:a |an )?(.+?)(?:\.|$)/i);
+    if (!match) return null;
+
+    const conditionText = match[1];
+    const types = [];
+
+    // Extract land types: "a Plains or an Island" -> ["Plains", "Island"]
+    const landMatches = conditionText.match(/(?:a |an )?([A-Z][a-z]+)/g);
+    if (landMatches) {
+      landMatches.forEach(m => {
+        const type = m.replace(/^(?:a |an )\s*/i, '').trim();
+        if (!types.includes(type)) types.push(type);
+      });
+    }
+
+    return types.length > 0 ? types : null;
   },
 
   // Check if a card can be targeted by a specific player

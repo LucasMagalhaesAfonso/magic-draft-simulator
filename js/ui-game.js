@@ -180,6 +180,11 @@ const UIGame = {
         this.closeAbilityModal();
         return;
       }
+      if (this.gameState._pendingHarmonize) {
+        e.preventDefault();
+        this.skipHarmonizeCreature();
+        return;
+      }
       if (this._gyOverlay !== null) {
         e.preventDefault();
         this.closeGraveyard();
@@ -282,6 +287,8 @@ const UIGame = {
           this.confirmBlockerOrder();
         } else if (wi.type === 'rummage_discard' && gs._pendingRummage && gs._pendingRummage.selected.length > 0) {
           this.confirmRummage();
+        } else if (wi.type === 'trigger_cost') {
+          this.payTriggerCost();
         }
         break;
       case 'KeyA':
@@ -309,6 +316,8 @@ const UIGame = {
           this.skipRummage();
         } else if (wi.type === 'optional_discard_choice') {
           this.skipOptionalDiscard();
+        } else if (wi.type === 'trigger_cost') {
+          this.skipTriggerCost();
         } else if (wi.type === 'behold_choice_multiple' && gs._pendingBeholdChoice && gs._pendingBeholdChoice.isOptional === true) {
           this.resolveBeholdChoiceDecline();
         }
@@ -383,6 +392,13 @@ const UIGame = {
           } else if (digit === 2) {
             // Pay mana instead
             this.resolveBeholdChoiceOptional('pay');
+          }
+        }
+        if (wi.type === 'target_choice_single' && gs._pendingTargetChoice) {
+          e.preventDefault();
+          const idx = parseInt(e.code.replace('Digit', '')) - 1;
+          if (idx >= 0 && idx < gs._pendingTargetChoice.targets.length) {
+            this.confirmTargetChoice(idx);
           }
         }
         break;
@@ -594,20 +610,6 @@ const UIGame = {
             ${this._renderBattlefield(p0.zones.battlefield.getAll(), 0)}
           </div>
 
-          <!-- My info bar -->
-          <div class="my-info-bar">
-            <span class="my-name">Voce</span>
-            <div class="life-box ${p0LifeClass}">
-              <span class="life-number">${p0.life}</span>
-              <span class="life-label">vida</span>
-            </div>
-            <span class="info-counts">
-              <span title="Cartas no deck">&#128215; ${p0.zones.library.count()}</span>
-              <span class="gy-clickable" title="Cemiterio (clique para ver)" onclick="UIGame.showGraveyard(0)">&#9760; ${p0.zones.graveyard.count()}</span>
-              ${p0.zones.exile && p0.zones.exile.count() > 0 ? `<span class="exile-clickable" title="Exilio (clique para ver)" onclick="UIGame.showExile(0)">&#10060; ${p0.zones.exile.count()}</span>` : ''}
-            </span>
-          </div>
-
           <!-- Harmonize indicator - always shown, but disabled when can't cast -->
           <div class="harmonize-bar ${harmonizeCards.length === 0 ? 'harmonize-empty' : ''}">
             <span class="harmonize-label">HARMONIZE</span>
@@ -622,7 +624,7 @@ const UIGame = {
             `).join('')}
           </div>
 
-          <!-- Hand + Library -->
+          <!-- Hand + Library + Life -->
           <div class="game-bottom-row">
             <div class="game-my-hand">
               ${this._renderHand(p0.zones.hand.getAll(), playableIds)}
@@ -636,6 +638,19 @@ const UIGame = {
                 <div class="library-card-back lib-offset-2"></div>
               </div>
               <span class="library-count">${p0.zones.library.count()}</span>
+            </div>
+            <!-- My info bar (moved to bottom) -->
+            <div class="my-info-bar">
+              <span class="my-name">Voce</span>
+              <div class="life-box ${p0LifeClass}">
+                <span class="life-number">${p0.life}</span>
+                <span class="life-label">vida</span>
+              </div>
+              <span class="info-counts">
+                <span title="Cartas no deck">&#128215; ${p0.zones.library.count()}</span>
+                <span class="gy-clickable" title="Cemiterio (clique para ver)" onclick="UIGame.showGraveyard(0)">&#9760; ${p0.zones.graveyard.count()}</span>
+                ${p0.zones.exile && p0.zones.exile.count() > 0 ? `<span class="exile-clickable" title="Exilio (clique para ver)" onclick="UIGame.showExile(0)">&#10060; ${p0.zones.exile.count()}</span>` : ''}
+              </span>
             </div>
           </div>
         </div>
@@ -714,6 +729,9 @@ const UIGame = {
         <!-- Mill land choice overlay -->
         ${gs._pendingMillLandChoice ? this._renderMillLandChoiceOverlay(gs._pendingMillLandChoice) : ''}
 
+        <!-- Target choice overlay -->
+        ${gs._pendingTargetChoice ? this._renderTargetChoiceOverlay(gs._pendingTargetChoice) : ''}
+
         <!-- Player choice overlay (any_player targeting) -->
         ${gs._pendingPlayerChoice ? this._renderPlayerChoiceOverlay(gs._pendingPlayerChoice) : ''}
 
@@ -729,6 +747,9 @@ const UIGame = {
         <!-- Sacrifice cost overlay -->
         ${this._pendingSacrificeCast ? this._renderSacrificeCostOverlay() : ''}
 
+        <!-- Sacrifice ability cost overlay (for Unrooted Ancestor, etc.) -->
+        ${this._pendingSacrificeCostAbility ? this._renderSacrificeAbilityCostOverlay() : ''}
+
         <!-- Discard cost overlay -->
         ${this._pendingDiscardCast ? this._renderDiscardCostOverlay() : ''}
 
@@ -737,6 +758,9 @@ const UIGame = {
 
         <!-- Ramp land choice overlay -->
         ${gs._pendingRamp ? this._renderRampOverlay(gs._pendingRamp) : ''}
+
+        <!-- Spell target overlay (for counter effects) -->
+        ${this.targetingMode && this.targetingMode.effects && this.targetingMode.effects.some(e => e.target === 'spell' || e.target === 'creature_spell' || e.target === 'noncreature_spell') ? this._renderSpellTargetOverlay() : ''}
 
         <!-- Ability Modal (Arena-style) -->
         ${this._renderAbilityModal()}
@@ -1395,8 +1419,19 @@ const UIGame = {
       }
       const img = ex.image_small || (ex.image_uris && ex.image_uris.small) || '';
       const cls = ex._isAttachment ? 'exiled-under-thumb attachment-thumb' : 'exiled-under-thumb';
-      return `<div class="${cls}" style="z-index:${i}" title="${ex.name}">
+
+      // For equipment, add click handler if player is human
+      let clickHandler = '';
+      if (ex._isAttachment && playerId === 0 && this.gameState && this.gameState.waitingForInput && this.gameState.waitingForInput.type === 'main_phase') {
+        clickHandler = `onclick="event.stopPropagation(); UIGame.startReequip('${ex._uid}')"`;
+      }
+
+      // Equipment label showing cost and name
+      const equipLabel = ex._isAttachment ? `<div class="equip-label">${ex.mana_cost || ''} ${ex.name}</div>` : '';
+
+      return `<div class="${cls}" style="z-index:${i}" title="${ex.name}${ex._isAttachment ? ' [click para equipar em outra criatura]' : ''}" ${clickHandler}>
         ${img ? `<img src="${img}" alt="${ex.name}">` : `<span class="exiled-name">${(ex.name || '?').slice(0, 6)}</span>`}
+        ${equipLabel}
       </div>`;
     }).join('');
 
@@ -1565,10 +1600,18 @@ const UIGame = {
         ? `<div class="hand-card-evoke" title="Evoke: ${CardEngine.getEvokeCost(c)}">EVK</div>`
         : '';
 
+      // Omen badge: show when card has omen mechanic
+      const effects = CardEngine.getPreprocessedEffects(c);
+      const hasOmen = effects && effects.omen;
+      const omenBadge = hasOmen
+        ? `<div class="hand-card-omen" title="Omen: embaralha na biblioteca">OMN</div>`
+        : '';
+
       // Unplayable reason tooltip
       let unplayableReason = '';
       if (!canPlay && !discardMode && !CardEngine.isLand(c)) {
-        if (!isMainPhase && !CardEngine.isInstant(c) && !CardEngine.hasFlash(c)) {
+        const hasConditionalFlash = CardEngine.canCastWithConditionalFlash(c, gs, 0);
+        if (!isMainPhase && !CardEngine.isInstant(c) && !CardEngine.hasFlash(c) && !hasConditionalFlash) {
           unplayableReason = ' (so na fase principal)';
         } else if (!ManaSystem.canAfford(gs, 0, c)) {
           unplayableReason = ` (mana insuficiente: ${c.mana_cost || c.cmc})`;
@@ -1594,6 +1637,7 @@ const UIGame = {
           ${costDisplay}
           ${cyclingBadge}
           ${evokeBadge}
+          ${omenBadge}
         </div>
       `;
     }).join('');
@@ -1774,6 +1818,17 @@ const UIGame = {
         return `
           <span class="hint-text hint-discard">${hintText}</span>
           <button class="btn btn-secondary btn-sm" onclick="UIGame.skipOptionalDiscard()">Pular <kbd>Esc</kbd></button>
+        `;
+      }
+      case 'trigger_cost': {
+        const wi = gs.waitingForInput;
+        const trigger = wi.trigger;
+        const effect = trigger.effects.find(e => e.cost);
+        const costStr = effect ? effect.cost : '?';
+        return `
+          <span class="hint-text">🎯 Pagar ${costStr} para ativar habilidade de ${trigger.cardName}?</span>
+          <button class="btn btn-primary btn-sm" onclick="UIGame.payTriggerCost()">Pagar <kbd>Enter</kbd></button>
+          <button class="btn btn-secondary btn-sm" onclick="UIGame.skipTriggerCost()">Pular <kbd>Esc</kbd></button>
         `;
       }
       case 'choose_target': {
@@ -2429,7 +2484,16 @@ const UIGame = {
     const isPerm = castingAdventure ? false : CardEngine.isPermanent(card);
     const advCard = castingAdventure ? { ...card, oracle_text: card.adventure.oracle_text, type_line: card.adventure.type_line } : card;
     const etbEffects = isPerm ? CardEngine.getETBEffects(card) : [];
-    const spellEffects = !isPerm ? CardEngine.getSpellEffects(advCard) : [];
+
+    // For adventure spells, check CardEffectsDB for cast effects (not just parsed effects)
+    let spellEffects = !isPerm ? CardEngine.getSpellEffects(advCard) : [];
+    if (castingAdventure) {
+      const db = CardEngine.getPreprocessedEffects(card);
+      if (db && db.cast) {
+        spellEffects = db.cast;
+      }
+    }
+
     const relevantEffects = isPerm ? etbEffects : spellEffects;
 
     // Helper function to check if an effect needs targeting
@@ -2442,6 +2506,7 @@ const UIGame = {
 
     // Helper function to check if valid targets exist for the spell
     const hasValidTargets = (effects) => {
+      if (!gs || !gs.players || !gs.players[1] || !gs.players[1].zones) return true; // Fallback: allow casting if validation fails
       const oppBf = gs.players[1].zones.battlefield.cards;
       const effectsNeedingTargets = effects.filter(effectNeedsTarget);
 
@@ -2450,12 +2515,24 @@ const UIGame = {
       for (const effect of effectsNeedingTargets) {
         let hasValid = false;
 
-        if (effect.target === 'attacking_or_blocking_creature') {
+        if (effect.target === 'spell' || effect.target === 'creature_spell' || effect.target === 'noncreature_spell') {
+          // Must have at least one spell on the stack
+          hasValid = gs.stack && gs.stack.length > 0;
+          // If validating spell type, check if matching spells exist
+          if (hasValid && effect.target === 'creature_spell') {
+            hasValid = gs.stack.some(s => CardEngine.isCreature(s.card));
+          } else if (hasValid && effect.target === 'noncreature_spell') {
+            hasValid = gs.stack.some(s => !CardEngine.isCreature(s.card));
+          }
+        } else if (effect.target === 'attacking_or_blocking_creature') {
           // Must have at least one attacking or blocking creature
           hasValid = oppBf.some(c => c._attacking || c._blocking);
         } else if (effect.target === 'creature' || effect.target === 'creature_or_player') {
           // Must have at least one creature
           hasValid = oppBf.some(c => CardEngine.isCreature(c));
+        } else if (effect.target === 'opponent_nonland') {
+          // Must have at least one non-land permanent
+          hasValid = oppBf.some(c => !CardEngine.isLand(c));
         } else if (effect.target === 'artifact' || effect.target === 'enchantment') {
           // Must have the specific permanent type
           const typeKey = effect.target;
@@ -2582,6 +2659,50 @@ const UIGame = {
     }
 
     if (!this.targetingMode) return;
+
+    // Handle spell targeting (for counter effects)
+    if (type === 'spell') {
+      const gs = this.gameState;
+
+      // Find the spell on the stack
+      const stackEntry = gs.stack.find(s => s.card._uid === uid);
+      if (!stackEntry) {
+        gs.log.push('Spell nao encontrado na stack.');
+        this.render();
+        return;
+      }
+
+      const targetSpell = stackEntry.card;
+      this.targetingMode.collectedTargets = [targetSpell];
+
+      // All targets collected for spell targeting
+      const targets = this.targetingMode.collectedTargets;
+      const { card, effects, returnToInstantPriority, instantPriorityPhase } = this.targetingMode;
+
+      // Fire creature_targeted_by_opponent trigger if applicable
+      if (stackEntry.controller === 1) { // Opponent's spell
+        GameState.fireTrigger(gs, 'creature_targeted_by_opponent', { playerId: 1 });
+      }
+
+      // Resolve through stack with spell as target
+      GameStack.push(gs.stack, {
+        card: card,
+        controller: 0,
+        targets: targets,
+        effects: effects
+      });
+      const stackLog = GameStack.resolve(gs.stack, gs);
+      gs.log.push(...stackLog);
+
+      this.targetingMode = null;
+      if (returnToInstantPriority) {
+        gs.waitingForInput = { type: 'instant_priority', playerId: 0, phase: instantPriorityPhase };
+      } else if (!gs.waitingForInput || gs.waitingForInput.type === 'choose_target') {
+        gs.waitingForInput = { type: 'main_phase', playerId: 0 };
+      }
+      this.render();
+      return;
+    }
 
     // Handle graveyard ability targeting
     if (this.targetingMode.graveyardAbility) {
@@ -2809,6 +2930,65 @@ const UIGame = {
     this.render();
   },
 
+  startReequip(equipUid) {
+    const gs = this.gameState;
+    if (!gs || gs.activePlayer !== 0) return;
+    const isMainPhase = gs.phase === 'main1' || gs.phase === 'main2';
+    if (!isMainPhase) return;
+
+    const equip = gs.players[0].zones.battlefield.get(equipUid);
+    if (!equip || !CardEngine.isEquipment(equip)) return;
+
+    // Find the creature this equipment is attached to
+    let currentHost = null;
+    for (const c of gs.players[0].zones.battlefield.cards) {
+      if (c._attachments && c._attachments.includes(equipUid)) {
+        currentHost = c;
+        break;
+      }
+    }
+
+    if (!currentHost) {
+      gs.log.push(`Equipamento ${equip.name} nao está anexado a nenhuma criatura.`);
+      this.render();
+      return;
+    }
+
+    // Check equip cost
+    const effects = CardEngine.parseEquipmentEffects(equip);
+    const costEffect = effects.find(e => e.type === 'equip_cost');
+    const manaCost = costEffect ? costEffect.cost : '{3}';
+    const parsedCost = ManaSystem.parseCost(manaCost);
+    const cmc = parsedCost.total;
+
+    // Check if can afford equip cost
+    const fakeCard = { mana_cost: manaCost, cmc };
+    if (!ManaSystem.canAfford(gs, 0, fakeCard)) {
+      gs.log.push(`Mana insuficiente para equipar ${equip.name} (custo: ${manaCost}).`);
+      this.render();
+      return;
+    }
+
+    // Auto-tap for equip cost
+    GameState.autoTapForSpell(gs, 0, manaCost, cmc);
+
+    // Detach from current host
+    if (currentHost._attachments) {
+      const idx = currentHost._attachments.indexOf(equipUid);
+      if (idx !== -1) {
+        currentHost._attachments.splice(idx, 1);
+      }
+    }
+    equip._attachedTo = null;
+    equip._attachedToOwner = null;
+
+    // Enter targeting mode for equip
+    this.targetingMode = { card: equip, effects: [], isEquip: true, equipCost: manaCost, equipCmc: cmc, isReequip: true };
+    gs.waitingForInput = { type: 'choose_target', playerId: 0 };
+    gs.log.push(`Desanexou ${equip.name} de ${currentHost.name}. Escolha uma criatura para equipar.`);
+    this.render();
+  },
+
   // =================== Activated Abilities ===================
 
   activateAbility(cardUid) {
@@ -2977,7 +3157,7 @@ const UIGame = {
       gs._abilityUsedThisTurn[key] = true;
     }
 
-    // sacrifice_creature cost (sacrifice weakest other creature)
+    // sacrifice_creature cost (interactive picker for human player)
     if (ability.cost.sacrifice_creature) {
       const others = gs.players[0].zones.battlefield.cards
         .filter(c => CardEngine.isCreature(c) && c._uid !== card._uid)
@@ -2987,10 +3167,22 @@ const UIGame = {
         this.render();
         return;
       }
-      // Sacrifice weakest for now (TODO: interactive picker)
-      const victim = others[0];
-      GameState.creatureDies(gs, victim, 0);
-      gs.log.push(`Sacrifica ${victim.name} como custo.`);
+      // For human player: show picker modal
+      if (gs.players[0].isHuman) {
+        this._pendingSacrificeCostAbility = {
+          cardUid: card._uid,
+          abilityIndex,
+          candidates: others
+        };
+        gs.waitingForInput = { type: 'choose_sacrifice_ability_cost', playerId: 0 };
+        this.render();
+        return;
+      } else {
+        // For AI: sacrifice weakest
+        const victim = others[0];
+        GameState.creatureDies(gs, victim, 0);
+        gs.log.push(`Sacrifica ${victim.name} como custo.`);
+      }
     }
 
     // sacrifice_token cost
@@ -4605,6 +4797,24 @@ const UIGame = {
     this._continueIfAI();
   },
 
+  payTriggerCost() {
+    const gs = this.gameState;
+    if (!gs) return;
+
+    GameState.resolveTriggerCost(gs, 'pay');
+    this.render();
+    this._continueIfAI();
+  },
+
+  skipTriggerCost() {
+    const gs = this.gameState;
+    if (!gs) return;
+
+    GameState.resolveTriggerCost(gs, 'skip');
+    this.render();
+    this._continueIfAI();
+  },
+
   forceAdvance() {
     const gs = this.gameState;
     if (!gs || gs.winner !== null) return;
@@ -5530,6 +5740,57 @@ const UIGame = {
     this._continueIfAI();
   },
 
+  // === Target Choice (for abilities needing player selection) ===
+  _renderTargetChoiceOverlay(pending) {
+    if (!pending.targets || pending.targets.length === 0) return '';
+
+    const prompt = pending.prompt || 'Escolha um alvo';
+
+    return `
+      <div class="scry-overlay">
+        <div class="scry-box" style="max-width:700px">
+          <h3>${prompt}</h3>
+          <p class="scry-hint">Clique no card que deseja escolher como alvo</p>
+          <div class="scry-cards" style="justify-content:center">
+            ${pending.targets.map((card, idx) => `
+              <div class="scry-card scry-keep" onclick="UIGame.confirmTargetChoice(${idx})" style="cursor:pointer">
+                <img src="${card.image_normal || card.image_small}" alt="${card.name}" ${CardZoom.attr(card)}>
+                <div class="scry-card-name">${card.name}</div>
+              </div>
+            `).join('')}
+          </div>
+          <p style="font-size:0.85rem;color:#aaa;margin-top:12px">Teclas 1-${pending.targets.length} para escolher rapidamente</p>
+        </div>
+      </div>
+    `;
+  },
+
+  confirmTargetChoice(targetIndex) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingTargetChoice) return;
+
+    const pending = gs._pendingTargetChoice;
+    if (targetIndex < 0 || targetIndex >= pending.targets.length) return;
+
+    const target = pending.targets[targetIndex];
+
+    // Execute the effect on the chosen target
+    if (pending.effectType === 'tap') {
+      target._tapped = true;
+      gs.log.push(`${target.name} e virado.`);
+
+      // Fire becomes_tapped trigger
+      const targetOwner = gs.players[0].zones.battlefield.get(target._uid) ? 0 : 1;
+      const tapLogs = GameState.fireTrigger(gs, 'becomes_tapped', { cardUid: target._uid, card: target, controllerId: targetOwner });
+      gs.log.push(...tapLogs);
+    }
+
+    gs._pendingTargetChoice = null;
+    gs.waitingForInput = null;
+    this.render();
+    this._continueIfAI();
+  },
+
   // === Player Choice (any_player targeting) ===
   _renderPlayerChoiceOverlay(pending) {
     const label = pending.effectType === 'mill' ? `Mill ${pending.amount} cartas` : pending.effectType;
@@ -5605,12 +5866,9 @@ const UIGame = {
             ${pending.cards.map(card => {
               const isSelected = selectedCards.includes(card._uid);
               return `
-                <div class="scry-card ${isSelected ? 'selected' : ''}" onclick="UIGame.toggleGraveyardCard('${card._uid}')" style="opacity: ${isSelected ? '1' : '0.7'}; border: ${isSelected ? '2px solid #4CAF50' : '1px solid #666'}">
-                  <div class="scry-card-content">
-                    <div class="scry-card-name">${card.name}</div>
-                    <div class="scry-card-cost">${card.mana_cost || '{0}'}</div>
-                    <div class="scry-card-type">${card.type_line || 'Unknown'}</div>
-                  </div>
+                <div class="scry-card ${isSelected ? 'selected' : ''}" onclick="UIGame.toggleGraveyardCard('${card._uid}')" style="opacity: ${isSelected ? '1' : '0.7'}; border: ${isSelected ? '2px solid #4CAF50' : '1px solid #666'}; cursor:pointer">
+                  <img src="${card.image_normal || card.image_small}" alt="${card.name}" style="width:100%;border-radius:6px;display:block" ${typeof CardZoom !== 'undefined' ? CardZoom.attr(card) : ''}>
+                  <div class="scry-card-name">${card.name}</div>
                 </div>
               `;
             }).join('')}
@@ -5953,6 +6211,71 @@ const UIGame = {
     this.render();
   },
 
+  // === Sacrifice Creature as Ability Cost ===
+
+  _renderSacrificeAbilityCostOverlay() {
+    const pending = this._pendingSacrificeCostAbility;
+    if (!pending) return '';
+    const card = this.gameState.players[0].zones.battlefield.get(pending.cardUid);
+    if (!card) return '';
+
+    return `
+      <div class="scry-overlay">
+        <div class="scry-box">
+          <h3>Sacrificar criatura</h3>
+          <p class="scry-hint">Escolha uma criatura para sacrificar como custo da habilidade de <strong>${card.name}</strong></p>
+          <div class="scry-cards">
+            ${pending.candidates.map(c => `
+              <div class="scry-card scry-keep" onclick="UIGame.confirmSacrificeAbilityCost('${c._uid}')" style="cursor:pointer">
+                <img src="${c.image_normal || c.image_small || ''}" alt="${c.name}" style="width:100px;border-radius:6px" ${typeof CardZoom !== 'undefined' ? CardZoom.attr(c) : ''}>
+                <div class="scry-card-name">${c.name} (${CardEngine.getPower(c)}/${CardEngine.getToughness(c)})</div>
+              </div>
+            `).join('')}
+          </div>
+          <button class="btn" onclick="UIGame.cancelSacrificeAbilityCost()" style="margin-top:8px">Cancelar</button>
+        </div>
+      </div>
+    `;
+  },
+
+  confirmSacrificeAbilityCost(creatureUid) {
+    const gs = this.gameState;
+    const pending = this._pendingSacrificeCostAbility;
+    if (!gs || !pending) return;
+
+    // Sacrifice the chosen creature
+    GameState.creatureDies(gs, gs.players[0].zones.battlefield.get(creatureUid), 0);
+    gs.log.push(`Sacrifica criatura como custo.`);
+
+    // Clear pending and resume ability execution
+    const { cardUid, abilityIndex } = pending;
+    this._pendingSacrificeCostAbility = null;
+
+    // Resume ability execution
+    this._executeAbilityAfterSacrificeChoice(cardUid, abilityIndex);
+  },
+
+  cancelSacrificeAbilityCost() {
+    this._pendingSacrificeCostAbility = null;
+    const gs = this.gameState;
+    if (gs) gs.waitingForInput = { type: 'main_phase', playerId: 0 };
+    this.render();
+  },
+
+  _executeAbilityAfterSacrificeChoice(cardUid, abilityIndex) {
+    const gs = this.gameState;
+    const card = gs.players[0].zones.battlefield.get(cardUid);
+    if (!card) return;
+
+    const abilities = CardEngine.getActivatedAbilities(card);
+    if (abilityIndex >= abilities.length) return;
+
+    const ability = abilities[abilityIndex];
+    this._executeAbility(card, ability);
+    this._actionModal = null;
+    this.render();
+  },
+
   // === Discard as Additional Cost ===
   _renderDiscardCostOverlay() {
     const pending = this._pendingDiscardCast;
@@ -6021,6 +6344,49 @@ const UIGame = {
   },
 
   // === Tap Creature as Additional Cost ===
+  _renderSpellTargetOverlay() {
+    const gs = this.gameState;
+    if (!gs.stack || gs.stack.length === 0) return '';
+
+    // Filter spells based on targeting requirement
+    const targetEffect = this.targetingMode?.effects?.find(e =>
+      e.target === 'spell' || e.target === 'creature_spell' || e.target === 'noncreature_spell'
+    );
+    if (!targetEffect) return '';
+
+    let stackItems = gs.stack;
+    if (targetEffect.target === 'creature_spell') {
+      stackItems = stackItems.filter(s => CardEngine.isCreature(s.card));
+    } else if (targetEffect.target === 'noncreature_spell') {
+      stackItems = stackItems.filter(s => !CardEngine.isCreature(s.card));
+    }
+
+    if (stackItems.length === 0) return '';
+
+    const cardLabel = this.targetingMode?.card?.name || 'spell';
+
+    return `
+      <div class="scry-overlay">
+        <div class="scry-box" style="max-width:600px">
+          <h3>Escolha um spell para ${cardLabel}</h3>
+          <p class="scry-hint">Clique no spell que deseja anular</p>
+          <div class="scry-cards" style="justify-content:center">
+            ${stackItems.map((item, idx) => `
+              <div class="scry-card scry-keep" onclick="UIGame.selectTarget('spell', ${item.controller}, '${item.card._uid}')" style="cursor:pointer;position:relative">
+                <img src="${item.card.image_normal || item.card.image_small}" alt="${item.card.name}" loading="lazy" style="width:100%;border-radius:6px">
+                <div class="scry-card-name">${item.card.name}</div>
+                <div style="position:absolute;bottom:4px;right:4px;background:#333;color:#fff;padding:2px 6px;border-radius:3px;font-size:11px">
+                  ${item.controller === 0 ? 'Você' : 'Oponente'}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <p style="font-size:0.85rem;color:#aaa;margin-top:12px">Clique no spell ou pressione Esc para cancelar</p>
+        </div>
+      </div>
+    `;
+  },
+
   _renderTapCostOverlay() {
     const pending = this._pendingTapCast;
     if (!pending) return '';
@@ -6531,7 +6897,7 @@ const UIGame = {
           <p class="scry-hint">Escolha qual terreno basico buscar (vai para ${dest})</p>
           <div class="scry-cards" style="justify-content:center">
             ${lands.map(land => `
-              <div class="scry-card scry-keep" onclick="UIGame.confirmRampChoice('${land.name}')"
+              <div class="scry-card scry-keep" onclick="UIGame.confirmRampChoice('${land._uid}')"
                    style="cursor:pointer">
                 <img src="${land.image_normal || land.image_small}" alt="${land.name}" ${CardZoom.attr(land)}>
                 <div class="scry-card-name">${land.name}</div>
@@ -6566,7 +6932,7 @@ const UIGame = {
     `;
   },
 
-  confirmRampChoice(landName) {
+  confirmRampChoice(landUid) {
     const gs = this.gameState;
     if (!gs || !gs._pendingRamp) return;
 
@@ -6575,12 +6941,12 @@ const UIGame = {
     const lib = gs.players[pid].zones.library;
     const bf = gs.players[pid].zones.battlefield;
 
-    if (landName === null) {
+    if (landUid === null) {
       // Optional: chose not to search
       lib.shuffle();
       gs.log.push(`Voce escolheu nao buscar terreno.`);
     } else {
-      const landIdx = lib.cards.findIndex(c => c.name === landName && CardEngine.isBasicLand(c));
+      const landIdx = lib.cards.findIndex(c => c._uid === landUid);
       if (landIdx !== -1) {
         const land = lib.cards.splice(landIdx, 1)[0];
         if (pending.toHand) {

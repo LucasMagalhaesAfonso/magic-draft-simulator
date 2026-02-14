@@ -15,7 +15,12 @@ const GameStack = {
     while (stack.items.length > 0) {
       const item = stack.items.pop();
       const results = this._resolveItem(item, gameState);
-      log.push(...results);
+      // Ensure results is always an array
+      if (Array.isArray(results)) {
+        log.push(...results);
+      } else {
+        console.warn('[STACK] _resolveItem returned non-array:', results);
+      }
     }
 
     return log;
@@ -32,6 +37,12 @@ const GameStack = {
     const { card, controller, targets, effects } = item;
     const log = [];
     const opponent = controller === 0 ? 1 : 0;
+
+    // Check if spell was countered
+    if (card._countered) {
+      log.push(`${card.name} foi anulado e nao resolve.`);
+      return log;
+    }
 
     log.push(`${card.name} resolve.`);
 
@@ -62,8 +73,20 @@ const GameStack = {
         if (effect.condition === 'if_cast' && !card._wasCast) {
           continue; // Card was not cast, skip this effect
         }
+        // Special case: "dealt_damage_this_turn" for targeted effects (Unsparing Boltcaster)
+        // Should check if the TARGET creature was dealt damage, not the controller
+        else if (effect.condition === 'dealt_damage_this_turn' && targets && targets.length > 0) {
+          const target = targets[0];
+          if (target.type === 'creature') {
+            const bf = gameState.players[target.player].zones.battlefield;
+            const targetCard = bf.get(target.uid);
+            if (!targetCard || !targetCard._damagedThisTurn) {
+              continue; // Target was not dealt damage this turn, skip effect
+            }
+          }
+        }
         // Other conditions via GameState
-        else if (typeof GameState._checkEffectCondition === 'function' &&
+        else if (effect.condition !== 'dealt_damage_this_turn' && typeof GameState._checkEffectCondition === 'function' &&
             !GameState._checkEffectCondition(gameState, controller, effect)) {
           continue; // Condition not met, skip
         }
@@ -235,14 +258,49 @@ const GameStack = {
         }
 
         case 'exile': {
-          if (effect.target === 'nonland_from_hand') {
-            // Special case: exile from revealed opponent hand (Aggressive Negotiations)
-            const targetPlayerId = opponent;
+          if (effect.target === 'opponent_hand_nonland') {
+            // Exile a nonland card from opponent's hand (e.g., Severance Priest)
+            const opponentId = controller === 0 ? 1 : 0;
+            const hand = gameState.players[opponentId].zones.hand;
+            const nonlandCards = hand.getAll().filter(c => !CardEngine.isLand(c));
+
+            if (nonlandCards.length === 0) {
+              log.push('Oponente nao tem cartas nao-terreno na mao.');
+              break;
+            }
+
+            if (gameState.players[controller].isHuman) {
+              // Human player: show hand and let them choose which card to exile
+              gameState._pendingHandExile = {
+                targetPlayerId: opponentId,
+                cardToExile: card, // The card doing the exiling (for storing exiled card)
+                choices: nonlandCards,
+                selected: null,
+                controller
+              };
+              gameState.waitingForInput = { type: 'opponent_hand_exile', playerId: controller };
+              log.push(`Escolha uma carta nao-terreno da mao do oponente para exilar.`);
+              return log;
+            } else {
+              // AI player: pick best card to exile
+              nonlandCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+              const exiledCard = nonlandCards[0];
+              hand.remove(exiledCard._uid);
+              gameState.players[opponentId].zones.exile.add(exiledCard);
+
+              // Store exiled card on the source card for LtB trigger
+              if (!card._exiledByPriest) card._exiledByPriest = [];
+              card._exiledByPriest.push({ card: exiledCard, cmc: exiledCard.cmc || 0 });
+              log.push(`${exiledCard.name} e exilado da mao do oponente.`);
+            }
+          } else if (effect.target === 'nonland_from_hand') {
+            // Special case: exile from your own hand (Aggressive Negotiations)
+            const targetPlayerId = controller; // FIX: exile from controller's hand, not opponent's
             const hand = gameState.players[targetPlayerId].zones.hand;
             const nonlandCards = hand.getAll().filter(c => !CardEngine.isLand(c));
 
             if (nonlandCards.length === 0) {
-              log.push('Nenhuma carta nao-terreno na mao para exilar.');
+              log.push('Nenhuma carta nao-terreno na sua mao para exilar.');
               // Continue to next effect - spell still resolves partially
               break;
             }
@@ -256,14 +314,14 @@ const GameStack = {
               if (cardToExile) {
                 hand.remove(cardToExile._uid);
                 gameState.players[targetPlayerId].zones.exile.add(cardToExile);
-                log.push(`${cardToExile.name} e exilado da mao.`);
+                log.push(`${cardToExile.name} e exilado da sua mao.`);
               } else {
                 log.push('Erro: nenhuma carta valida encontrada para exilar.');
               }
             } else {
               // Human with multiple options: need choice overlay
               GameState._setupHandExileChoice(gameState, controller, targetPlayerId, nonlandCards, () => {
-                Stack._processNextEffect(gameState);
+                StackEngine._processNextEffect(gameState);
               });
               return; // Wait for choice
             }
@@ -285,6 +343,16 @@ const GameStack = {
                 GameState.fireTrigger(gameState, 'leaves_battlefield', { cardUid: permanent._uid, card: permanent, ownerId: target.player });
               }
               gameState.players[target.player].zones.exile.add(permanent);
+
+              // Store exiled creature reference if until_leaves or until_source_leaves is set
+              // (until_leaves: for token creation like Mardu Siegebreaker)
+              // (until_source_leaves: for returning creature when source leaves like Stormplain Detainment)
+              if (effect.until_leaves || effect.until_source_leaves) {
+                if (!card._exiledUntilLeaves) card._exiledUntilLeaves = [];
+                permanent._owner = target.player; // Store original owner for later return
+                card._exiledUntilLeaves.push(permanent);
+              }
+
               log.push(`${permanent.name} e exilado.`);
             }
           }
@@ -297,6 +365,17 @@ const GameStack = {
             const exile = gameState.players[pid].zones.exile;
             const toExile = bf.cards.filter(c => CardEngine.isCreature(c));
             for (const c of toExile) {
+              // Remove aura effects if this creature has auras
+              if (c._attachments) {
+                for (const attUid of c._attachments) {
+                  for (const p of gameState.players) {
+                    const att = p.zones.battlefield.get(attUid);
+                    if (att && CardEngine.isAura(att)) {
+                      GameState._removeAuraEffects(gameState, att, c);
+                    }
+                  }
+                }
+              }
               bf.remove(c._uid);
               GameState._unregisterCardTriggers(gameState, c._uid);
               exile.add(c);
@@ -317,6 +396,19 @@ const GameStack = {
                 break;
               }
               if (typeof VFX !== 'undefined') VFX.bounce(permanent._uid);
+
+              // If aura, remove effects from enchanted creature
+              if (CardEngine.isAura(permanent) && permanent._attachedTo) {
+                for (const p of gameState.players) {
+                  const enchanted = p.zones.battlefield.get(permanent._attachedTo);
+                  if (enchanted) {
+                    GameState._removeAuraEffects(gameState, permanent, enchanted);
+                    enchanted._attachments = enchanted._attachments.filter(uid => uid !== permanent._uid);
+                    break;
+                  }
+                }
+              }
+
               bf.remove(permanent._uid);
               GameState._unregisterCardTriggers(gameState, permanent._uid);
               // Fire leaves_battlefield for creatures
@@ -715,6 +807,62 @@ const GameStack = {
           break;
         }
 
+        case 'strategic_betrayal': {
+          // Target opponent exiles a creature and their graveyard
+          if (!targets || targets.length === 0) break;
+          const targetPlayer = targets[0].player;
+          const bf = gameState.players[targetPlayer].zones.battlefield;
+          const gy = gameState.players[targetPlayer].zones.graveyard;
+          const exile = gameState.players[targetPlayer].zones.exile;
+
+          // Get opponent's creatures
+          const creatures = bf.cards.filter(c => CardEngine.isCreature(c));
+          if (creatures.length === 0) {
+            log.push(`${gameState.players[targetPlayer].isHuman ? 'Voce' : 'Oponente'} nao tem criaturas para exilar.`);
+          } else if (creatures.length === 1 || !gameState.players[targetPlayer].isHuman) {
+            // Auto-pick strongest creature or only option
+            const creature = creatures.length === 1 ? creatures[0] : creatures.reduce((a, b) => (CardEngine.getPower(b) + CardEngine.getToughness(b)) - (CardEngine.getPower(a) + CardEngine.getToughness(a)) > 0 ? b : a);
+            bf.remove(creature._uid);
+            exile.add(creature);
+            log.push(`${creature.name} e exilado da criatura do oponente.`);
+          }
+
+          // Exile opponent's graveyard
+          const gyCards = gy.getAll();
+          gyCards.forEach(c => {
+            gy.remove(c._uid);
+            exile.add(c);
+          });
+          if (gyCards.length > 0) {
+            log.push(`${gyCards.length} carta(s) do cemiterio do oponente foram exiladas.`);
+          }
+          break;
+        }
+
+        case 'severance_priest_token': {
+          // Create Spirit token equal to CMC of exiled card (from Severance Priest)
+          if (!card._exiledByPriest || card._exiledByPriest.length === 0) {
+            log.push('Nenhuma carta foi exilada por Severance Priest.');
+            break;
+          }
+
+          const exiledData = card._exiledByPriest[card._exiledByPriest.length - 1];
+          const cmc = exiledData.cmc || 0;
+
+          // Create the Spirit token
+          const token = CardEngine.createToken(controller, cmc, cmc, 'Spirit');
+          token.type_line = 'Spirit';
+          token.colors = ['W'];
+          token.color_identity = ['W'];
+
+          const bf = gameState.players[controller].zones.battlefield;
+          bf.add(token);
+          GameState._registerCardTriggers(gameState, token, controller);
+
+          log.push(`${controller === 0 ? 'Voce' : 'Oponente'} cria um token ${cmc}/${cmc} branco Spirit.`);
+          break;
+        }
+
         case 'create_token': {
           let tokenOwner = controller;
           if (effect.controller === 'opponent') {
@@ -742,6 +890,14 @@ const GameStack = {
                 token.oracle_text = (token.oracle_text || '') + (token.oracle_text ? ', ' : '') + kw;
               });
             }
+            // Add ETB damage trigger if specified
+            if (effect.etb_damage) {
+              if (!token._triggers) token._triggers = [];
+              token._triggers.push({
+                event: 'enters_battlefield',
+                effects: [{ type: 'damage', amount: effect.etb_damage, target: 'any_target' }]
+              });
+            }
             if (effect.sacrificeAtEndStep || effect.sacrifice_eot) token._sacrificeAtEndStep = true;
             if (effect.attacking && gameState.combat && gameState.combat.phase !== 'none') {
               token._attacking = true;
@@ -758,6 +914,37 @@ const GameStack = {
         }
 
         case 'counter': {
+          // Check if this is countering a spell (anulação) vs adding counters to creature
+          if (effect.target === 'spell' || effect.target === 'creature_spell' || effect.target === 'noncreature_spell') {
+            // Counter a spell on the stack
+            if (!targets || targets.length === 0) {
+              log.push('Counter spell requer um alvo na stack.');
+              break;
+            }
+
+            const targetSpell = targets[0];
+            if (!targetSpell || !targetSpell.name) {
+              log.push('Alvo invalido para counter.');
+              break;
+            }
+
+            // Check spell type if restricted
+            if (effect.target === 'creature_spell' && !CardEngine.isCreature(targetSpell)) {
+              log.push(`${targetSpell.name} nao e uma magia de criatura.`);
+              break;
+            }
+            if (effect.target === 'noncreature_spell' && CardEngine.isCreature(targetSpell)) {
+              log.push(`${targetSpell.name} e uma magia de criatura.`);
+              break;
+            }
+
+            // Remove from stack
+            gameState.stack = gameState.stack.filter(s => s.card._uid !== targetSpell._uid);
+            log.push(`${targetSpell.name} foi anulado!`);
+            break;
+          }
+
+          // Otherwise: add counters to a creature
           if (targets && targets.length > 0) {
             const target = targets[0];
             const bf = gameState.players[target.player].zones.battlefield;
@@ -986,10 +1173,15 @@ const GameStack = {
         case 'return_from_graveyard': {
           const gy = gameState.players[controller].zones.graveyard;
           const toHand = effect.to_hand !== false;
+          const toTopLibrary = effect.to_top_library === true;
+          const optional = effect.optional === true;
+
           // Pick best creature from graveyard (or target type)
           let candidates = gy.getAll();
           if (effect.target === 'creature') {
             candidates = candidates.filter(c => CardEngine.isCreature(c));
+          } else if (effect.target === 'noncreature_nonland') {
+            candidates = candidates.filter(c => !CardEngine.isCreature(c) && !CardEngine.isLand(c));
           } else if (effect.target === 'creature_mv3') {
             // Yathan Roadwatcher: creature with mana value 3 or less
             candidates = candidates.filter(c => CardEngine.isCreature(c) && (c.cmc || 0) <= 3);
@@ -999,7 +1191,19 @@ const GameStack = {
             // Wayspeaker Bodyguard: nonland permanent with mana value 2 or less
             candidates = candidates.filter(c => CardEngine.isPermanent(c) && !CardEngine.isLand(c) && (c.cmc || 0) <= 2);
           }
+
           const amount = effect.amount || 1;
+
+          // If optional and human player, show modal to choose
+          if (optional && controller === 0 && candidates.length > 0) {
+            gameState._pendingGYReturn = {
+              effect, candidates, amount, toHand, toTopLibrary, controller
+            };
+            gameState.waitingForInput = { type: 'choose_gy_return', playerId: 0, optional: true };
+            return; // Pause resolution for player choice
+          }
+
+          // Auto-pick best candidates
           candidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
           for (let i = 0; i < amount && i < candidates.length; i++) {
             const card = candidates[i];
@@ -1012,12 +1216,25 @@ const GameStack = {
 
             // Fire trigger when card leaves graveyard
             GameState.fireTrigger(gameState, 'card_leaves_graveyard', { playerId: controller, card: card });
-            if (toHand) {
+            if (toTopLibrary) {
+              gameState.players[controller].zones.library.cards.unshift(card);
+              log.push(`${card.name} volta do cemiterio para o topo da biblioteca.`);
+            } else if (toHand) {
               gameState.players[controller].zones.hand.add(card);
               log.push(`${card.name} volta do cemiterio para a mao.`);
             } else {
               const bfCard = CardEngine.prepareForBattlefield(card);
               bfCard._ownerId = controller;
+
+              // Apply with_counters (keyword counters like hexproof, indestructible)
+              if (effect.with_counters && Array.isArray(effect.with_counters)) {
+                if (!bfCard._counters) bfCard._counters = {};
+                for (const keyword of effect.with_counters) {
+                  bfCard._counters[keyword] = (bfCard._counters[keyword] || 0) + 1;
+                  log.push(`${bfCard.name} entra com contador ${keyword}.`);
+                }
+              }
+
               gameState.players[controller].zones.battlefield.add(bfCard);
               GameState._registerCardTriggers(gameState, bfCard, controller);
               log.push(`${card.name} volta do cemiterio para o campo!`);
@@ -1259,9 +1476,82 @@ const GameStack = {
         }
 
         case 'counter_spell': {
-          // Counter target spell - only works if there's something on the stack
-          // In our simplified engine, this just resolves as a fizzle
-          log.push('Magia anulada.');
+          // Counter target spell with optional mana value restriction and unless_pay
+          if (!targets || targets.length === 0) {
+            log.push('Counter spell requer um alvo (spell na stack).');
+            break;
+          }
+
+          const targetSpell = targets[0];
+          if (!targetSpell || !targetSpell.name) {
+            log.push('Alvo invalido para counter.');
+            break;
+          }
+
+          // Check mana value restriction if specified
+          if (effect.max_mana_value !== undefined) {
+            const spellCMC = targetSpell.cmc || 0;
+            if (spellCMC > effect.max_mana_value) {
+              log.push(`${targetSpell.name} tem mana value ${spellCMC}, nao pode ser anulado (max ${effect.max_mana_value}).`);
+              break;
+            }
+          }
+
+          // Handle "unless_pay" - opponent can pay to prevent counter
+          if (effect.unless_pay !== undefined) {
+            const opponentId = controller === 0 ? 1 : 0;
+
+            // Check if Dragon was beheld - increases cost to pay
+            const wasDragonBeheld = !!(state._beholding && state._beholding[controller]);
+            const baseCost = effect.unless_pay;
+            const costWithBehold = effect.unless_pay_with_behold || baseCost;
+            const finalCost = wasDragonBeheld ? costWithBehold : baseCost;
+
+            const costToPay = ManaSystem.parseCost(`{${finalCost}}`);
+
+            // Check if opponent can afford to pay
+            const opponentPool = state.manaPool[opponentId];
+            const totalManaAvailable = Object.values(opponentPool || {}).reduce((a, b) => a + b, 0) || 0;
+            const canPay = costToPay.generic <= totalManaAvailable;
+
+            if (canPay) {
+              // Opponent can choose to pay
+              if (state.players[opponentId].isHuman && opponentId === 0) {
+                // Human player: ask for decision
+                state._pendingUnlessPay = {
+                  spell: targetSpell,
+                  cost: finalCost,
+                  spellController: controller,
+                  effect: effect,
+                  wasDragonBeheld: wasDragonBeheld
+                };
+                state.waitingForInput = { type: 'unless_pay_decision', playerId: opponentId };
+                return null; // Pause for human decision
+              } else {
+                // AI: decide whether to pay (usually pays to save spell unless low on resources)
+                const shouldPay = true; // AI simple strategy: always pay if can
+                if (shouldPay) {
+                  // Pay mana
+                  for (let i = 0; i < finalCost; i++) {
+                    // Remove generic mana
+                    for (const color of Object.keys(opponentPool)) {
+                      if (opponentPool[color] > 0) {
+                        opponentPool[color]--;
+                        break;
+                      }
+                    }
+                  }
+                  const costStr = wasDragonBeheld ? `{${finalCost}} (Dragon beheld)` : `{${finalCost}}`;
+                  log.push(`${targetSpell.name} nao foi anulado (${targetSpell.controller === 0 ? 'Voce' : 'IA'} pagou ${costStr}).`);
+                  break; // Don't counter
+                }
+              }
+            }
+          }
+
+          // Mark spell as countered - it won't resolve
+          targetSpell._countered = true;
+          log.push(`${targetSpell.name} foi anulado.`);
           break;
         }
 
@@ -1429,18 +1719,37 @@ const GameStack = {
           if (looked.length === 0) break;
 
           if (effect.condition === 'land_to_hand') {
-            // Find lands and put to hand, rest to bottom
+            // Find lands and optionally put to hand, rest to bottom
             const lands = looked.filter(c => CardEngine.isLand(c));
             const nonLands = looked.filter(c => !CardEngine.isLand(c));
             const pickCount = effect.pick || 1;
-            const toHand = lands.slice(0, pickCount);
-            const toBottom = [...lands.slice(pickCount), ...nonLands];
-            toHand.forEach(c => {
-              gameState.players[controller].zones.hand.add(c);
-              log.push(`${c.name} (terreno) vai para a mao.`);
-            });
-            toBottom.forEach(c => lib.addToBottom(c));
-            if (toHand.length === 0) log.push(`Nenhum terreno encontrado entre as ${looked.length} cartas do topo.`);
+            const isOptional = effect.optional !== false;
+
+            if (gameState.players[controller].isHuman && lands.length > 0 && isOptional) {
+              // Human: interactive choice modal to choose which lands to keep
+              gameState._pendingLookTop = {
+                type: 'look_top_land_choice',
+                cards: looked,
+                lands: lands,
+                nonLands: nonLands,
+                pickCount: pickCount,
+                playerId: controller,
+                selected: [] // Which lands to put in hand
+              };
+              gameState.waitingForInput = { type: 'look_top_land_choice', playerId: controller };
+              log.push(`Escolha qual(is) terreno(s) colocar na mao (até ${pickCount}).`);
+              return log; // Pause for human input
+            } else {
+              // AI or automatic: AI picks best lands
+              const toHand = lands.slice(0, pickCount);
+              const toBottom = [...lands.slice(pickCount), ...nonLands];
+              toHand.forEach(c => {
+                gameState.players[controller].zones.hand.add(c);
+                log.push(`${c.name} (terreno) vai para a mao.`);
+              });
+              toBottom.forEach(c => lib.addToBottom(c));
+              if (lands.length === 0) log.push(`Nenhum terreno encontrado entre as ${looked.length} cartas do topo.`);
+            }
           } else if (effect.rest_to === 'graveyard') {
             // Look top and pick for hand, rest to graveyard
             const pickCount = effect.pick || 1;
@@ -1454,7 +1763,7 @@ const GameStack = {
                 choices: new Array(looked.length).fill('graveyard'), // Default all to graveyard
                 playerId: controller
               };
-              gameState.waitingForInput = 'look_top_choice';
+              gameState.waitingForInput = { type: 'look_top_choice', playerId: controller };
               log.push(`Escolha ${pickCount} carta(s) para a mao.`);
               return log; // Pause here for human input, return current log
             } else {
@@ -1468,6 +1777,74 @@ const GameStack = {
               });
               rest.forEach(c => gameState.players[controller].zones.graveyard.add(c));
               if (rest.length > 0) log.push(`${rest.length} carta(s) vao para o cemiterio.`);
+            }
+          } else if (effect.put_onto_battlefield && effect.condition === 'noncreature_nonland_mv3') {
+            // Look top and put noncreature nonland permanents with CMC <= 3 onto battlefield (United Battlefront)
+            const putCount = effect.put_onto_battlefield || 0;
+            const candidates = looked.filter(c =>
+              !CardEngine.isCreature(c) &&
+              !CardEngine.isLand(c) &&
+              (c.cmc || 0) <= 3
+            );
+            const rest = looked.filter(c => !candidates.includes(c));
+
+            if (gameState.players[controller].isHuman && candidates.length > 0) {
+              // Human: choose which permanents to put on battlefield (up to putCount)
+              gameState._pendingLookTop = {
+                type: 'look_top_permanent_choice',
+                cards: looked,
+                candidates: candidates,
+                rest: rest,
+                putCount: putCount,
+                selected: [],
+                playerId: controller
+              };
+              gameState.waitingForInput = { type: 'look_top_permanent_choice', playerId: controller };
+              log.push(`Escolha até ${putCount} permanentes nao-criatura nao-terreno (CMC ≤ 3) para colocar no campo.`);
+              return log; // Pause for human input
+            } else {
+              // AI: put best permanents (highest CMC first)
+              candidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+              const toBf = candidates.slice(0, putCount);
+              const toBottom = [...candidates.slice(putCount), ...rest];
+              toBf.forEach(c => {
+                gameState.players[controller].zones.battlefield.add(c);
+                log.push(`${c.name} entra no campo.`);
+              });
+              // Put rest on bottom in random order
+              const shuffled = toBottom.sort(() => Math.random() - 0.5);
+              shuffled.forEach(c => lib.addToBottom(c));
+              if (toBf.length === 0) log.push(`Nenhum permanente elegivel encontrado.`);
+            }
+          } else if (effect.rest_to === 'bottom') {
+            // Look top and pick for hand, rest to bottom (Rediscover the Way, etc.)
+            const pickCount = effect.pick || 1;
+
+            if (gameState.players[controller].isHuman && pickCount > 0 && looked.length > 0) {
+              // Human: interactive choice overlay
+              gameState._pendingLookTop = {
+                type: 'look_top_choice',
+                cards: looked,
+                pickCount: pickCount,
+                destination: 'hand', // Cards go to hand
+                restDestination: 'bottom', // Rest go to bottom
+                choices: looked.map((c, i) => i < pickCount ? 'hand' : 'bottom'), // Default: pick first N for hand
+                playerId: controller
+              };
+              gameState.waitingForInput = { type: 'look_top_choice', playerId: controller };
+              log.push(`Escolha ${pickCount} carta(s) para a mao (as outras vao para o fundo do deck).`);
+              return log; // Pause here for human input
+            } else {
+              // AI or only one choice: auto-pick highest CMC
+              looked.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+              const picked = looked.slice(0, pickCount);
+              const rest = looked.slice(pickCount);
+              picked.forEach(c => {
+                gameState.players[controller].zones.hand.add(c);
+                log.push(`${c.name} vai para a mao.`);
+              });
+              rest.forEach(c => lib.addToBottom(c));
+              if (rest.length > 0) log.push(`${rest.length} carta(s) vao para o fundo do deck.`);
             }
           } else {
             // Default: look and put back (simplified for AI - put back on top)
@@ -1567,7 +1944,7 @@ const GameStack = {
             if (myGy.length > 0 && oppGy.length > 0) {
               // Both graveyards have cards - need choice
               if (controller === 0) { // Human player
-                gameState.waitingForInput = 'graveyard_choice';
+                gameState.waitingForInput = { type: 'graveyard_choice', playerId: controller };
                 gameState._pendingGraveyardChoice = { effect, controller, opponent };
                 return; // Pause for human choice
               } else {
@@ -1594,7 +1971,7 @@ const GameStack = {
               const maxAmount = effect.up_to_max ? efgAmt : efgAmt;
               const minAmount = effect.up_to_max ? 0 : efgAmt;
 
-              gameState.waitingForInput = 'graveyard_card_choice';
+              gameState.waitingForInput = { type: 'graveyard_card_choice', playerId: controller };
               gameState._pendingGraveyardCardChoice = {
                 playerId: efgPid,
                 amount: maxAmount,
@@ -1750,6 +2127,27 @@ const GameStack = {
           break;
         }
 
+        case 'remove_counters_all': {
+          // Remove ALL counters from target creature
+          if (targets && targets.length > 0) {
+            const rcaTarget = targets[0];
+            const rcaCreature = gameState.players[rcaTarget.player].zones.battlefield.get(rcaTarget.uid);
+            if (rcaCreature && rcaCreature._counters) {
+              let totalRemoved = 0;
+              for (const counterType in rcaCreature._counters) {
+                totalRemoved += rcaCreature._counters[counterType];
+                rcaCreature._counters[counterType] = 0;
+              }
+              log.push(`Remove todos os ${totalRemoved} contador(es) de ${rcaCreature.name}.`);
+              if (CardEngine.getToughness(rcaCreature) <= 0) {
+                GameState.creatureDies(gameState, rcaCreature, rcaTarget.player);
+                log.push(`${rcaCreature.name} morre.`);
+              }
+            }
+          }
+          break;
+        }
+
         case 'grant': {
           // Grant keyword to target creature (temporary until end of turn)
           const grantKw = effect.keyword;
@@ -1878,16 +2276,18 @@ const GameStack = {
               gameState.players[controller].zones.exile.add(cardFound);
               if (!gameState._exiledPlayable) gameState._exiledPlayable = {};
 
-              // Store exile info with free_cast flag
+              // Store exile info with free_cast flag and duration
               gameState._exiledPlayable[cardFound._uid] = {
                 card: cardFound,
                 controller,
                 turn: gameState.turn,
-                freeCast: effect.free_cast || false
+                freeCast: effect.free || false,
+                duration: effect.duration || 'permanent' // 'end_of_turn', 'next_turn', or 'permanent'
               };
+              console.log(`[BREACHING DEBUG] Exiled ${cardFound.name}, freeCast: ${effect.free || false}, cmc: ${cardFound.cmc}, duration: ${effect.duration || 'permanent'}`);
 
               const who = gameState.players[controller].isHuman ? 'Voce exila' : 'Oponente exila';
-              const playableText = effect.free_cast ? " (pode jogar de graça neste turno)" : " (pode jogar neste turno)";
+              const playableText = effect.free ? " (pode jogar de graça neste turno)" : " (pode jogar neste turno)";
               log.push(`${who} ${cardFound.name}${playableText}.`);
             } else if (effect.condition) {
               const who = gameState.players[controller].isHuman ? 'Voce' : 'Oponente';
@@ -1899,6 +2299,7 @@ const GameStack = {
 
         case 'search_library': {
           const slLib = gameState.players[controller].zones.library;
+          const bf = gameState.players[controller].zones.battlefield;
           let slFilter = null;
           if (effect.target === 'creature') slFilter = c => CardEngine.isCreature(c);
           else if (effect.target === 'land' || effect.target === 'basic_land') slFilter = c => CardEngine.isLand(c);
@@ -1918,35 +2319,90 @@ const GameStack = {
             break;
           }
 
-          if (gameState.players[controller].isHuman && slCandidates.length > 1) {
+          // Determine final destination (condition-based: control_dragon)
+          let toTop = effect.to_top || false;
+          let toBattlefield = false;
+          let tappedDest = effect.tapped || false;
+
+          if (effect.condition === 'control_dragon') {
+            const hasDragon = bf.cards.some(c => CardEngine.hasCreatureType(c, 'Dragon'));
+            if (hasDragon) {
+              // If true: use if_true settings
+              if (effect.if_true) {
+                toBattlefield = !effect.if_true.to_top;
+                toTop = effect.if_true.to_top || false;
+                tappedDest = effect.if_true.tapped || false;
+              }
+            } else {
+              // If false: use if_false settings
+              if (effect.if_false) {
+                toBattlefield = !effect.if_false.to_top;
+                toTop = effect.if_false.to_top || false;
+                tappedDest = effect.if_false.tapped || false;
+              }
+            }
+          }
+
+          // Check if optional and can decline
+          if (effect.optional && gameState.players[controller].isHuman) {
+            // Will be handled in UI overlay - add "Declinar" button
+          }
+
+          if (gameState.players[controller].isHuman && slCandidates.length > 0) {
+            // Show unique cards only
+            const landOptions = [];
+            const seenNames = new Set();
+            for (const card of slCandidates) {
+              if (!seenNames.has(card.name)) {
+                seenNames.add(card.name);
+                landOptions.push(card);
+              }
+            }
             gameState._pendingSearch = {
-              candidates: slCandidates,
+              candidates: landOptions,
               controller,
               toHand: effect.to_hand !== false,
-              tapped: effect.tapped || false,
+              toBattlefield: toBattlefield,
+              toTop: toTop,
+              tapped: tappedDest,
+              optional: effect.optional || false,
             };
             gameState.waitingForInput = { type: 'search_library', playerId: controller };
-            log.push('Escolha uma carta da sua biblioteca.');
+            log.push(effect.optional ? 'Escolha uma carta da sua biblioteca (ou declinar).' : 'Escolha uma carta da sua biblioteca.');
             return log;
           } else {
-            // AI: pick highest CMC (most powerful)
+            // AI: pick best by CMC
             slCandidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
             const picked = slCandidates[0];
             const idx = slLib.cards.indexOf(picked);
             if (idx !== -1) slLib.cards.splice(idx, 1);
-            if (effect.to_hand === false) {
-              // Put on battlefield
-              const bfCard = CardEngine.prepareForBattlefield(picked);
-              bfCard._tapped = effect.tapped || false;
-              bfCard._ownerId = controller;
-              gameState.players[controller].zones.battlefield.add(bfCard);
-              GameState._registerCardTriggers(gameState, bfCard, controller);
-              log.push(`Busca ${picked.name} da biblioteca para o campo.`);
-            } else {
+
+            if (effect.to_hand) {
               gameState.players[controller].zones.hand.add(picked);
-              log.push(`Busca ${picked.name} da biblioteca para a mao.`);
+              slLib.shuffle();
+              log.push(`Busca ${picked.name} da biblioteca para a mão.`);
+            } else if (toTop) {
+              slLib.cards.unshift(picked);
+              // Don't shuffle - goes on top
+              log.push(`Busca ${picked.name} e coloca no topo do grimorio.`);
+            } else if (toBattlefield) {
+              const bfCard = CardEngine.prepareForBattlefield(picked);
+              bfCard._tapped = tappedDest;
+              bfCard._summoningSick = false;
+              bfCard._ownerId = controller;
+              bf.add(bfCard);
+              GameState._registerCardTriggers(gameState, bfCard, controller);
+              slLib.shuffle();
+              log.push(`Busca ${picked.name} e coloca no campo${tappedDest ? ' virado' : ''}.`);
+            } else {
+              const bfCard = CardEngine.prepareForBattlefield(picked);
+              bfCard._tapped = tappedDest;
+              bfCard._ownerId = controller;
+              bf.add(bfCard);
+              GameState._registerCardTriggers(gameState, bfCard, controller);
+              slLib.shuffle();
+              log.push(`Busca ${picked.name} da biblioteca para o campo.`);
             }
-            slLib.shuffle();
           }
           break;
         }
@@ -1977,6 +2433,11 @@ const GameStack = {
           let sourceCreature = null;
           if (effect.type === 'copy_self') {
             sourceCreature = gameState.players[controller].zones.battlefield.get(card._uid);
+          } else if (effect.target === 'exiled_creature') {
+            // Retrieve creature that was exiled by this card (e.g., Mardu Siegebreaker)
+            if (card._exiledUntilLeaves && card._exiledUntilLeaves.length > 0) {
+              sourceCreature = card._exiledUntilLeaves[card._exiledUntilLeaves.length - 1];
+            }
           } else if (targets && targets.length > 0) {
             const ctcTarget = targets[0];
             sourceCreature = gameState.players[ctcTarget.player].zones.battlefield.get(ctcTarget.uid);
@@ -2281,6 +2742,26 @@ const GameStack = {
 
   isEmpty(stack) {
     return stack.items.length === 0;
+  },
+
+  // Continue processing pending stack effects after user input
+  _processNextEffect(gameState) {
+    if (gameState._pendingStackEffects) {
+      const { card, controller, targets, effects, log } = gameState._pendingStackEffects;
+      gameState._pendingStackEffects = null;
+
+      // Continue resolving remaining effects by simulating a stack item
+      const tempItem = { card, controller, targets, effects };
+      const remainingResults = this._resolveItem(tempItem, gameState);
+
+      // Merge with existing log if we have results
+      if (Array.isArray(remainingResults)) {
+        log.push(...remainingResults);
+      }
+
+      return log;
+    }
+    return [];
   },
 
   // Ward enforcement: returns true if ward is paid, false if countered

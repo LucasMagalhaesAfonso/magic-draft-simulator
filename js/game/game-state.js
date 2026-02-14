@@ -89,6 +89,86 @@ const GameState = {
     }
   },
 
+  _aiChooseTargetsForEffects(state, playerId, effects) {
+    // Helper function to let AI choose targets for effects
+    const targets = [];
+    const opponentId = playerId === 0 ? 1 : 0;
+
+    for (const effect of effects) {
+      if (!this._effectRequiresTargets(effect)) continue;
+
+      let target = null;
+
+      switch (effect.target) {
+        case 'creature':
+        case 'opponent_creature': {
+          const creatures = effect.target === 'opponent_creature'
+            ? state.players[opponentId].zones.battlefield.cards.filter(c => CardEngine.isCreature(c))
+            : [...state.players[0].zones.battlefield.cards, ...state.players[1].zones.battlefield.cards]
+                .filter(c => CardEngine.isCreature(c));
+
+          if (creatures.length > 0) {
+            // AI picks the best target based on effect type
+            if (effect.type === 'destroy' || effect.type === 'damage' || effect.type === 'exile') {
+              // Pick strongest opponent creature or weakest own creature
+              target = creatures
+                .filter(c => effect.target === 'opponent_creature' ? true : c._owner !== playerId)
+                .sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a))[0] ||
+                creatures[0];
+            } else {
+              // For buffs, pick strongest own creature
+              target = creatures
+                .filter(c => c._owner === playerId)
+                .sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a))[0] ||
+                creatures[0];
+            }
+          }
+          break;
+        }
+
+        case 'creature or planeswalker': {
+          const targets_available = [
+            ...state.players[0].zones.battlefield.cards,
+            ...state.players[1].zones.battlefield.cards
+          ].filter(c => CardEngine.isCreature(c) || CardEngine.isPlaneswalker(c));
+
+          if (targets_available.length > 0) {
+            // Prefer opponent's most valuable permanent
+            target = targets_available
+              .filter(c => c._owner !== playerId)
+              .sort((a, b) => (CardEngine.getPower(b) || 0) - (CardEngine.getPower(a) || 0))[0] ||
+              targets_available[0];
+          }
+          break;
+        }
+
+        case 'artifact':
+        case 'enchantment': {
+          const permanents = [
+            ...state.players[0].zones.battlefield.cards,
+            ...state.players[1].zones.battlefield.cards
+          ].filter(c => effect.target === 'artifact' ? CardEngine.isArtifact(c) : CardEngine.isEnchantment(c));
+
+          if (permanents.length > 0) {
+            // Prefer opponent permanents
+            target = permanents.filter(c => c._owner !== playerId)[0] || permanents[0];
+          }
+          break;
+        }
+      }
+
+      if (target) {
+        targets.push({
+          type: CardEngine.isCreature(target) ? 'creature' : 'permanent',
+          player: target._owner,
+          uid: target._uid
+        });
+      }
+    }
+
+    return targets;
+  },
+
   mulligan(state, playerId) {
     state.mulliganCount[playerId]++;
     const handCards = state.players[playerId].zones.hand.getAll();
@@ -335,6 +415,22 @@ const GameState = {
         logs.push(`Habilidade de ${trigger.cardName} dispara!`);
         // VFX: trigger pulse
         if (typeof VFX !== 'undefined') VFX.triggerFire(trigger.cardUid);
+
+        // Check if any effect has a cost and we need to ask the player
+        const effectsWithCosts = trigger.effects.filter(e => e.cost);
+        const isHumanPlayer = state.players[trigger.controllerId] && state.players[trigger.controllerId].isHuman;
+
+        if (effectsWithCosts.length > 0 && isHumanPlayer) {
+          // Pause for player to decide on paying cost
+          state.waitingForInput = {
+            type: 'trigger_cost',
+            playerId: trigger.controllerId,
+            trigger: trigger,
+            data: { ...data, cardUid: trigger.cardUid }
+          };
+          return logs;
+        }
+
         // Resolve trigger effects
         for (const effect of trigger.effects) {
           const result = this._resolveSimpleEffect(state, trigger.controllerId, effect, { ...data, cardUid: trigger.cardUid });
@@ -426,6 +522,21 @@ const GameState = {
           return data.card._controller === pid;
         }
         return false;
+      case 'glacierwood_temur_mode': {
+        // Check if Glacierwood Siege has Temur mode chosen
+        const card = bf.find(c => c.name && c.name.toLowerCase() === 'glacierwood siege');
+        return !!(card && card._temurMode === true);
+      }
+      case 'frostcliff_jeskai_mode': {
+        // Check if Frostcliff Siege has Jeskai mode chosen
+        const card = bf.find(c => c.name && c.name.toLowerCase() === 'frostcliff siege');
+        return !!(card && card._jeskaiMode === true);
+      }
+      case 'frostcliff_temur_mode': {
+        // Check if Frostcliff Siege has Temur mode chosen
+        const card = bf.find(c => c.name && c.name.toLowerCase() === 'frostcliff siege');
+        return !!(card && card._temurMode === true);
+      }
       default:
         // Unknown condition - log and allow (fail open)
         state.log.push(`(condição desconhecida: ${cond})`);
@@ -624,7 +735,40 @@ const GameState = {
       case 'add_mana': {
         console.log(`[MANA ENGINE] add_mana called:`, effect, `controllerId:`, controllerId, `isHuman:`, state.players[controllerId].isHuman);
 
-        // Handle colors array (add multiple colors at once)
+        // Handle colors array with choose (pick one from multiple options)
+        if (effect.colors && Array.isArray(effect.colors) && effect.choose) {
+          console.log(`[MANA ENGINE] Processing color array with choose=${effect.choose}`);
+          const colors = effect.colors;
+          if (state.players[controllerId].isHuman && controllerId === 0) {
+            // Pause for human choice
+            state._pendingManaChoice = { colors, controllerId, cardUid: data.cardUid };
+            state.waitingForInput = { type: 'mana_color_choice', playerId: controllerId };
+            return null;
+          } else if (controllerId === 0) {
+            // AI (player 0): pick color most needed based on hand
+            const hand = state.players[controllerId].zones.hand.getAll();
+            const needs = {};
+            for (const c of colors) needs[c] = 0;
+            for (const hCard of hand) {
+              const mc = hCard.mana_cost || '';
+              for (const c of colors) {
+                const regex = new RegExp(`\\{${c}\\}`, 'g');
+                const matches = mc.match(regex);
+                if (matches) needs[c] += matches.length;
+              }
+            }
+            const bestColor = colors.reduce((best, c) => needs[c] > needs[best] ? c : best, colors[0]);
+            const amount = effect.amount || 1;
+            state.manaPool[controllerId][bestColor] = (state.manaPool[controllerId][bestColor] || 0) + amount;
+            return `+{${bestColor}} mana.`;
+          } else {
+            // Opponent AI: block Devotee-like abilities that convert mana without net gain
+            // These should only be used by the human player strategically
+            return null;
+          }
+        }
+
+        // Handle colors array without choose (add multiple colors at once)
         if (effect.colors && Array.isArray(effect.colors)) {
           for (const c of effect.colors) {
             state.manaPool[controllerId][c] = (state.manaPool[controllerId][c] || 0) + 1;
@@ -1087,6 +1231,18 @@ const GameState = {
               const wasToken = target._isToken;
               const targetOwnerId = target._ownerId || targetId;
 
+              // If aura, remove effects from enchanted creature
+              if (CardEngine.isAura(target) && target._attachedTo) {
+                for (const p of state.players) {
+                  const enchanted = p.zones.battlefield.get(target._attachedTo);
+                  if (enchanted) {
+                    this._removeAuraEffects(target, enchanted);
+                    enchanted._attachments = enchanted._attachments.filter(uid => uid !== target._uid);
+                    break;
+                  }
+                }
+              }
+
               // Fire leaves_battlefield before removing
               state.log.push(...this.fireTrigger(state, 'leaves_battlefield', { cardUid: target._uid, ownerId: targetOwnerId, card: target }));
               state.players[targetOwnerId].zones.battlefield.remove(target._uid);
@@ -1190,6 +1346,13 @@ const GameState = {
               exiledCardUid: target._uid,
               originalOwner: targetId
             });
+
+            // Store exiled card on the source card for UI display (under the enchantment)
+            const sourceCard = state.players[controllerId].zones.battlefield.get(data.cardUid);
+            if (sourceCard) {
+              if (!sourceCard._exiledCards) sourceCard._exiledCards = [];
+              sourceCard._exiledCards.push(target);
+            }
           }
 
           state.players[targetId].zones.exile.add(target);
@@ -1340,7 +1503,7 @@ const GameState = {
           targets = state.players[opponentId].zones.battlefield.cards.filter(c =>
             CardEngine.isCreature(c) && !c._tapped
           );
-        } else if (effect.target === 'creature') {
+        } else if (effect.target === 'creature' || effect.target === 'any_creature') {
           // Any creature (could be own or opponent)
           for (const pid of [0, 1]) {
             targets.push(...state.players[pid].zones.battlefield.cards.filter(c =>
@@ -1349,18 +1512,35 @@ const GameState = {
           }
         }
 
-        if (targets.length > 0) {
-          targets.sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
-          const target = targets[0];
-          target._tapped = true;
+        if (targets.length === 0) return null;
 
-          // Find the owner of the target
-          const targetOwner = state.players[0].zones.battlefield.get(target._uid) ? 0 : 1;
-          const tapLogs = this.fireTrigger(state, 'becomes_tapped', { cardUid: target._uid, card: target, controllerId: targetOwner });
-          state.log.push(...tapLogs);
-          return `${target.name} e virado.`;
+        // If human player needs to choose, pause for input
+        if (targets.length > 1 && state.players[controllerId].isHuman) {
+          state._pendingTargetChoice = {
+            targets: targets,
+            effect: effect,
+            controllerId: controllerId,
+            cardUid: data?.cardUid,
+            effectType: 'tap'
+          };
+          state.waitingForInput = {
+            type: 'target_choice_single',
+            playerId: controllerId,
+            prompt: `Escolha qual criatura virar`
+          };
+          return null; // Resume after player chooses
         }
-        return null;
+
+        // AI or single target: choose automatically
+        targets.sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
+        const target = targets[0];
+        target._tapped = true;
+
+        // Find the owner of the target
+        const targetOwner = state.players[0].zones.battlefield.get(target._uid) ? 0 : 1;
+        const tapLogs = this.fireTrigger(state, 'becomes_tapped', { cardUid: target._uid, card: target, controllerId: targetOwner });
+        state.log.push(...tapLogs);
+        return `${target.name} e virado.`;
       }
       case 'discard_trigger': {
         // Opponent discards
@@ -1819,7 +1999,7 @@ const GameState = {
               choices: new Array(looked.length).fill('graveyard'), // Default all to graveyard
               playerId: controllerId
             };
-            state.waitingForInput = 'look_top_choice';
+            state.waitingForInput = { type: 'look_top_choice', playerId: controllerId };
             return `Escolha ${pickCount} carta(s) para a mao.`;
           } else {
             // AI or other cases: auto-pick first N cards
@@ -1986,33 +2166,20 @@ const GameState = {
           return "Nao ha cartas na mao para descartar.";
         }
 
-        // For human player: ask if they want to discard
-        if (state.players[controllerId].isHuman) {
-          // Simple implementation: ask via log if they want to discard
-          // This could be enhanced with interactive UI later
-          const shouldDiscard = hand.count() > 5; // Simple heuristic for now
-          if (shouldDiscard) {
-            // Discard worst card
-            const handCards = hand.getAll();
-            handCards.sort((a, b) => (a.cmc || 0) - (b.cmc || 0));
-            const discarded = handCards[0];
-            hand.remove(discarded._uid);
-            gy.add(discarded);
+        // For human player: interactive choice
+        if (state.players[controllerId].isHuman && controllerId === 0) {
+          const returnCards = gy.getAll().filter(c => CardEngine.isCreature(c) || CardEngine.isLand(c));
 
-            // Return best creature or land from graveyard
-            const returnCards = gy.getAll().filter(c => CardEngine.isCreature(c) || CardEngine.isLand(c));
-            if (returnCards.length > 0) {
-              returnCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
-              const returned = returnCards[0];
-              gy.remove(returned._uid);
-              hand.add(returned);
-              return `Descarta ${discarded.name}, retorna ${returned.name} do cemiterio.`;
-            } else {
-              return `Descarta ${discarded.name}, mas nao ha criaturas/terrenos no cemiterio.`;
-            }
-          } else {
-            return "Opta por nao descartar.";
-          }
+          // Set up interactive choice
+          state._pendingOptionalDiscard = {
+            controller: controllerId,
+            amount: 1,
+            returnFromGY: true,
+            returnCards: returnCards,
+            returnTarget: effect.target || 'creature_or_land'
+          };
+          state.waitingForInput = { type: 'optional_discard_choice', playerId: controllerId };
+          return null; // Pause for human choice
         } else {
           // AI logic: discard if worth it
           const returnCards = gy.getAll().filter(c => CardEngine.isCreature(c) || CardEngine.isLand(c));
@@ -2211,8 +2378,13 @@ const GameState = {
         const kwCap = kw.charAt(0).toUpperCase() + kw.slice(1);
         let grantTarget = null;
 
+        // Handle "same" target - use targets from calling context (graveyard abilities)
+        if (effect.target === 'same' && data && data.targets && data.targets.length > 0) {
+          const target = data.targets[0];
+          grantTarget = state.players[target.player].zones.battlefield.get(target.uid);
+        }
         // Handle specific target types for activated abilities
-        if (effect.target && effect.target !== 'self') {
+        else if (effect.target && effect.target !== 'self') {
           const myBf = state.players[controllerId].zones.battlefield.cards;
           let candidates = [];
           if (effect.target === 'own_creature_power2') {
@@ -2466,7 +2638,18 @@ const GameState = {
         const candidates = lib.cards.filter(filter);
         if (candidates.length > 0) {
           candidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
-          const picked = candidates[0];
+
+          // Allow player choice if requested
+          let picked = candidates[0];
+          if (effect.allow_choice && candidates.length > 1 && state.players[searchPlayerId].isHuman) {
+            state._pendingSearchChoice = { candidates, controllerId: searchPlayerId, cardUid: data.cardUid, effect };
+            state.waitingForInput = { type: 'search_library_choice', playerId: searchPlayerId };
+            return null;
+          } else if (effect.allow_choice && candidates.length > 1) {
+            // AI picks the best card for their strategy (highest CMC)
+            picked = candidates[0];
+          }
+
           const idx = lib.cards.indexOf(picked);
           if (idx !== -1) lib.cards.splice(idx, 1);
 
@@ -2738,20 +2921,52 @@ const GameState = {
         return null;
       }
       case 'behold_dragon': {
-        // Auto-behold a Dragon from hand (reveal and set as beheld)
+        // Behold a Dragon from hand (reveal and set as beheld)
         const hand = state.players[controllerId].zones.hand;
         const dragonCards = hand.getAll().filter(c => CardEngine.hasCreatureType(c, 'Dragon'));
 
-        if (dragonCards.length > 0) {
-          // Behold the strongest Dragon (highest CMC)
-          dragonCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
-          const pickedDragon = dragonCards[0];
-
-          state._beholding[controllerId] = pickedDragon;
-          return `${pickedDragon.name} revelado (behold Dragon).`;
+        if (dragonCards.length === 0) {
+          // Optional behold: no dragons, just skip
+          return `Nenhum Dragon na mao para behold.`;
         }
 
-        return `Nenhum Dragon na mao para behold.`;
+        // For human player: show UI choice modal with optional decline
+        if (state.players[controllerId].isHuman) {
+          if (dragonCards.length > 1) {
+            // Set up pending behold choice with multiple options
+            if (!state._pendingBeholdChoice) state._pendingBeholdChoice = {};
+            state._pendingBeholdChoice.cards = dragonCards;
+            state._pendingBeholdChoice.isOptional = effect.optional === true;
+            state._pendingBeholdChoice.source = 'etb';
+            state.waitingForInput = { type: 'behold_choice_multiple', playerId: controllerId };
+            return null; // Will continue after UI resolves
+          } else {
+            // Single dragon - show choice modal if optional
+            if (effect.optional === true) {
+              if (!state._pendingBeholdChoice) state._pendingBeholdChoice = {};
+              state._pendingBeholdChoice.cards = dragonCards;
+              state._pendingBeholdChoice.isOptional = true;
+              state._pendingBeholdChoice.source = 'etb';
+              state.waitingForInput = { type: 'behold_choice_multiple', playerId: controllerId };
+              return null; // Will continue after UI resolves
+            } else {
+              // Mandatory single - auto-pick
+              state._beholding[controllerId] = dragonCards[0];
+              return `${dragonCards[0].name} revelado (behold Dragon).`;
+            }
+          }
+        }
+
+        // For AI: pick strongest Dragon (highest CMC) or decline if optional
+        dragonCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+        const pickedDragon = dragonCards[0];
+        // AI only beholds if valuable enough or mandatory
+        if (effect.optional === true && pickedDragon.cmc <= 3) {
+          // Skip behold for low-value dragons
+          return `Declinou behold (dragao insuficiente).`;
+        }
+        state._beholding[controllerId] = pickedDragon;
+        return `${pickedDragon.name} revelado (behold Dragon).`;
       }
       case 'exile_with_suspend': {
         // Suspend mechanic: exile with time counters, reduce each upkeep, cast for free when 0
@@ -2970,6 +3185,35 @@ const GameState = {
     const isMainPhase = state.phase === 'main1' || state.phase === 'main2';
     if (isMainPhase && state.activePlayer === controllerId && state.players[controllerId].isHuman) {
       state.waitingForInput = { type: 'main_phase', playerId: controllerId };
+    }
+  },
+
+  // Called when human decides whether to pay "unless" cost for counter spell
+  resolveUnlessPay(state, shouldPay) {
+    if (!state._pendingUnlessPay) return;
+    const { spell, cost, spellController, wasDragonBeheld } = state._pendingUnlessPay;
+    const opponentId = spellController === 0 ? 1 : 0;
+
+    state._pendingUnlessPay = null;
+    state.waitingForInput = null;
+
+    if (shouldPay) {
+      // Opponent chose to pay - remove mana from pool
+      const opponentPool = state.manaPool[opponentId];
+      for (let i = 0; i < cost; i++) {
+        for (const color of Object.keys(opponentPool)) {
+          if (opponentPool[color] > 0) {
+            opponentPool[color]--;
+            break;
+          }
+        }
+      }
+      const costStr = wasDragonBeheld ? `{${cost}} (Dragon beheld)` : `{${cost}}`;
+      state.log.push(`${spell.name} nao foi anulado (${opponentId === 0 ? 'Voce' : 'IA'} pagou ${costStr}).`);
+    } else {
+      // Opponent chose not to pay - spell is countered
+      spell._countered = true;
+      state.log.push(`${spell.name} foi anulado.`);
     }
   },
 
@@ -3526,6 +3770,26 @@ const GameState = {
         state.log.push(`${card.name} entra virado.`);
       }
     }
+    // Check for "enters tapped unless you control X" condition
+    else if (oText.includes('enters tapped unless')) {
+      const condition = CardEngine.getEntersTappedUnlessCondition(card);
+      if (condition && condition.length > 0) {
+        // Check if player controls any of the required land types
+        const hasCondition = condition.some(landType =>
+          state.players[playerId].zones.battlefield.cards.some(c => CardEngine.hasLandType(c, landType))
+        );
+        if (hasCondition) {
+          state.log.push(`${card.name} entra desvirado (você controla ${condition.join(' ou ')}).`);
+        } else {
+          bfCard._tapped = true;
+          state.log.push(`${card.name} entra virado.`);
+        }
+      } else {
+        // Fallback: treat as regular enters tapped
+        bfCard._tapped = true;
+        state.log.push(`${card.name} entra virado.`);
+      }
+    }
     // Regular "enters tapped" lands (gain lands, tap lands, etc.)
     else if (oText.includes('enters tapped')) {
       bfCard._tapped = true;
@@ -3565,10 +3829,21 @@ const GameState = {
       bfCard._tapped = true;
       state.log.push(`${card.name} entra virado.`);
     } else if (bfCard._entersTappedConditional) {
-      // For tribal lands: enter tapped unless you control the right creature type
-      // For now, they always enter tapped (TODO: implement tribal condition check)
-      bfCard._tapped = true;
-      state.log.push(`${card.name} entra virado.`);
+      // For conditional tapped lands: check if condition is met
+      let shouldBeTapped = true;
+      if (card._entersTappedCondition && Array.isArray(card._entersTappedCondition)) {
+        // Check if player controls any of the condition types
+        const hasCondition = card._entersTappedCondition.some(type => {
+          return state.players[playerId].zones.battlefield.cards.some(c => CardEngine.hasCreatureType(c, type));
+        });
+        if (hasCondition) shouldBeTapped = false;
+      }
+      if (shouldBeTapped) {
+        bfCard._tapped = true;
+        state.log.push(`${card.name} entra virado.`);
+      } else {
+        state.log.push(`${card.name} entra desvirado (você controla ${card._entersTappedCondition.join(' ou ')}).`);
+      }
     }
 
     state.players[playerId].zones.battlefield.add(bfCard);
@@ -3763,6 +4038,13 @@ const GameState = {
     const returned = [];
     const toRemove = [];
 
+    // Find exiler on the battlefield (check all players)
+    let exiler = null;
+    for (const pid of [0, 1]) {
+      exiler = state.players[pid].zones.battlefield.get(exilerUid);
+      if (exiler) break;
+    }
+
     for (const [exiledUid, exileInfo] of Object.entries(state._temporaryExiles)) {
       if (exileInfo.exilerUid === exilerUid) {
         // Find the exiled card
@@ -3772,6 +4054,11 @@ const GameState = {
           state.players[exileInfo.originalOwner].zones.exile.remove(exiledUid);
           state.players[exileInfo.originalOwner].zones.battlefield.add(exiledCard);
           returned.push(exiledCard.name);
+
+          // Remove from exiler's _exiledCards array (for UI display)
+          if (exiler && exiler._exiledCards) {
+            exiler._exiledCards = exiler._exiledCards.filter(c => c._uid !== exiledUid);
+          }
         }
         toRemove.push(exiledUid);
       }
@@ -3859,11 +4146,39 @@ const GameState = {
       }
     }
 
+    // Check legendary rule BEFORE casting for permanent cards (skip if already approved)
+    if (CardEngine.isPermanent(card) && CardEngine.isLegendary(card) && !state._skipLegendaryCheck) {
+      const existingDuplicates = CardEngine.findLegendaryDuplicates(state, playerId, card.name);
+      if (existingDuplicates.length > 0) {
+        if (playerId === 0) {
+          // Human player - show warning modal before casting
+          state.waitingForInput = { type: 'legendary_choice_pre_cast', playerId };
+          state._pendingLegendaryChoice = {
+            cardToCast: card,
+            cardUid: cardUid,
+            targets: targets,
+            castingAdventure: castingAdventure,
+            castingEvoke: castingEvoke,
+            existingCards: existingDuplicates,
+            playerId: playerId,
+            useCost: useCost,
+            useCmc: useCmc,
+            fromExile: fromExile
+          };
+          return { success: true, waitForChoice: true, msg: 'Escolha qual lendária manter.' };
+        } else {
+          // AI player - automatically proceed with cast (will remove existing duplicates after)
+          // No special handling needed here, will be handled when card enters battlefield
+        }
+      }
+    }
+
     // Check if card is being cast for free from exile
     let isFreeFromExile = false;
     if (fromExile && state._exiledPlayable && state._exiledPlayable[cardUid]) {
       const exileEntry = state._exiledPlayable[cardUid];
       isFreeFromExile = exileEntry.freeCast || false;
+      console.log(`[BREACHING DEBUG] Casting ${card.name} from exile: freeCast=${exileEntry.freeCast}, isFreeFromExile=${isFreeFromExile}, useCost=${useCost}, useCmc=${useCmc}`);
     }
 
     // Check and pay mana (skip if casting for free)
@@ -3896,20 +4211,47 @@ const GameState = {
       delete card._beholdPaid;
       delete card._beholdCardUid;
     } else if (beholdCost) {
-      // Auto-behold: find matching card in hand to reveal
+      // Check for behold targets in hand
       const candidates = hand.getAll().filter(c =>
         c._uid !== cardUid && CardEngine.hasCreatureType(c, beholdCost.subtype)
       );
+
       if (candidates.length > 0) {
-        // Has behold target — reveal it (card stays in hand)
-        const picked = candidates[0];
-        state._beholding[playerId] = picked;
-        state.log.push(`${playerId === 0 ? 'Voce' : 'Oponente'} revela ${picked.name} (behold).`);
+        // Has behold targets to choose from
+        if (playerId === 0 && candidates.length > 1) {
+          // Human player with multiple options - pause for choice
+          state.waitingForInput = { type: 'behold_choice_multiple' };
+          state._pendingBeholdChoice = {
+            cardUid,
+            playerId,
+            candidates,
+            beholdCost,
+            hand
+          };
+          return { success: false, msg: '', paused: true };
+        } else {
+          // Single option or AI - just pick first
+          const picked = candidates[0];
+          state._beholding[playerId] = picked;
+          state.log.push(`${playerId === 0 ? 'Voce' : 'Oponente'} revela ${picked.name} (behold).`);
+        }
       } else if (beholdCost.optional && beholdCost.alternateCost) {
-        // No behold target but optional — pay alternate mana cost
-        const extraCost = `{${beholdCost.alternateCost}}`;
-        state.manaPool[playerId] = ManaSystem.payMana(state.manaPool[playerId], extraCost, beholdCost.alternateCost);
-        state.log.push(`${playerId === 0 ? 'Voce' : 'Oponente'} paga ${extraCost} (sem behold).`);
+        // No behold target but optional - human player can choose to pay alternate
+        if (playerId === 0) {
+          // Pause for human choice: reveal or pay
+          state.waitingForInput = { type: 'behold_choice_optional' };
+          state._pendingBeholdChoice = {
+            cardUid,
+            playerId,
+            beholdCost
+          };
+          return { success: false, msg: '', paused: true };
+        } else {
+          // AI pays alternate cost (no dragoes)
+          const extraCost = `{${beholdCost.alternateCost}}`;
+          state.manaPool[playerId] = ManaSystem.payMana(state.manaPool[playerId], extraCost, beholdCost.alternateCost);
+          state.log.push(`${playerId === 0 ? 'Voce' : 'Oponente'} paga ${extraCost} (sem behold).`);
+        }
       }
     }
 
@@ -4013,6 +4355,30 @@ const GameState = {
 
       state.players[playerId].zones.battlefield.add(bfCard);
       state.log.push(`${playerLabel} joga ${card.name}.`);
+
+      // Handle legendary rule after card enters battlefield
+      if (CardEngine.isLegendary(bfCard)) {
+        const existingDuplicates = CardEngine.findLegendaryDuplicates(state, playerId, bfCard.name)
+          .filter(c => c._uid !== bfCard._uid);
+        if (existingDuplicates.length > 0) {
+          if (playerId === 0 && state._legendaryChoice === 'keep_existing') {
+            // Human player chose to keep existing card - remove the new one
+            state.players[playerId].zones.battlefield.remove(bfCard._uid);
+            state.players[playerId].zones.graveyard.add(bfCard);
+            state.log.push(`${bfCard.name} vai para o cemitério devido à regra lendária.`);
+            state.log.push(`${existingDuplicates[0].name} permanece no campo de batalha.`);
+          } else {
+            // Default behavior: remove existing duplicates, keep new card
+            // (applies to AI players and human choice of 'keep_new')
+            existingDuplicates.forEach(existing => {
+              state.players[playerId].zones.battlefield.remove(existing._uid);
+              state.players[playerId].zones.graveyard.add(existing);
+              state.log.push(`${existing.name} vai para o cemitério devido à regra lendária.`);
+            });
+            state.log.push(`${bfCard.name} permanece no campo de batalha.`);
+          }
+        }
+      }
 
       // Mark creature as "entered this turn" for double damage tracking
       if (CardEngine.isCreature(bfCard)) {
@@ -4203,6 +4569,197 @@ const GameState = {
     return { success: true };
   },
 
+  /**
+   * Smart mana ability activation: automatically activates mana abilities from creatures
+   * Taps creatures with mana abilities, prioritizes single-color before multi-color
+   * Does NOT require user input - auto-resolves mana choices based on needs
+   */
+  _smartActivateManaAbilities(state, playerId, manaCostNeeded, cmc) {
+    const bf = state.players[playerId].zones.battlefield;
+    const currentPool = { ...state.manaPool[playerId] };
+
+    // Parse what we need
+    const cost = ManaSystem.parseCost(manaCostNeeded);
+    let coloredNeeded = { ...cost.colored };
+    let genericNeeded = cost.generic;
+
+    // Handle hybrid mana
+    if (cost.hybrids && cost.hybrids.length > 0) {
+      const bestCombo = this._findBestHybridCombo(cost.hybrids, currentPool);
+      for (const choice of bestCombo) {
+        if (/^\d+$/.test(choice)) {
+          genericNeeded += parseInt(choice);
+        } else if (coloredNeeded[choice] !== undefined) {
+          coloredNeeded[choice]++;
+        }
+      }
+    }
+
+    // Check what the pool already covers
+    for (const [color, amount] of Object.entries(coloredNeeded)) {
+      const fromPool = Math.min(currentPool[color] || 0, amount);
+      coloredNeeded[color] = amount - fromPool;
+      currentPool[color] = (currentPool[color] || 0) - fromPool;
+    }
+
+    let poolRemainingForGeneric = Object.values(currentPool).reduce((a, b) => a + b, 0);
+    let genericNeeded_actual = Math.max(0, genericNeeded - poolRemainingForGeneric);
+
+    // If nothing needed, return early
+    if (Object.values(coloredNeeded).every(v => v <= 0) && genericNeeded_actual <= 0) {
+      return;
+    }
+
+    // Collect creatures with mana abilities that CAN be tapped
+    const creatures = bf.cards.filter(c => CardEngine.isCreature(c) && !c._tapped);
+    const manaCreatures = [];
+
+    for (const creature of creatures) {
+      const manaAbilities = CardEngine.getManaAbilities(creature);
+      for (let abilityIdx = 0; abilityIdx < manaAbilities.length; abilityIdx++) {
+        const ability = manaAbilities[abilityIdx];
+
+        // Check if this ability can be used
+        if (!this._canUseAbility(state, playerId, creature, ability)) continue;
+
+        // Determine what colors this ability CAN produce (possibilities)
+        const producedColors = this._getAbilityManaProduction(ability);
+        if (producedColors.length === 0) continue;
+
+        // Count unique colors produced
+        const uniqueColors = [...new Set(producedColors)];
+
+        manaCreatures.push({
+          creature,
+          ability,
+          abilityIdx,
+          producedColors,
+          complexity: uniqueColors.length, // 1 for single-color, 3 for {WUB}, etc
+        });
+      }
+    }
+
+    // Sort by complexity: single-color first (lower = simpler)
+    manaCreatures.sort((a, b) => a.complexity - b.complexity);
+
+    // Greedily activate creatures to meet mana needs
+    for (const manaSource of manaCreatures) {
+      // Check if we still need mana
+      const stillNeedColored = Object.values(coloredNeeded).some(v => v > 0);
+      const stillNeedGeneric = genericNeeded_actual > 0;
+      if (!stillNeedColored && !stillNeedGeneric) break;
+
+      const creature = manaSource.creature;
+      const ability = manaSource.ability;
+
+      // Tap the creature ONLY if ability requires it
+      if (ability.cost && ability.cost.tap) {
+        creature._tapped = true;
+        state.log.push(`${creature.name} foi virado para gerar mana.`);
+      }
+
+      // Resolve the mana generation
+      // If ability requires choice, pick color based on needs
+      for (const effect of ability.effects) {
+        if (effect.type === 'add_mana') {
+          if (effect.colors && Array.isArray(effect.colors)) {
+            // Multiple colors to choose from - pick the one most needed
+            const color = this._pickMostNeededColor(effect.colors, coloredNeeded);
+            state.manaPool[playerId][color] = (state.manaPool[playerId][color] || 0) + 1;
+          } else if (effect.color) {
+            // Handle color string like "WBG" with choose
+            if (effect.choose && effect.color.length > 1) {
+              const colors = effect.color.split('');
+              const color = this._pickMostNeededColor(colors, coloredNeeded);
+              const amount = effect.amount || 1;
+              state.manaPool[playerId][color] = (state.manaPool[playerId][color] || 0) + amount;
+            } else {
+              // Single color or "any"
+              const color = effect.color === 'any' ? this._pickMostNeededColor(['W','U','B','R','G'], coloredNeeded) : effect.color;
+              const amount = effect.amount || 1;
+              state.manaPool[playerId][color] = (state.manaPool[playerId][color] || 0) + amount;
+            }
+          }
+        }
+      }
+
+      // Recalculate what we still need
+      const newPool = state.manaPool[playerId];
+      for (const [color, amount] of Object.entries(coloredNeeded)) {
+        const fromPool = Math.min(newPool[color] || 0, amount);
+        coloredNeeded[color] = amount - fromPool;
+        newPool[color] = (newPool[color] || 0) - fromPool;
+      }
+
+      let poolRem = Object.values(newPool).reduce((a, b) => a + b, 0);
+      genericNeeded_actual = Math.max(0, genericNeeded - poolRem);
+    }
+  },
+
+  /**
+   * Pick the most needed color from options
+   */
+  _pickMostNeededColor(colors, coloredNeeded) {
+    // Find which of these colors is most needed
+    let bestColor = colors[0];
+    let highestNeed = coloredNeeded[bestColor] || 0;
+
+    for (const color of colors) {
+      const need = coloredNeeded[color] || 0;
+      if (need > highestNeed) {
+        bestColor = color;
+        highestNeed = need;
+      }
+    }
+
+    return bestColor;
+  },
+
+  /**
+   * Check if an ability can be activated (meets cost/condition requirements)
+   */
+  _canUseAbility(state, playerId, creature, ability) {
+    // Check if creature is tapped
+    if (creature._tapped) return false;
+
+    // Skip if requires sacrifice/discard (too complex for auto-tap)
+    if (ability.cost && (ability.cost.sacrifice || ability.cost.discard)) {
+      return false;
+    }
+
+    // Check conditions (like control_dragon)
+    if (ability.condition) {
+      if (!this._checkEffectCondition(state, playerId, ability.condition)) return false;
+    }
+
+    return true;
+  },
+
+  /**
+   * Extract possible colors that an ability can produce
+   */
+  _getAbilityManaProduction(ability) {
+    if (!ability.effects || !Array.isArray(ability.effects)) return [];
+
+    const colors = new Set();
+    for (const effect of ability.effects) {
+      if (effect.type === 'add_mana') {
+        if (effect.colors && Array.isArray(effect.colors)) {
+          effect.colors.forEach(c => colors.add(c));
+        } else if (effect.color) {
+          if (effect.color === 'any') {
+            ['W','U','B','R','G'].forEach(c => colors.add(c));
+          } else if (effect.color.length > 1) {
+            effect.color.split('').forEach(c => colors.add(c));
+          } else {
+            colors.add(effect.color);
+          }
+        }
+      }
+    }
+    return Array.from(colors);
+  },
+
   autoTapForSpell(state, playerId, manaCost, cmc, convokeCard) {
     // If the card has convoke, tap creatures first (adds mana to pool)
     if (convokeCard && CardEngine.hasConvoke(convokeCard)) {
@@ -4211,6 +4768,9 @@ const GameState = {
         state.log.push(`Convocou ${convoked} criatura(s) para ajudar a pagar.`);
       }
     }
+
+    // Smart activation: tap creatures with mana abilities if needed
+    this._smartActivateManaAbilities(state, playerId, manaCost, cmc);
 
     const cost = ManaSystem.parseCost(manaCost);
 
@@ -4226,11 +4786,30 @@ const GameState = {
       cost.total = cmc;
     }
 
+    // For hybrid mana: find the best combination to pay with available mana
+    let finalColoredNeeded = { ...cost.colored };
+    let finalGenericNeeded = cost.generic;
+
+    if (cost.hybrids && cost.hybrids.length > 0) {
+      // Try to find the best hybrid combination based on available mana
+      const currentPool = { ...state.manaPool[playerId] };
+      const bestCombo = this._findBestHybridCombo(cost.hybrids, currentPool);
+
+      // Process the best combination
+      for (const choice of bestCombo) {
+        if (/^\d+$/.test(choice)) {
+          finalGenericNeeded += parseInt(choice);
+        } else if (finalColoredNeeded[choice] !== undefined) {
+          finalColoredNeeded[choice]++;
+        }
+      }
+    }
+
     // First, check what the existing pool already covers
     const currentPool = { ...state.manaPool[playerId] };
     const coloredNeeded = {};
 
-    for (const [color, amount] of Object.entries(cost.colored)) {
+    for (const [color, amount] of Object.entries(finalColoredNeeded)) {
       const fromPool = Math.min(currentPool[color] || 0, amount);
       coloredNeeded[color] = amount - fromPool;
       currentPool[color] = (currentPool[color] || 0) - fromPool;
@@ -4238,7 +4817,7 @@ const GameState = {
 
     // Calculate how much generic the pool can cover
     let poolRemainingForGeneric = Object.values(currentPool).reduce((a, b) => a + b, 0);
-    let genericNeeded = Math.max(0, cost.generic - poolRemainingForGeneric);
+    let genericNeeded = Math.max(0, finalGenericNeeded - poolRemainingForGeneric);
 
     const bf = state.players[playerId].zones.battlefield;
     const lands = bf.cards.filter(c => CardEngine.isLand(c) && !c._tapped);
@@ -4290,21 +4869,66 @@ const GameState = {
     return tapped;
   },
 
+  _findBestHybridCombo(hybrids, availablePool) {
+    // Generate all possible hybrid combinations
+    const hybridCombinations = ManaSystem._generateHybridCombinations(hybrids);
+
+    // Score each combination based on how much colored mana it requires
+    let bestCombo = hybridCombinations[0]; // Default to first
+    let lowestColorNeeded = Infinity;
+
+    for (const combo of hybridCombinations) {
+      let colorNeeded = 0;
+
+      for (const choice of combo) {
+        if (!/^\d+$/.test(choice)) {
+          // This is a color choice (G, U, R, W, B)
+          colorNeeded++;
+        }
+      }
+
+      // Prefer combinations with fewer color requirements
+      if (colorNeeded < lowestColorNeeded) {
+        lowestColorNeeded = colorNeeded;
+        bestCombo = combo;
+      }
+    }
+
+    return bestCombo;
+  },
+
   // Dry-run: returns UIDs of lands that WOULD be tapped, without modifying state
   previewAutoTap(state, playerId, manaCost, cmc) {
     const cost = ManaSystem.parseCost(manaCost);
     if (cost.total === 0 && cmc && cmc > 0) { cost.generic = cmc; cost.total = cmc; }
     if (cmc && cmc > 0 && cost.total < cmc) { cost.generic += (cmc - cost.total); cost.total = cmc; }
 
+    // For hybrid mana: find the best combination to pay with available mana
+    let finalColoredNeeded = { ...cost.colored };
+    let finalGenericNeeded = cost.generic;
+
+    if (cost.hybrids && cost.hybrids.length > 0) {
+      const currentPool = { ...state.manaPool[playerId] };
+      const bestCombo = this._findBestHybridCombo(cost.hybrids, currentPool);
+
+      for (const choice of bestCombo) {
+        if (/^\d+$/.test(choice)) {
+          finalGenericNeeded += parseInt(choice);
+        } else if (finalColoredNeeded[choice] !== undefined) {
+          finalColoredNeeded[choice]++;
+        }
+      }
+    }
+
     const currentPool = { ...state.manaPool[playerId] };
     const coloredNeeded = {};
-    for (const [color, amount] of Object.entries(cost.colored)) {
+    for (const [color, amount] of Object.entries(finalColoredNeeded)) {
       const fromPool = Math.min(currentPool[color] || 0, amount);
       coloredNeeded[color] = amount - fromPool;
       currentPool[color] = (currentPool[color] || 0) - fromPool;
     }
     let poolRemainingForGeneric = Object.values(currentPool).reduce((a, b) => a + b, 0);
-    let genericNeeded = Math.max(0, cost.generic - poolRemainingForGeneric);
+    let genericNeeded = Math.max(0, finalGenericNeeded - poolRemainingForGeneric);
 
     const bf = state.players[playerId].zones.battlefield;
     const lands = bf.cards.filter(c => CardEngine.isLand(c) && !c._tapped);
@@ -4448,9 +5072,20 @@ const GameState = {
           break;
         case 'buff_all': {
           // Anthem-like static: buff all matching creatures
+          // Check condition first
+          if (s.condition && !this._checkEffectCondition(state, playerId, s)) {
+            break;
+          }
           const target = s.target || 'own_creatures';
           if (!card._anthem) card._anthem = [];
-          card._anthem.push({ power: s.power || 0, toughness: s.toughness || 0, target });
+          card._anthem.push({ power: s.power || 0, toughness: s.toughness || 0, target, keywords: s.keywords });
+          // Apply keywords if specified
+          if (s.keywords) {
+            for (const kw of s.keywords) {
+              if (!card.keywords) card.keywords = [];
+              if (!card.keywords.includes(kw)) card.keywords.push(kw);
+            }
+          }
           // Apply to existing creatures
           const pBf = state.players[playerId].zones.battlefield.cards;
           for (const c of pBf) {
@@ -4461,6 +5096,13 @@ const GameState = {
             if (matches) {
               c._powerMod = (c._powerMod || 0) + (s.power || 0);
               c._toughnessMod = (c._toughnessMod || 0) + (s.toughness || 0);
+              // Apply keywords to creatures if specified
+              if (s.keywords) {
+                if (!c.keywords) c.keywords = [];
+                for (const kw of s.keywords) {
+                  if (!c.keywords.includes(kw)) c.keywords.push(kw);
+                }
+              }
             }
           }
           break;
@@ -4504,6 +5146,9 @@ const GameState = {
           // Mark that this land should enter tapped unless condition is met
           // For tribal lands, they enter tapped unless you control the right creature type
           card._entersTappedConditional = true;
+          if (s.unless && Array.isArray(s.unless)) {
+            card._entersTappedCondition = s.unless;
+          }
           break;
         case 'enters_tapped':
           // Mark that this land always enters tapped
@@ -4596,11 +5241,13 @@ const GameState = {
     // Clear drew-extra tracking
     state._drewExtraThisTurn = null;
     // Clear exiled playable cards based on duration
+    // IMPORTANT: Cards without explicit duration (like exile_top_play) stay exiled indefinitely
     if (state._exiledPlayable) {
       const expiredExiled = [];
       for (const uid of Object.keys(state._exiledPlayable)) {
         const entry = state._exiledPlayable[uid];
-        const shouldExpire = !entry.duration || entry.duration === 'end_of_turn' ||
+        // Only expire if duration is explicitly set to end_of_turn or expired next_turn
+        const shouldExpire = entry.duration === 'end_of_turn' ||
           (entry.duration === 'next_turn' && state.turn > entry.turn + 1);
 
         if (shouldExpire) {
@@ -4778,6 +5425,20 @@ const GameState = {
     if (db && db.static) {
       for (const s of db.static) {
         if (s.type === 'aura_prevent_untap') creature._preventUntap = true;
+        if (s.type === 'loses_abilities') {
+          // Store original abilities and remove all
+          if (!creature._suppressedAbilities) {
+            creature._suppressedAbilities = {
+              keywords: creature.keywords ? [...creature.keywords] : [],
+              triggers: creature._triggers ? [...creature._triggers] : [],
+              activated: creature._activatedAbilities ? [...creature._activatedAbilities] : []
+            };
+          }
+          creature.keywords = [];
+          creature._triggers = [];
+          creature._activatedAbilities = [];
+          creature._losesAllAbilities = true;
+        }
       }
     }
   },
@@ -4798,11 +5459,19 @@ const GameState = {
         }
       }
     });
-    // Remove aura_prevent_untap
+    // Remove aura_prevent_untap and loses_abilities
     const db = CardEngine.getPreprocessedEffects(aura);
     if (db && db.static) {
       for (const s of db.static) {
         if (s.type === 'aura_prevent_untap') delete creature._preventUntap;
+        if (s.type === 'loses_abilities' && creature._suppressedAbilities) {
+          // Restore original abilities
+          creature.keywords = creature._suppressedAbilities.keywords;
+          creature._triggers = creature._suppressedAbilities.triggers;
+          creature._activatedAbilities = creature._suppressedAbilities.activated;
+          delete creature._suppressedAbilities;
+          delete creature._losesAllAbilities;
+        }
       }
     }
   },
@@ -4910,6 +5579,19 @@ const GameState = {
     // Fire leaves_battlefield
     const leaveLogs = this.fireTrigger(state, 'leaves_battlefield', { cardUid: card._uid, ownerId, card });
     state.log.push(...leaveLogs);
+
+    // Return exiled creatures if this card had exiled any until it leaves (e.g., Stormplain Detainment)
+    if (card._exiledUntilLeaves && card._exiledUntilLeaves.length > 0) {
+      for (const exiledCard of card._exiledUntilLeaves) {
+        if (exiledCard) {
+          state.players[exiledCard._owner || ownerId].zones.exile.remove(exiledCard._uid);
+          state.players[exiledCard._owner || ownerId].zones.battlefield.add(exiledCard);
+          state.log.push(`${exiledCard.name} retorna ao campo de batalha.`);
+        }
+      }
+      card._exiledUntilLeaves = [];
+    }
+
     // Fire creature_dies_with_counters if it had +1/+1 counters
     if (card._counters && ((card._counters['+1/+1'] || 0) > 0 || (card._counters['-1/-1'] || 0) > 0)) {
       const counterDieLogs = this.fireTrigger(state, 'creature_dies_with_counters', { cardUid: card._uid, ownerId, card, hadCounters: true });
@@ -4938,7 +5620,8 @@ const GameState = {
               this._removeEquipmentEffects(att, card);
               att._attachedTo = null;
             } else {
-              // Auras go to graveyard
+              // Auras go to graveyard - remove effects first
+              this._removeAuraEffects(att, card);
               p.zones.battlefield.remove(attUid);
               p.zones.graveyard.add(att);
               this._unregisterCardTriggers(state, attUid);
@@ -5083,10 +5766,35 @@ const GameState = {
     logs.push(`${saga.name} — Capitulo ${ch}${ch <= maxCh ? '' : ' (fim)'}`);
 
     if (effects && effects.length > 0) {
-      // Resolve chapter effects through the stack
-      GameStack.push(state.stack, { card: saga, controller: playerId, targets: [], effects: [...effects] });
-      const stackLog = GameStack.resolve(state.stack, state);
-      logs.push(...stackLog);
+      // Check if any effect requires targeting
+      const needsTargeting = effects.some(effect =>
+        this._effectRequiresTargets(effect)
+      );
+
+      if (needsTargeting && playerId === 0) {
+        // Human player needs to choose targets for saga chapter
+        state._pendingSagaChapter = {
+          saga: saga,
+          chapter: ch,
+          effects: effects,
+          controller: playerId
+        };
+        state.waitingForInput = { type: 'choose_target', playerId: 0 };
+        logs.push(`Escolha um alvo para ${saga.name} — Capitulo ${ch}.`);
+        return logs;
+      } else {
+        // No targeting needed or AI auto-targeting
+        let targets = [];
+        if (needsTargeting && playerId === 1) {
+          // AI targeting - choose best available target
+          targets = this._aiChooseTargetsForEffects(state, playerId, effects);
+        }
+
+        // Resolve chapter effects through the stack
+        GameStack.push(state.stack, { card: saga, controller: playerId, targets, effects: [...effects] });
+        const stackLog = GameStack.resolve(state.stack, state);
+        logs.push(...stackLog);
+      }
     }
 
     // After last chapter, sacrifice the saga
@@ -5179,6 +5887,19 @@ const GameState = {
 
     // grant_flash: check if player has a creature that grants flash to certain spell types
     const grantFlashSources = state.players[playerId].zones.battlefield.cards.filter(c => c._grantFlash);
+
+    // Also check hand for creatures not yet on battlefield that grant flash (e.g., Whirlwing Stormbrood)
+    for (const handCard of hand.getAll()) {
+      if (CardEngine.isCreature(handCard)) {
+        const db = CardEngine.getPreprocessedEffects(handCard);
+        if (db && db.static) {
+          const hasGrantFlash = db.static.some(s => s.type === 'grant_flash');
+          if (hasGrantFlash) {
+            grantFlashSources.push(handCard);
+          }
+        }
+      }
+    }
 
     // Pre-compute available mana (untapped lands + pool) once
     const bf = state.players[playerId].zones.battlefield;
@@ -5306,6 +6027,7 @@ const GameState = {
         if (exileEntry.freeCast && exileEntry.controller === playerId) {
           isFreeFromExile = true;
         }
+        console.log(`[BREACHING DEBUG] Checking playability for ${card.name}: freeCast=${exileEntry.freeCast}, controller=${exileEntry.controller}, isFreeFromExile=${isFreeFromExile}`);
       }
 
       // Cost reduction from static abilities on battlefield
@@ -5355,6 +6077,10 @@ const GameState = {
         costReduced = true;
       }
 
+      // Store the effective CMC on the card for UI display
+      card._effectiveCmc = effectiveCmc;
+      card._costReduced = costReduced;
+
       // Normal card check - use worst-case cost for conditional cards
       const maxManaCost = CardEngine.getConditionalCost(card)
         ? CardEngine.getEffectiveManaCost(card, { type_line: "Creature — Dragon" }) // Assume worst case for targeting conditional
@@ -5399,6 +6125,9 @@ const GameState = {
       }
 
       if (CardEngine.isInstant(card) || CardEngine.hasFlash(card)) return true;
+      // conditional_flash: behold Dragon, etc.
+      const hasConditionalFlash = CardEngine.canCastWithConditionalFlash(card, state, playerId);
+      if (hasConditionalFlash) return true;
       // grant_flash: sorceries/dragon spells can be cast at instant speed
       if (grantFlashSources.length > 0) {
         for (const src of grantFlashSources) {
@@ -5443,7 +6172,6 @@ const GameState = {
 
   getHarmonizableCards(state, playerId) {
     const isMainPhase = state.phase === 'main1' || state.phase === 'main2';
-    if (!isMainPhase) return []; // harmonize cards are all sorceries
 
     const gy = state.players[playerId].zones.graveyard;
     const cards = gy.getAll();
@@ -5462,32 +6190,31 @@ const GameState = {
     const poolTotal = ManaSystem.poolTotal(state.manaPool[playerId]);
     const totalAvailable = availableLands.length + poolTotal;
 
-    // Creature discount: best untapped non-summoning-sick creature power
+    // Creature discount: best untapped creature power (summoning sick doesn't prevent harmonize tap)
     const convokeCreatures = bf.cards.filter(c =>
-      CardEngine.isCreature(c) && !c._tapped && !c._summoningSick
+      CardEngine.isCreature(c) && !c._tapped
     );
     const bestCreaturePower = convokeCreatures.length > 0
       ? Math.max(...convokeCreatures.map(c => CardEngine.getPower(c)))
       : 0;
 
+    // Get all cards with harmonize cost and mark which ones can be cast
     return cards.filter(card => {
       const harmonizeCost = CardEngine.getHarmonizeCost(card);
       if (!harmonizeCost) return false;
       // Skip X costs for now (nature's rhythm)
       if (harmonizeCost.includes('X')) return false;
 
+      // Determine if this card can actually be cast
       const cmc = CardEngine.getHarmonizeCMC(card);
-      // With creature tap discount, the generic portion is reduced
       const effectiveCmc = Math.max(0, cmc - bestCreaturePower);
-      const effectiveTotal = Math.max(effectiveCmc, cmc - bestCreaturePower);
-      // Check if we can afford the colored requirements + reduced generic
-      if (totalAvailable < effectiveTotal) return false;
-      // Check colored requirements (creature tap only reduces generic)
-      const parsed = ManaSystem.parseCost(harmonizeCost);
-      const coloredTotal = Object.values(parsed.colored).reduce((a, b) => a + b, 0);
-      if (totalAvailable < coloredTotal) return false;
-      // Full check with the reduced cost
-      return ManaSystem.canPay(availableMana, harmonizeCost, effectiveCmc);
+      const canCastThisCard = isMainPhase &&
+        totalAvailable >= effectiveCmc &&
+        ManaSystem.canPay(availableMana, harmonizeCost, effectiveCmc);
+
+      // Mark it for UI rendering
+      card._harmonizeCanCast = canCastThisCard;
+      return true; // Always return card so it appears in bar
     });
   },
 
@@ -5504,24 +6231,31 @@ const GameState = {
 
     let cmc = CardEngine.getHarmonizeCMC(card);
     let discount = 0;
+    let tappedCreature = null;
 
-    // Tap creature for discount (reduces generic mana only)
+    // Calculate discount first (WITHOUT tapping creature yet)
     if (tappedCreatureUid) {
       const bf = state.players[playerId].zones.battlefield;
       const creature = bf.get(tappedCreatureUid);
       if (creature && CardEngine.isCreature(creature) && !creature._tapped) {
         discount = CardEngine.getPower(creature);
-        creature._tapped = true;
-        state.log.push(`${creature.name} ajuda a harmonizar (desconto de ${discount}).`);
+        tappedCreature = creature; // Store for later
       }
     }
 
     const effectiveCmc = Math.max(0, cmc - discount);
 
-    // Auto-tap and pay mana
+    // VALIDATE MANA BEFORE TAPPING CREATURE
+    // Auto-tap and check if can pay mana
     this.autoTapForSpell(state, playerId, harmonizeCost, effectiveCmc);
     if (!ManaSystem.canPay(state.manaPool[playerId], harmonizeCost, effectiveCmc)) {
       return { success: false, msg: 'Mana insuficiente para harmonizar.' };
+    }
+
+    // NOW tap the creature (only if we can actually pay the cost)
+    if (tappedCreature) {
+      tappedCreature._tapped = true;
+      state.log.push(`${tappedCreature.name} ajuda a harmonizar (desconto de ${discount}).`);
     }
     state.manaPool[playerId] = ManaSystem.payMana(state.manaPool[playerId], harmonizeCost, effectiveCmc);
 
@@ -5647,7 +6381,8 @@ const GameState = {
     return targetingEffects.includes(effect.type) &&
            effect.target &&
            !effect.target.includes('all') &&
-           !effect.target.includes('each');
+           !effect.target.includes('each') &&
+           !effect.optional;  // Optional effects don't require valid targets
   },
 
   _hasValidTargetsForEffect(state, playerId, effect) {
@@ -5776,5 +6511,52 @@ const GameState = {
     }
 
     return actionsPerformed;
+  },
+
+  // Handle paying for optional triggered ability costs
+  resolveTriggerCost(state, paymentChoice) {
+    if (!state || !state.waitingForInput || state.waitingForInput.type !== 'trigger_cost') {
+      return;
+    }
+
+    const wi = state.waitingForInput;
+    const trigger = wi.trigger;
+
+    if (paymentChoice === 'pay') {
+      // Player chose to pay
+      const effect = trigger.effects.find(e => e.cost);
+      if (!effect || !effect.cost) {
+        state.waitingForInput = null;
+        return;
+      }
+
+      // Try to pay the cost
+      const cost = ManaSystem.parseCost(effect.cost);
+      const cmc = ManaSystem.getCMCFromCost(effect.cost);
+
+      if (!ManaSystem.canAfford(state, trigger.controllerId, { mana_cost: effect.cost, cmc })) {
+        // Can't afford - just skip without resolving
+        state.log.push(`Mana insuficiente para pagar ${effect.cost}.`);
+        state.waitingForInput = null;
+        return;
+      }
+
+      // Pay the mana
+      ManaSystem.payMana(state, trigger.controllerId, cost, cmc);
+
+      // Resolve the trigger effects
+      state.log.push(`Voce paga ${effect.cost}. Habilidade de ${trigger.cardName} se resolve!`);
+      for (const eff of trigger.effects) {
+        const result = this._resolveSimpleEffect(state, trigger.controllerId, eff, wi.data);
+        if (result) state.log.push(result);
+      }
+    } else {
+      // Player chose not to pay
+      const effect = trigger.effects.find(e => e.cost);
+      state.log.push(`Voce opta por nao pagar ${effect?.cost || '?'} para habilidade de ${trigger.cardName}.`);
+    }
+
+    // Cleanup
+    state.waitingForInput = null;
   }
 };

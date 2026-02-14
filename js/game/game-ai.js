@@ -524,6 +524,16 @@ const GameAI = {
         }
         GameState.autoTapForSpell(state, playerId, castCost, castCmc, card);
         const targets = this._chooseTargets(state, playerId, card);
+
+        // Fire creature_targeted_by_opponent trigger for each target
+        if (targets && targets.length > 0) {
+          for (const target of targets) {
+            if (target.player === 0) { // Targeting opponent's creatures
+              GameState.fireTrigger(state, 'creature_targeted_by_opponent', { playerId: 0 });
+            }
+          }
+        }
+
         const result = GameState.castSpell(state, playerId, card._uid, targets, false, useEvoke);
         if (result.success) {
           // Record action for UI notification
@@ -1272,7 +1282,7 @@ const GameAI = {
         const hasTrample = CardEngine.hasKeyword(c, 'Trample');
 
         // Find valid blockers for this creature
-        const validBlockers = opponentCreatures.filter(b => CardEngine.canBlock(b, c));
+        const validBlockers = opponentCreatures.filter(b => CardEngine.canBlock(b, c, state));
 
         if (validBlockers.length === 0) {
           guaranteedDamage += power; // unblockable
@@ -1323,7 +1333,7 @@ const GameAI = {
         myEvasionPower += power; // evasion
       } else {
         // Ground creature: check if opponent has any untapped creature that can block it
-        const canBeBlocked = opponentCreatures.some(b => CardEngine.canBlock(b, c));
+        const canBeBlocked = opponentCreatures.some(b => CardEngine.canBlock(b, c, state));
         if (!canBeBlocked) myEvasionPower += power; // unblockable ground
       }
     }
@@ -1399,14 +1409,14 @@ const GameAI = {
       const isMenace = CardEngine.hasKeyword(creature, 'Menace');
       if (isFlying) {
         const canBeBlockedByFlyer = oppFlyerBlockers.some(b =>
-          CardEngine.canBlock(b, creature)
+          CardEngine.canBlock(b, creature, state)
         );
         if (!canBeBlockedByFlyer) {
           attackValue += power; // Guaranteed damage
         } else {
           // Flying but opponent has flying/reach blockers - evaluate trade
           const bestFlyerBlocker = oppFlyerBlockers
-            .filter(b => CardEngine.canBlock(b, creature))
+            .filter(b => CardEngine.canBlock(b, creature, state))
             .sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a))[0];
           if (bestFlyerBlocker) {
             const bPow = CardEngine.getPower(bestFlyerBlocker);
@@ -1423,7 +1433,7 @@ const GameAI = {
       // === Trample: damage goes through ===
       if (CardEngine.hasKeyword(creature, 'Trample')) {
         const bestBlockerTough = opponentCreatures
-          .filter(b => CardEngine.canBlock(b, creature))
+          .filter(b => CardEngine.canBlock(b, creature, state))
           .reduce((max, b) => Math.max(max, CardEngine.getToughness(b)), 0);
         const trampleThrough = Math.max(0, power - bestBlockerTough);
         attackValue += trampleThrough * 0.5;
@@ -1442,7 +1452,7 @@ const GameAI = {
       // === First Strike: wins many combats ===
       if (CardEngine.hasKeyword(creature, 'First Strike') || CardEngine.hasKeyword(creature, 'Double Strike')) {
         const killsBeforeDamage = opponentCreatures.filter(b =>
-          CardEngine.canBlock(b, creature) && power >= CardEngine.getToughness(b)
+          CardEngine.canBlock(b, creature, state) && power >= CardEngine.getToughness(b)
         ).length > 0;
         if (killsBeforeDamage) attackValue += 3;
       }
@@ -1455,7 +1465,7 @@ const GameAI = {
       // === RISK: evaluate worst-case block ===
       if (!CardEngine.hasIndestructible(creature) && !CardEngine.hasKeyword(creature, 'Vigilance')) {
         // Find the best blocker opponent could assign
-        const validBlockers = opponentCreatures.filter(b => CardEngine.canBlock(b, creature));
+        const validBlockers = opponentCreatures.filter(b => CardEngine.canBlock(b, creature, state));
         if (validBlockers.length > 0) {
           const bestBlocker = validBlockers.sort((a, b) => {
             // Prefer blockers that kill our creature
@@ -1594,7 +1604,7 @@ const GameAI = {
         for (const bi of biArr) {
           const blocker = blockerCandidates[bi];
           if (blocker) {
-            CombatSystem.declareBlocker(state.combat, blocker, atk.uid);
+            CombatSystem.declareBlocker(state.combat, blocker, atk.uid, state);
           }
         }
       }
@@ -1632,7 +1642,7 @@ const GameAI = {
 
       for (const blocker of blockerCandidates) {
         if (usedBlockers.has(blocker._uid)) continue;
-        if (!CardEngine.canBlock(blocker, attacker)) continue;
+        if (!CardEngine.canBlock(blocker, attacker, state)) continue;
         const bPower = CardEngine.getPower(blocker);
         const bToughness = CardEngine.getToughness(blocker);
         const atkPower = CardEngine.getPower(attacker);
@@ -1645,7 +1655,7 @@ const GameAI = {
         }
       }
       if (bestBlocker) {
-        CombatSystem.declareBlocker(state.combat, bestBlocker, atk.uid);
+        CombatSystem.declareBlocker(state.combat, bestBlocker, atk.uid, state);
         usedBlockers.add(bestBlocker._uid);
         assignedAttackers.add(atk.uid);
       }
@@ -1660,7 +1670,7 @@ const GameAI = {
 
       for (const blocker of blockerCandidates) {
         if (usedBlockers.has(blocker._uid)) continue;
-        if (!CardEngine.canBlock(blocker, attacker)) continue;
+        if (!CardEngine.canBlock(blocker, attacker, state)) continue;
         const bPower = CardEngine.getPower(blocker);
         const atkToughness = CardEngine.getToughness(attacker);
         const killsAttacker = bPower >= atkToughness || CardEngine.hasKeyword(blocker, 'Deathtouch');
@@ -1670,7 +1680,7 @@ const GameAI = {
         }
       }
       if (bestBlocker) {
-        CombatSystem.declareBlocker(state.combat, bestBlocker, atk.uid);
+        CombatSystem.declareBlocker(state.combat, bestBlocker, atk.uid, state);
         usedBlockers.add(bestBlocker._uid);
         assignedAttackers.add(atk.uid);
       }
@@ -1693,9 +1703,9 @@ const GameAI = {
         for (const atk of unblockedSorted) {
           if (unblockedDamage < myLife) break;
           if (cheapest.length === 0) break;
-          const blocker = cheapest.find(b => CardEngine.canBlock(b, atk.card));
+          const blocker = cheapest.find(b => CardEngine.canBlock(b, atk.card, state));
           if (blocker) {
-            CombatSystem.declareBlocker(state.combat, blocker, atk.uid);
+            CombatSystem.declareBlocker(state.combat, blocker, atk.uid, state);
             usedBlockers.add(blocker._uid);
             assignedAttackers.add(atk.uid);
             cheapest.splice(cheapest.indexOf(blocker), 1);
@@ -2146,6 +2156,16 @@ const GameAI = {
 
       GameState.autoTapForSpell(state, playerId, card.mana_cost, card.cmc, card);
       const targets = this._chooseTargets(state, playerId, card);
+
+      // Fire creature_targeted_by_opponent trigger for each target
+      if (targets && targets.length > 0) {
+        for (const target of targets) {
+          if (target.player === 0) { // Targeting opponent's creatures
+            GameState.fireTrigger(state, 'creature_targeted_by_opponent', { playerId: 0 });
+          }
+        }
+      }
+
       const result = GameState.castSpell(state, playerId, card._uid, targets);
       if (result.success) {
         if (!state._aiActions) state._aiActions = [];

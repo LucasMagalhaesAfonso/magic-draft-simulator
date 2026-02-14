@@ -66,7 +66,21 @@ const ManaSystem = {
       }
     });
 
-    const total = generic + Object.values(colored).reduce((a, b) => a + b, 0) + hybrids.length + variableX;
+    // Calculate total cost considering hybrid minimum
+    let hybridCost = 0;
+    for (const parts of hybrids) {
+      // For hybrid like ["2", "U"] or ["G", "U"], find the minimum cost
+      let minCost = Infinity;
+      for (const part of parts) {
+        if (/^\d+$/.test(part)) {
+          minCost = Math.min(minCost, parseInt(part));
+        } else {
+          minCost = Math.min(minCost, 1); // Colored mana = 1 generic equivalent
+        }
+      }
+      if (minCost !== Infinity) hybridCost += minCost;
+    }
+    const total = generic + Object.values(colored).reduce((a, b) => a + b, 0) + hybridCost + variableX;
     return { generic, colored, hybrids, variableX, total };
   },
 
@@ -80,10 +94,13 @@ const ManaSystem = {
     }
 
     // Extra safety: if parsed total doesn't match cmc, use the HIGHER value
-    if (cmc && cmc > 0 && cost.total < cmc) {
-      // Mana cost parsed lower than cmc (missing symbols?) - use cmc as minimum
-      const totalMana = Object.values(pool).reduce((a, b) => a + b, 0);
-      if (totalMana < cmc) return false;
+    // BUT: Don't apply this if there are hybrids, since hybrid costs can be lower than cmc
+    if (!cost.hybrids || cost.hybrids.length === 0) {
+      if (cmc && cmc > 0 && cost.total < cmc) {
+        // Mana cost parsed lower than cmc (missing symbols?) - use cmc as minimum
+        const totalMana = Object.values(pool).reduce((a, b) => a + b, 0);
+        if (totalMana < cmc) return false;
+      }
     }
 
     // If no hybrids, use old logic
@@ -217,11 +234,20 @@ const ManaSystem = {
       cost.generic = cmc;
       cost.total = cmc;
     }
-    // Safety: if parsed total < cmc, increase generic to match
-    if (cmc && cmc > 0 && cost.total < cmc) {
+    // Adjust generic mana to match effective cmc
+    // If cmc is different from parsed total (e.g., harmonize discount), adjust generic
+    // BUT: Don't do this for hybrid mana, as hybrid costs can be less than cmc
+    if (cmc !== undefined && (!cost.hybrids || cost.hybrids.length === 0)) {
       const diff = cmc - cost.total;
-      cost.generic += diff;
-      cost.total = cmc;
+      if (diff !== 0) {
+        cost.generic = Math.max(0, cost.generic + diff);
+        cost.total = cmc;
+      }
+    }
+
+    // Handle hybrid mana: try all combinations and pick one that works
+    if (cost.hybrids && cost.hybrids.length > 0) {
+      return this._payWithHybrids(pool, cost);
     }
 
     const newPool = { ...pool };
@@ -242,6 +268,67 @@ const ManaSystem = {
         newPool[color]--;
         genericLeft--;
       }
+    }
+
+    return newPool;
+  },
+
+  _payWithHybrids(pool, cost) {
+    // Generate all possible hybrid payment combinations
+    const hybridCombinations = this._generateHybridCombinations(cost.hybrids);
+
+    // Try each combination and return the first that works
+    for (const combination of hybridCombinations) {
+      const testPool = this._payCombination(pool, cost, combination);
+      if (testPool !== null) {
+        return testPool;
+      }
+    }
+
+    // Fallback: return original pool (payment failed, but this shouldn't happen if canPay was called first)
+    return pool;
+  },
+
+  _payCombination(pool, cost, hybridChoices) {
+    const newPool = { ...pool };
+    const tempColored = { ...cost.colored };
+    let tempGeneric = cost.generic;
+
+    // Process hybrid choices
+    for (const choice of hybridChoices) {
+      if (/^\d+$/.test(choice)) {
+        // Numeric choice (e.g., "2" from {2/W})
+        tempGeneric += parseInt(choice);
+      } else if (tempColored[choice] !== undefined) {
+        // Color choice (e.g., "W" from {2/W})
+        tempColored[choice]++;
+      }
+    }
+
+    // Pay colored costs
+    for (const [color, amount] of Object.entries(tempColored)) {
+      if ((newPool[color] || 0) < amount) {
+        return null; // Can't pay this combination
+      }
+      newPool[color] -= amount;
+    }
+
+    // Pay generic - use least useful colors first
+    let genericLeft = tempGeneric;
+    const colorPriority = Object.entries(newPool)
+      .filter(([, v]) => v > 0)
+      .sort((a, b) => a[1] - b[1]); // Use smallest pools first
+
+    for (const [color] of colorPriority) {
+      while (genericLeft > 0 && newPool[color] > 0) {
+        newPool[color]--;
+        genericLeft--;
+      }
+    }
+
+    // Check if we paid enough generic
+    if (genericLeft > 0) {
+      return null; // Can't pay this combination
     }
 
     return newPool;

@@ -684,6 +684,26 @@
   white-space: nowrap;
 }
 
+/* Disabled harmonize cards (can't cast) */
+.harmonize-disabled {
+  opacity: 0.45;
+  border-color: rgba(46, 204, 113, 0.25);
+  cursor: not-allowed;
+  filter: grayscale(70%);
+}
+
+.harmonize-disabled:hover {
+  transform: none;
+  box-shadow: 0 0 4px rgba(46, 204, 113, 0.15);
+  border-color: rgba(46, 204, 113, 0.25);
+}
+
+/* Empty state when no harmonize cards */
+.harmonize-empty {
+  opacity: 0.6;
+  border-color: rgba(46, 204, 113, 0.2);
+}
+
 .my-info-bar {
   display: flex;
   align-items: center;
@@ -709,6 +729,8 @@
   justify-content: center;
   gap: 8px;
   padding: 8px 12px;
+  position: relative;
+  z-index: 5; /* Below hand area */
   flex: 1 1 0;
   min-height: 90px;
   max-height: 45vh;
@@ -879,7 +901,7 @@
 }
 
 .bf-card:hover {
-  z-index: 10;
+  z-index: 15;
   transform: scale(1.3) translateY(-6px);
   box-shadow: 0 10px 30px rgba(0,0,0,0.6);
 }
@@ -1141,6 +1163,8 @@
   justify-content: center;
   align-items: flex-end;
   padding: 6px 12px 8px;
+  position: relative;
+  z-index: 25; /* Ensure hand area is above battlefield */
   min-height: 130px;
   max-height: 170px;
   overflow-x: auto;
@@ -2349,6 +2373,7 @@
 .mana-pip.in-pool {
   animation: manaAdded 0.4s ease;
   box-shadow: 0 0 10px currentColor;
+  z-index: 10; /* Ensure animated mana appears on top */
 }
 
 @keyframes manaAdded {
@@ -4869,3 +4894,244 @@ body.theme-nyx .game-layout *::-webkit-scrollbar-thumb { background: rgba(0,210,
 body.theme-phyrexian .game-layout *::-webkit-scrollbar-thumb { background: rgba(57,255,20,0.25); }
 body.theme-kamigawa .game-layout *::-webkit-scrollbar-thumb { background: rgba(255,45,149,0.3); }
 body.theme-obscura .game-layout *::-webkit-scrollbar-thumb { background: rgba(168,168,168,0.2); }
+
+/* =================== Legendary Choice Modal =================== */
+.legendary-choice-modal {
+  min-width: 420px;
+  max-width: 580px;
+}
+
+.legendary-choice-modal .modal-header h3 {
+  color: #f39c12;
+  font-size: 1.3rem;
+  margin: 0 0 12px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legendary-choice-modal .modal-header p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.legendary-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 20px 0;
+  padding: 16px;
+  background: rgba(243, 156, 18, 0.1);
+  border: 1px solid rgba(243, 156, 18, 0.2);
+  border-radius: 12px;
+}
+
+.legendary-warning .existing-card,
+.legendary-warning .new-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.legendary-warning img {
+  width: 100px;
+  height: 140px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  object-fit: cover;
+}
+
+.legendary-warning p {
+  color: #fff;
+  font-size: 0.8rem;
+  text-align: center;
+  margin: 0;
+}
+
+.legendary-warning .arrow {
+  color: #f39c12;
+  font-size: 1.5rem;
+  font-weight: bold;
+  margin: 0 16px;
+}
+
+.legendary-choices {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+
+.legendary-choices .btn {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 140px;
+  text-align: center;
+}
+
+.legendary-choices .btn-primary {
+  background: linear-gradient(135deg, #27ae60, #229954);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(39, 174, 96, 0.3);
+}
+
+.legendary-choices .btn-primary:hover {
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(39, 174, 96, 0.4);
+}
+
+.legendary-choices .btn-warning {
+  background: linear-gradient(135deg, #f39c12, #e67e22);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(243, 156, 18, 0.3);
+}
+
+.legendary-choices .btn-warning:hover {
+  background: linear-gradient(135deg, #f1c40f, #f39c12);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(243, 156, 18, 0.4);
+}
+
+.legendary-choices .btn-cancel {
+  background: linear-gradient(135deg, #7f8c8d, #6c7b7d);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(127, 140, 141, 0.3);
+}
+
+.legendary-choices .btn-cancel:hover {
+  background: linear-gradient(135deg, #95a5a6, #7d8c8d);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(127, 140, 141, 0.4);
+}
+
+/* Use existing modal-overlay style */
+.modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  animation: fadeIn 0.15s ease;
+  backdrop-filter: blur(4px);
+}
+
+.modal-dialog {
+  background: linear-gradient(135deg, #1a2744, #16213e);
+  border: 2px solid var(--gold);
+  border-radius: 16px;
+  padding: 24px 32px;
+  animation: scaleIn 0.15s ease;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 0 30px rgba(241, 196, 15, 0.1);
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* =================== ART PICKER MODAL =================== */
+.art-picker-modal {
+  max-width: 800px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.art-picker-body {
+  padding: 20px 0;
+}
+
+.art-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 0 10px;
+}
+
+.art-option {
+  cursor: pointer;
+  border: 2px solid rgba(241, 196, 15, 0.3);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.art-option:hover {
+  border-color: var(--gold);
+  box-shadow: 0 0 15px rgba(241, 196, 15, 0.4);
+  transform: scale(1.05);
+}
+
+.art-option img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.art-info {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.8);
+  padding: 4px;
+  font-size: 11px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.art-option:hover .art-info {
+  opacity: 1;
+}
+
+/* Art button on cards */
+.card-art-button {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  background: rgba(241, 196, 15, 0.2);
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.2s;
+  opacity: 0;
+  z-index: 10;
+}
+
+.card-image-container:hover .card-art-button,
+.card-image-container:focus-within .card-art-button {
+  opacity: 1;
+}
+
+.card-art-button:hover {
+  background: rgba(241, 196, 15, 0.4);
+  box-shadow: 0 0 10px rgba(241, 196, 15, 0.5);
+}
+
+.card-image-container {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+}

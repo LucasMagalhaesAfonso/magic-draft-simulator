@@ -53,7 +53,8 @@ const CardEffectsDB = {
   },
 
   "dispelling exhale": {
-    cast: [{ type: "counter", target: "spell", unless_pay: 2 }]
+    additional_costs: [{ type: "behold", subtype: "Dragon", optional: true }],
+    cast: [{ type: "counter", target: "spell", unless_pay: 2, unless_pay_with_behold: 4 }]
   },
 
   // =================== TARKIR DRAGONSTORM - SORCERIES ===================
@@ -130,8 +131,27 @@ const CardEffectsDB = {
     ]
   },
 
+  "embermouth sentinel": {
+    etb: [{
+      type: "search_library",
+      target: "basic_land",
+      optional: true,
+      condition: "control_dragon",
+      if_true: {
+        to_top: false,
+        to_hand: false,
+        tapped: true
+      },
+      if_false: {
+        to_top: true,
+        to_hand: false,
+        tapped: false
+      }
+    }]
+  },
+
   "arashin sunshield": {
-    etb: [{ type: "exile_from_graveyard", target: "any_graveyard", amount: 2 }],
+    etb: [{ type: "exile_from_graveyard", target: "any_graveyard", amount: 2, choose_cards: true, up_to_max: true }],
     activated: [{ cost: { mana: "W", tap: true }, effects: [{ type: "tap", target: "any_creature" }] }]
   },
 
@@ -150,8 +170,8 @@ const CardEffectsDB = {
   "disruptive stormbrood": {
     cast: [{ type: "destroy", target: "creature_power_3_or_less" }],
     omen: true,
-    etb: [{ type: "destroy", target: "artifact_or_enchantment" }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    etb: [{ type: "destroy", target: "opponent_artifact_or_enchantment", optional: true }],
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 
   "dragonologist": {
@@ -164,7 +184,8 @@ const CardEffectsDB = {
   },
 
   "equilibrium adept": {
-    etb: [{ type: "exile_top_play", amount: 1, duration: "next_end_step" }]
+    etb: [{ type: "exile_top_play", amount: 1, duration: "next_end_step" }],
+    triggered: [{ event: "second_spell", self: true, effects: [{ type: "grant", keyword: "double_strike", target: "self", duration: "end_of_turn" }] }]
   },
 
   // =================== TARKIR DRAGONSTORM - CREATURES WITH TRIGGERS ===================
@@ -230,7 +251,8 @@ const CardEffectsDB = {
   },
 
   "host of the hereafter": {
-    triggered: [{ event: "creature_dies_with_counters", effects: [{ type: "move_counters", target: "creature" }] }]
+    etb: [{ type: "counter_self", counter: "+1/+1", amount: 2 }],
+    triggered: [{ event: "any_creature_dies", effects: [{ type: "move_counters", target: "creature" }], condition: "creature_died_with_counters" }]
   },
 
   "inspirited vanguard": {
@@ -491,8 +513,8 @@ const CardEffectsDB = {
   "marang river regent": {
     cast: [{ type: "loot", draw: 3, discard: 1 }],
     omen: true,
-    static: [{ type: "has_keyword", keyword: "flying" }],
-    etb: [{ type: "bounce", target: "nonland_permanent", amount: 2 }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }],
+    etb: [{ type: "bounce", target: "nonland_permanent", up_to: 2 }]
   },
 
   "mardu siegebreaker": {
@@ -520,7 +542,7 @@ const CardEffectsDB = {
   },
 
   "sarkhan, dragon ascendant": {
-    etb: [{ type: "behold_dragon" }, { type: "create_token", name: "Treasure" }],
+    etb: [{ type: "behold_dragon", optional: true }, { type: "create_token", name: "Treasure", condition: "if_beheld_dragon" }],
     triggered: [{ event: "dragon_enters", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "become_dragon", keyword: "flying" }] }]
   },
 
@@ -537,7 +559,7 @@ const CardEffectsDB = {
 
   "dragonback assault": {
     etb: [{ type: "damage_all", amount: 3, target: "creatures_and_planeswalkers" }],
-    triggered: [{ event: "landfall", effects: [{ type: "create_token", power: 4, toughness: 4, name: "Dragon", keywords: ["flying"] }] }]
+    triggered: [{ event: "landfall", effects: [{ type: "create_token", power: 4, toughness: 4, name: "Dragon", type_line: "Creature — Dragon", keywords: ["flying"] }] }]
   },
 
   "elspeth, storm slayer": {
@@ -621,6 +643,7 @@ const CardEffectsDB = {
   },
 
   "kin-tree severance": {
+    mana_cost: "{2/W}{2/B}{2/G}",
     cast: [{ type: "exile", target: "permanent_mv3+" }]
   },
 
@@ -649,13 +672,13 @@ const CardEffectsDB = {
   },
 
   "rakshasa's bargain": {
-    cast: [{ type: "look_top", amount: 4, pick: 2 }]
+    cast: [{ type: "look_top", amount: 4, pick: 2, rest_to: "graveyard" }]
   },
 
   "dragonclaw strike": {
     cast: [
-      { type: "buff", power: "double", toughness: "double", target: "own_creature", duration: "end_of_turn" },
-      { type: "fight", target: "creature", optional: true }
+      { type: "buff", power: "double", toughness: "double", target: "own_creature", duration: "end_of_turn", target_index: 0 },
+      { type: "fight", target: "opponent_creature", optional: true, target_index: 1 }
     ]
   },
 
@@ -736,6 +759,7 @@ const CardEffectsDB = {
   },
 
   "osseous exhale": {
+    additional_costs: [{ type: "behold", subtype: "Dragon", optional: true }],
     cast: [
       { type: "damage", amount: 5, target: "attacking_or_blocking_creature" },
       { type: "gain_life", amount: 2, condition: "if_beheld_dragon" }
@@ -743,8 +767,9 @@ const CardEffectsDB = {
   },
 
   "piercing exhale": {
+    additional_costs: [{ type: "behold", subtype: "Dragon", optional: true }],
     cast: [
-      { type: "fight", target: "creature_or_planeswalker", one_sided: true },
+      { type: "fight", target: "own_creature", vs: "creature_or_planeswalker" },
       { type: "surveil", amount: 2, condition: "if_beheld_dragon" }
     ]
   },
@@ -852,7 +877,7 @@ const CardEffectsDB = {
   // --- Blue creatures ---
 
   "dragonstorm forecaster": {
-    activated: [{ cost: { mana: "2", tap: true }, effects: [{ type: "search_library", target: "named_card", names: ["Dragonstorm Globe", "Boulderborn Dragon"] }] }]
+    activated: [{ cost: { mana: "2", tap: true }, effects: [{ type: "search_library", target: "named_card", names: ["Dragonstorm Globe", "Boulderborn Dragon"], allow_choice: true }] }]
   },
 
   "highspire bell-ringer": {
@@ -899,7 +924,11 @@ const CardEffectsDB = {
   },
 
   "fresh start": {
-    static: [{ type: "has_keyword", keyword: "flash" }, { type: "aura_debuff", power: -5, toughness: 0, target: "enchanted" }]
+    static: [
+      { type: "has_keyword", keywords: ["flash"] },
+      { type: "aura_debuff", power: -5, toughness: 0, target: "enchanted" },
+      { type: "loses_abilities" }
+    ]
   },
 
   "ringing strike mastery": {
@@ -933,8 +962,8 @@ const CardEffectsDB = {
   // --- Planeswalker (simplified) ---
 
   "ugin, eye of the storms": {
-    etb: [{ type: "exile", target: "colored_permanent" }],
-    triggered: [{ event: "cast_colorless", effects: [{ type: "exile", target: "colored_permanent" }] }],
+    etb: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }],
+    triggered: [{ event: "cast_colorless", effects: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }] }],
     activated: [
       { cost: { loyalty: 2 }, effects: [{ type: "gain_life", amount: 3 }, { type: "draw", amount: 1 }] },
       { cost: { loyalty: 0 }, effects: [{ type: "add_mana", color: "C", amount: 3 }] }
@@ -1013,7 +1042,7 @@ const CardEffectsDB = {
     activated: [{ cost: { mana: "2W", tap: true }, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }]
   },
   "great arashin city": {
-    static: [{ type: "enters_tapped_conditional" }],
+    static: [{ type: "enters_tapped_conditional", unless: ["Forest", "Plains"] }],
     activated: [{ cost: { mana: "1B", tap: true, exile_gy_creature: true }, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Spirit" }] }]
   },
   "kishla village": {
@@ -1032,8 +1061,8 @@ const CardEffectsDB = {
 
   "dragonbroods' relic": {
     activated: [
-      { cost: { tap: true, tap_creature: true }, effects: [{ type: "add_mana", color: "any" }] },
-      { cost: { mana: "3WUBRG", sacrifice: true }, effects: [{ type: "create_token", power: 4, toughness: 4, name: "Reliquary Dragon", keywords: ["flying", "lifelink"], etb_damage: 3 }] }
+      { cost: { tap: true, tap_creature: true }, effects: [{ type: "add_mana", color: "any" }], sorcerySpeed: false },
+      { cost: { mana: "3WUBRG", sacrifice: true }, effects: [{ type: "create_token", power: 4, toughness: 4, name: "Reliquary Dragon", type_line: "Dragon", keywords: ["flying", "lifelink"], colors: ["W", "U", "B", "R", "G"], etb_damage: 3 }], sorcerySpeed: true }
     ]
   },
   "dragonfire blade": {
@@ -1059,7 +1088,7 @@ const CardEffectsDB = {
     activated: [{ cost: { mana: "2RWB", tap: true, sacrifice: true }, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 3, keywords: ["menace", "haste"] }] }]
   },
   "sultai monument": {
-    etb: [{ type: "ramp", target: "basic_land", to_hand: true }],
+    etb: [{ type: "ramp", target: "basic_land", to_hand: true, colors: ["U", "B", "G"] }],
     activated: [{ cost: { mana: "2BGU", tap: true, sacrifice: true }, effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid", count: 2 }] }]
   },
   "temur monument": {
@@ -1080,7 +1109,7 @@ const CardEffectsDB = {
   // =================== TDM - DRAGONSTORM ENCHANTMENTS ===================
 
   "breaching dragonstorm": {
-    etb: [{ type: "exile_top_play", condition: "nonland", free_cast: true, max_mv: 8 }],
+    etb: [{ type: "exile_top_play", condition: "nonland", free_cast: true, max_mv: 8, duration: "end_of_turn" }],
     triggered: [{ event: "dragon_enters", effects: [{ type: "bounce_self" }] }]
   },
   "corroding dragonstorm": {
@@ -1118,20 +1147,28 @@ const CardEffectsDB = {
   // =================== TDM - SIEGE ENCHANTMENTS ===================
 
   "frostcliff siege": {
+    triggered: [
+      { event: "combat_damage_player", effects: [{ type: "draw", amount: 1 }], condition: "frostcliff_jeskai_mode" }
+    ],
+    static: [{ type: "anthem", power: 1, toughness: 0, keywords: ["trample", "haste"], target: "own_creatures", condition: "frostcliff_temur_mode" }],
     modal: {
       chooseOnETB: true,
       modes: [
-        { label: "Jeskai", effects: [{ type: "triggered", event: "combat_damage_player", effects: [{ type: "draw", amount: 1 }] }] },
-        { label: "Temur", effects: [{ type: "anthem", power: 1, toughness: 0, keywords: ["trample", "haste"] }] }
+        { label: "Jeskai", effects: [] },
+        { label: "Temur", effects: [] }
       ]
     }
   },
   "glacierwood siege": {
+    triggered: [
+      { event: "cast_noncreature", effects: [{ type: "mill", amount: 4, target: "any_player" }], condition: "glacierwood_temur_mode" }
+    ],
+    static: [{ type: "has_keyword", keywords: [] }],
     modal: {
       chooseOnETB: true,
       modes: [
-        { label: "Temur", effects: [{ type: "triggered", event: "cast_noncreature", effects: [{ type: "mill", amount: 4, target: "opponent" }] }] },
-        { label: "Sultai", effects: [{ type: "static", ability: "play_lands_from_graveyard" }] }
+        { label: "Temur", effects: [] },
+        { label: "Sultai", effects: [{ type: "static_ability", ability: "play_lands_from_graveyard" }] }
       ]
     }
   },
@@ -1184,8 +1221,8 @@ const CardEffectsDB = {
     saga: true,
     chapters: {
       1: [{ type: "draw", amount: 2 }, { type: "loseLife", amount: 2 }],
-      2: [{ type: "triggered_this_turn", event: "creature_enters", effects: [{ type: "drain", amount: 1 }] }],
-      3: [{ type: "triggered_this_turn", event: "creature_enters", effects: [{ type: "drain", amount: 1 }] }]
+      2: [{ type: "register_temp_trigger", event: "creature_etb", condition: "own_creature_entering", effects: [{ type: "drain", amount: 1 }], duration: "this_turn" }],
+      3: [{ type: "register_temp_trigger", event: "creature_etb", condition: "own_creature_entering", effects: [{ type: "drain", amount: 1 }], duration: "this_turn" }]
     }
   },
 
@@ -1238,7 +1275,7 @@ const CardEffectsDB = {
     harmonize: "{4}{U}"
   },
   "strategic betrayal": {
-    cast: [{ type: "exile", target: "opponent_creature" }, { type: "exile_graveyard", target: "opponent" }]
+    cast: [{ type: "strategic_betrayal", target: "opponent" }]
   },
   "worthy cost": {
     additional_costs: [{ type: "sacrifice", target: "creature" }],
@@ -1279,15 +1316,16 @@ const CardEffectsDB = {
   },
   "skirmish rhino": {
     etb: [{ type: "drain", amount: 2 }],
-    static: [{ type: "has_keyword", keyword: "trample" }]
+    static: [{ type: "has_keyword", keywords: ["trample"] }]
   },
   "sonic shrieker": {
     etb: [{ type: "damage", amount: 2, target: "any" }, { type: "gainLife", amount: 2 }, { type: "discard", amount: 1, target: "damaged_player" }],
     static: [{ type: "has_keyword", keyword: "flying" }]
   },
   "severance priest": {
-    etb: [{ type: "exile", target: "opponent_hand_nonland" }],
-    static: [{ type: "has_keyword", keyword: "deathtouch" }]
+    etb: [{ type: "exile", target: "opponent_hand_nonland", show_hand: true }],
+    triggered: [{ event: "leaves_battlefield", effects: [{ type: "severance_priest_token" }] }],
+    static: [{ type: "has_keyword", keywords: ["deathtouch"] }]
   },
   "trade route envoy": {
     etb: [{ type: "trade_route_envoy_ability" }]
@@ -1304,7 +1342,7 @@ const CardEffectsDB = {
     triggered: [{ event: "dies", self: true, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }] }]
   },
   "temur tawnyback": {
-    etb: [{ type: "draw", amount: 1 }, { type: "discard", amount: 1 }]
+    etb: [{ type: "loot", draw: 1, discard: 1 }]
   },
   "unsparing boltcaster": {
     etb: [{ type: "damage", amount: 5, target: "opponent_creature", condition: "dealt_damage_this_turn" }]
@@ -1334,7 +1372,18 @@ const CardEffectsDB = {
     triggered: [{ event: "becomes_tapped", self: true, effects: [{ type: "optional_discard_draw" }] }]
   },
   "traveling botanist": {
-    triggered: [{ event: "becomes_tapped", self: true, effects: [{ type: "traveling_botanist_ability" }] }]
+    triggered: [{
+      event: "becomes_tapped",
+      self: true,
+      effects: [
+        {
+          type: "look_top",
+          amount: 1,
+          condition: "land_to_hand",
+          optional: true
+        }
+      ]
+    }]
   },
   "sinkhole surveyor": {
     triggered: [{ event: "attacks", self: true, effects: [{ type: "loseLife", amount: 1 }, { type: "endure", amount: 1 }] }],
@@ -1433,7 +1482,7 @@ const CardEffectsDB = {
     graveyard: [{ cost: { cast_from_gy: true }, effects: [{ type: "counter_self", counter: "finality", amount: 1 }] }]
   },
   "karakyk guardian": {
-    static: [{ type: "has_keyword", keyword: "flying" }, { type: "conditional_hexproof", condition: "no_damage_dealt" }]
+    static: [{ type: "has_keyword", keywords: ["flying", "vigilance", "trample", "hexproof"] }]
   },
   "temur battlecrier": {
     static: [{ type: "cost_reduction", amount: 1, target: "spells", condition: "per_power4_creature" }]
@@ -1446,7 +1495,7 @@ const CardEffectsDB = {
   // =================== TDM - CREATURES WITH RENEW ===================
 
   "champion of dusan": {
-    graveyard: [{ cost: { mana: "1G", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "counter", counter: "trample", amount: 1, target: "same" }] }],
+    graveyard: [{ cost: { mana: "1G", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "grant", keyword: "Trample", target: "same", duration: "permanent" }] }],
     static: [{ type: "has_keyword", keyword: "trample" }]
   },
   "sagu pummeler": {
@@ -1476,16 +1525,14 @@ const CardEffectsDB = {
   // =================== TDM - DFC STORMBROODS & DRAGONS ===================
 
   "purging stormbrood": {
-    cast: [{ type: "buff", power: 2, toughness: 2, target: "own_creature", duration: "end_of_turn" }, { type: "grant", keyword: "lifelink", target: "own_creature", duration: "end_of_turn" }, { type: "grant", keyword: "hexproof", target: "own_creature", duration: "end_of_turn" }],
-    omen: true,
-    etb: [{ type: "remove_counters", target: "creature" }],
+    etb: [{ type: "remove_counters_all", target: "creature", optional: true, up_to: 1 }],
     static: [{ type: "has_keyword", keywords: ["flying", "ward"] }]
   },
   "runescale stormbrood": {
-    cast: [{ type: "counter_spell" }],
+    cast: [{ type: "counter_spell", target: "opponent_spell", max_mana_value: 2 }],
     omen: true,
     triggered: [{ event: "cast_noncreature_or_dragon", effects: [{ type: "buff", power: 2, toughness: 0, target: "self", duration: "end_of_turn" }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "sagu wildling": {
     cast: [{ type: "ramp", target: "basic_land", to_hand: true }],
@@ -1522,7 +1569,7 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keywords: ["flying", "flash"] }, { type: "grant_flash", target: "sorcery_and_dragon_spells" }]
   },
   "dirgur island dragon": {
-    cast: [{ type: "tap", target: "creature" }, { type: "draw", amount: 1 }],
+    cast: [{ type: "tap", target: "creature", optional: true, up_to: 1 }, { type: "draw", amount: 1 }],
     omen: true,
     static: [{ type: "has_keyword", keywords: ["flying", "ward"] }]
   },

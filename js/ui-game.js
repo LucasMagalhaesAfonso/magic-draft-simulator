@@ -23,6 +23,8 @@ const UIGame = {
   _manaUndoStack: [], // Stack of mana actions that can be undone
   _aiActionQueue: [], // Queue of AI actions to display to player
   _showingAIAction: null, // Currently displayed AI action overlay
+  _artPickerCard: null, // Currently selected card for art picking
+  _artPickerArts: [], // Available arts for current card
 
   startGame(playerDeck, opponentDeck) {
     console.log('🎮 UIGame.startGame() called');
@@ -268,6 +270,8 @@ const UIGame = {
           this.confirmScry();
         } else if (wi.type === 'look_top_choice') {
           this.confirmLookTop();
+        } else if (wi.type === 'look_top_permanent_choice') {
+          this.confirmLookTopPermanent();
         } else if (wi.type === 'mulligan') {
           this.keepHand();
         } else if (wi.type === 'modal_choice' && gs._pendingModal && (gs._pendingModal.chooseCount || 1) > 1) {
@@ -305,6 +309,8 @@ const UIGame = {
           this.skipRummage();
         } else if (wi.type === 'optional_discard_choice') {
           this.skipOptionalDiscard();
+        } else if (wi.type === 'behold_choice_multiple' && gs._pendingBeholdChoice && gs._pendingBeholdChoice.isOptional === true) {
+          this.resolveBeholdChoiceDecline();
         }
         break;
       case 'KeyL':
@@ -347,6 +353,36 @@ const UIGame = {
           const idx = parseInt(e.code.replace('Digit', '')) - 1;
           if (idx >= 0 && idx < gs._pendingManaChoice.colors.length) {
             this.resolveManaChoice(gs._pendingManaChoice.colors[idx]);
+          }
+        }
+        if (wi.type === 'unless_pay_decision' && gs._pendingUnlessPay) {
+          e.preventDefault();
+          const digit = parseInt(e.code.replace('Digit', ''));
+          if (digit === 1) {
+            // Pay to prevent counter
+            this.resolveUnlessPay(true);
+          } else if (digit === 2) {
+            // Don't pay - let spell be countered
+            this.resolveUnlessPay(false);
+          }
+        }
+        if (wi.type === 'behold_choice_multiple' && gs._pendingBeholdChoice) {
+          e.preventDefault();
+          const idx = parseInt(e.code.replace('Digit', '')) - 1;
+          const candidates = gs._pendingBeholdChoice.candidates;
+          if (idx >= 0 && idx < candidates.length) {
+            this.resolveBeholdChoiceMultiple(candidates[idx]);
+          }
+        }
+        if (wi.type === 'behold_choice_optional' && gs._pendingBeholdChoice) {
+          e.preventDefault();
+          const digit = parseInt(e.code.replace('Digit', ''));
+          if (digit === 1) {
+            // Reveal dragon - show card selector
+            this._setupBeholdCardChoice();
+          } else if (digit === 2) {
+            // Pay mana instead
+            this.resolveBeholdChoiceOptional('pay');
           }
         }
         break;
@@ -423,9 +459,9 @@ const UIGame = {
     const playable = showPlayable ? GameState.getPlayableCards(gs, 0) : [];
     const playableIds = new Set(playable.map(c => c._uid));
 
-    // Harmonize: get castable cards from graveyard
-    const harmonizeCards = (showPlayable && isMyTurn && (gs.phase === 'main1' || gs.phase === 'main2'))
-      ? GameState.getHarmonizableCards(gs, 0) : [];
+    // Harmonize: always show cards from graveyard with harmonize cost
+    // Cards will be marked _harmonizeCanCast indicating if they can be played
+    const harmonizeCards = GameState.getHarmonizableCards(gs, 0);
 
     let controlsHtml = '';
     try {
@@ -572,18 +608,19 @@ const UIGame = {
             </span>
           </div>
 
-          <!-- Harmonize indicator -->
-          ${harmonizeCards.length > 0 ? `
-            <div class="harmonize-bar">
-              <span class="harmonize-label">HARMONIZE</span>
-              ${harmonizeCards.map(c => `
-                <div class="harmonize-card" ${CardZoom.attr(c)} title="Harmonizar ${c.name} (${CardEngine.getHarmonizeCost(c)})" onclick="UIGame.castHarmonize('${c._uid}')">
-                  <img src="${c.image_small || c.image_normal}" alt="${c.name}" loading="lazy">
-                  <span class="harmonize-cost">${CardEngine.getHarmonizeCost(c).replace(/\{/g, '').replace(/\}/g, '')}</span>
-                </div>
-              `).join('')}
-            </div>
-          ` : ''}
+          <!-- Harmonize indicator - always shown, but disabled when can't cast -->
+          <div class="harmonize-bar ${harmonizeCards.length === 0 ? 'harmonize-empty' : ''}">
+            <span class="harmonize-label">HARMONIZE</span>
+            ${harmonizeCards.map(c => `
+              <div class="harmonize-card ${!c._harmonizeCanCast ? 'harmonize-disabled' : ''}"
+                   ${CardZoom.attr(c)}
+                   title="Harmonizar ${c.name} (${CardEngine.getHarmonizeCost(c)})${!c._harmonizeCanCast ? ' [desabilitado]' : ''}"
+                   ${c._harmonizeCanCast ? `onclick="UIGame.castHarmonize('${c._uid}')"` : ''}>
+                <img src="${c.image_small || c.image_normal}" alt="${c.name}" loading="lazy">
+                <span class="harmonize-cost">${CardEngine.getHarmonizeCost(c).replace(/\{/g, '').replace(/\}/g, '')}</span>
+              </div>
+            `).join('')}
+          </div>
 
           <!-- Hand + Library -->
           <div class="game-bottom-row">
@@ -636,7 +673,11 @@ const UIGame = {
         ${gs._pendingScry ? this._renderScryOverlay(gs._pendingScry) : ''}
 
         <!-- Look Top Choice overlay -->
-        ${gs._pendingLookTop ? this._renderLookTopOverlay(gs._pendingLookTop) : ''}
+        ${gs._pendingLookTop ? (
+          gs._pendingLookTop.type === 'look_top_land_choice' ? this._renderLookTopLandOverlay(gs._pendingLookTop) :
+          gs._pendingLookTop.type === 'look_top_permanent_choice' ? this._renderLookTopPermanentOverlay(gs._pendingLookTop) :
+          this._renderLookTopOverlay(gs._pendingLookTop)
+        ) : ''}
 
         <!-- Hand Exile overlay (Aggressive Negotiations) -->
         ${gs._pendingHandExile ? this._renderHandExileOverlay(gs._pendingHandExile) : ''}
@@ -656,8 +697,19 @@ const UIGame = {
         <!-- Mana color choice overlay -->
         ${gs._pendingManaChoice ? this._renderManaChoiceOverlay(gs._pendingManaChoice) : ''}
 
+        <!-- Unless pay decision overlay (counter with payment option) -->
+        ${gs._pendingUnlessPay ? this._renderUnlessPayOverlay(gs._pendingUnlessPay) : ''}
+
+        <!-- Behold choice overlays -->
+        ${gs._pendingBeholdChoice && gs.waitingForInput && gs.waitingForInput.type === 'behold_choice_multiple' ? this._renderBeholdChoiceMultipleOverlay(gs._pendingBeholdChoice) : ''}
+        ${gs._pendingBeholdChoice && gs.waitingForInput && gs.waitingForInput.type === 'behold_choice_optional' ? this._renderBeholdChoiceOptionalOverlay(gs._pendingBeholdChoice) : ''}
+        ${gs._pendingBeholdCardChoice ? this._renderBeholdCardChoiceOverlay() : ''}
+
         <!-- Endure choice overlay -->
         ${gs._pendingEndure ? this._renderEndureOverlay(gs._pendingEndure) : ''}
+
+        <!-- Harmonize creature choice overlay -->
+        ${gs._pendingHarmonize ? this._renderHarmonizeCreatureOverlay(gs._pendingHarmonize) : ''}
 
         <!-- Mill land choice overlay -->
         ${gs._pendingMillLandChoice ? this._renderMillLandChoiceOverlay(gs._pendingMillLandChoice) : ''}
@@ -689,6 +741,8 @@ const UIGame = {
         <!-- Ability Modal (Arena-style) -->
         ${this._renderAbilityModal()}
         ${this._renderAdventureChoiceModal()}
+        ${this._renderLegendaryChoiceModal()}
+        ${this._renderArtPickerModal()}
 
         <!-- AI Action Notification -->
         ${this._showingAIAction ? this._renderAIActionOverlay() : ''}
@@ -801,7 +855,10 @@ const UIGame = {
                      ${mulls > 0 ? `onclick="UIGame.toggleMulliganBottom('${c._uid}')"` : ''}
                      ${CardZoom.attr(c)}
                      title="${c.name} ${c.mana_cost || ''} - ${c.type_line || ''}">
-                  <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                  <div class="card-image-container">
+                    <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                    <button class="card-art-button" onclick="event.stopPropagation(); UIGame.openArtPickerModal('${c._uid}')" title="Escolher arte">🎨</button>
+                  </div>
                   ${isSelected ? '<div class="mulligan-bottom-badge">FUNDO</div>' : ''}
                 </div>
               `;
@@ -946,21 +1003,30 @@ const UIGame = {
       { key: 'C', symbol: 'C', cls: 'mana-c' },
     ];
     const parts = [];
-    const prev = this._prevManaPool || {};
+
+    // Initialize previous pool if not exists
+    if (!this._prevManaPool) {
+      this._prevManaPool = {};
+    }
+
+    const prev = this._prevManaPool;
 
     for (const c of colors) {
       const current = pool[c.key] || 0;
       const previous = prev[c.key] || 0;
 
       for (let i = 0; i < current; i++) {
-        // Add 'in-pool' class for newly added mana (for animation)
-        const isNew = i >= previous;
+        // Only animate newly added mana, and only if we actually have previous state
+        const isNew = (Object.keys(prev).length > 0) && (i >= previous);
         parts.push(`<span class="mana-pip ${c.cls} ${isNew ? 'in-pool' : ''}">${c.symbol}</span>`);
       }
     }
 
-    // Update previous pool tracking
-    this._prevManaPool = { ...pool };
+    // Only update previous pool if it's actually different
+    const poolChanged = JSON.stringify(prev) !== JSON.stringify(pool);
+    if (poolChanged) {
+      this._prevManaPool = { ...pool };
+    }
 
     const total = ManaSystem.poolTotal(pool);
     if (parts.length > 0) {
@@ -1062,12 +1128,32 @@ const UIGame = {
     if (this.targetingMode && playerId !== undefined) {
       // Only allow targeting if card can be targeted
       const canTarget = CardEngine.canBeTargeted(card, 0);
+
+      // Check if the card type matches what the effect requires
+      const effects = this.targetingMode.effects || [];
+      const requiresCreature = effects.some(e =>
+        e.target === 'creature' || e.target === 'own_creature' || e.target === 'opponent_creature'
+      );
+      const requiresArtifactOrEnchantment = effects.some(e =>
+        e.target === 'artifact_or_enchantment' || e.target === 'opponent_artifact_or_enchantment'
+      );
+      const isCreature = CardEngine.isCreature(card);
+      const isArtifact = (card.type_line || '').toLowerCase().includes('artifact');
+      const isEnchantment = (card.type_line || '').toLowerCase().includes('enchantment');
+      const isArtifactOrEnchantment = isArtifact || isEnchantment;
+
+      // Check if target matches what the effect requires
+      let matchesTargetType = true;
+      if (requiresCreature) matchesTargetType = isCreature;
+      else if (requiresArtifactOrEnchantment) matchesTargetType = isArtifactOrEnchantment;
+
       // Restrict to attacking/blocking creatures if the effect requires it
-      const needsAttackingOrBlocking = this.targetingMode.effects &&
-        this.targetingMode.effects.some(e => e.target === 'attacking_or_blocking_creature');
+      const needsAttackingOrBlocking = effects.some(e => e.target === 'attacking_or_blocking_creature');
       const isAttackingOrBlocking = card._attacking || card._blocking;
-      if ((canTarget || this.targetingMode.isAura) && (!needsAttackingOrBlocking || isAttackingOrBlocking)) {
-        clickAction = `onclick="UIGame.selectTarget('creature', ${playerId}, '${card._uid}')"`;
+
+      if ((canTarget || this.targetingMode.isAura) && matchesTargetType && (!needsAttackingOrBlocking || isAttackingOrBlocking)) {
+        const targetType = isCreature ? 'creature' : 'permanent';
+        clickAction = `onclick="UIGame.selectTarget('${targetType}', ${playerId}, '${card._uid}')"`;
         clickable = 'clickable targetable';
       } else {
         clickable = needsAttackingOrBlocking && !isAttackingOrBlocking ? '' : 'hexproof-shield';
@@ -1170,7 +1256,10 @@ const UIGame = {
     const hasImage = card.image_small || card.image_normal;
     let imageHtml;
     if (hasImage) {
-      imageHtml = `<img src="${card.image_small || card.image_normal}" alt="${card.name}" loading="lazy">`;
+      imageHtml = `<div class="card-image-container">
+        <img src="${card.image_small || card.image_normal}" alt="${card.name}" loading="lazy">
+        <button class="card-art-button" onclick="event.stopPropagation(); UIGame.openArtPickerModal('${card._uid}')" title="Escolher arte">🎨</button>
+      </div>`;
     } else {
       const tokenKws = (card.keywords || []).filter(k =>
         ['Flying', 'Deathtouch', 'Lifelink', 'Trample', 'Vigilance', 'Haste', 'First Strike', 'Menace'].includes(k)
@@ -1449,9 +1538,21 @@ const UIGame = {
         dblClickAction = `ondblclick="UIGame.activateCycling('${c._uid}')"`;
       }
 
-      const costDisplay = c.mana_cost
-        ? `<div class="hand-card-cost">${c.mana_cost.replace(/\{/g, '').replace(/\}/g, ' ').trim()}</div>`
-        : (c.cmc > 0 ? `<div class="hand-card-cost">${c.cmc}</div>` : '');
+      // Show reduced cost if available, otherwise show original cost
+      let costDisplay = '';
+      if (c._costReduced && c._effectiveCmc !== undefined) {
+        // Show original cost struck through and new cost
+        const originalCmc = c.cmc || 0;
+        const effectiveCmc = c._effectiveCmc;
+        costDisplay = `<div class="hand-card-cost cost-reduced" title="Cost reduced: ${originalCmc} → ${effectiveCmc}">
+          <span style="text-decoration: line-through; opacity: 0.6">${originalCmc}</span>
+          <span style="margin-left: 2px; font-weight: bold; color: #4a9eff">${effectiveCmc}</span>
+        </div>`;
+      } else if (c.mana_cost) {
+        costDisplay = `<div class="hand-card-cost">${c.mana_cost.replace(/\{/g, '').replace(/\}/g, ' ').trim()}</div>`;
+      } else if (c.cmc > 0) {
+        costDisplay = `<div class="hand-card-cost">${c.cmc}</div>`;
+      }
 
       // Cycling badge
       const cyclingBadge = cycling
@@ -1486,7 +1587,10 @@ const UIGame = {
              ${dblClickAction}
              ${hoverAction}
              title="${c.name} ${c.mana_cost || ''} - ${c.type_line || ''}${unplayableReason}${cycling ? ` [dbl-click: ${cycling.searchType || 'Cycling'} {${cycling.cost}}]` : ''}">
-          <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+          <div class="card-image-container">
+            <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+            <button class="card-art-button" onclick="event.stopPropagation(); UIGame.openArtPickerModal('${c._uid}')" title="Escolher arte">🎨</button>
+          </div>
           ${costDisplay}
           ${cyclingBadge}
           ${evokeBadge}
@@ -1707,6 +1811,16 @@ const UIGame = {
           <button class="btn btn-primary btn-sm" onclick="UIGame.confirmLookTop()" ${remainingPicks > 0 ? 'disabled' : ''}>Confirmar</button>
         `;
       }
+      case 'look_top_land_choice': {
+        const pendingL = gs._pendingLookTop;
+        const pickCount = pendingL ? pendingL.pickCount : 1;
+        const selectedCount = pendingL ? pendingL.selected.length : 0;
+        const landNames = pendingL && pendingL.lands ? pendingL.lands.map(c => c.name).join(', ') : '';
+        return `
+          <span class="hint-text">🌍 Terrenos encontrados: ${landNames || 'nenhum'}. Clique nas cartas do topo para escolher até ${pickCount} terreno(s) para a mão.</span>
+          <button class="btn btn-primary btn-sm" onclick="UIGame.confirmLookTopLand()">Confirmar</button>
+        `;
+      }
       case 'modal_choice': {
         const chooseN = gs._pendingModal ? (gs._pendingModal.chooseCount || 1) : 1;
         const label = chooseN > 1
@@ -1866,7 +1980,10 @@ const UIGame = {
           const isActivatable = canAfford || canHarmonize;
           return `
             <div class="gy-card ${isActivatable ? 'gy-activatable' : ''} ${canHarmonize ? 'gy-harmonize' : ''}" ${CardZoom.attr(c)} title="${c.name}${canHarmonize ? ' (Harmonize: ' + CardEngine.getHarmonizeCost(c) + ')' : ''}">
-              <img src="${c.image_small || c.image_normal}" alt="${c.name}" loading="lazy">
+              <div class="card-image-container">
+                <img src="${c.image_small || c.image_normal}" alt="${c.name}" loading="lazy">
+                <button class="card-art-button" onclick="event.stopPropagation(); UIGame.openArtPickerModal('${c._uid}')" title="Escolher arte">🎨</button>
+              </div>
               ${canAfford ? `<button class="gy-activate-btn" onclick="event.stopPropagation(); UIGame.activateGraveyardAbility('${c._uid}')">Ativar</button>` : ''}
               ${canHarmonize ? `<button class="gy-harmonize-btn" onclick="event.stopPropagation(); UIGame.closeGraveyard(); UIGame.castHarmonize('${c._uid}')">Harmonizar</button>` : ''}
             </div>
@@ -1916,7 +2033,10 @@ const UIGame = {
     const cardsHtml = cards.length > 0
       ? cards.map(c => `
           <div class="gy-card" ${CardZoom.attr(c)} title="${c.name}">
-            <img src="${c.image_small || c.image_normal}" alt="${c.name}" loading="lazy">
+            <div class="card-image-container">
+              <img src="${c.image_small || c.image_normal}" alt="${c.name}" loading="lazy">
+              <button class="card-art-button" onclick="event.stopPropagation(); UIGame.openArtPickerModal('${c._uid}')" title="Escolher arte">🎨</button>
+            </div>
           </div>
         `).join('')
       : '<p class="gy-empty">Exilio vazio</p>';
@@ -2228,7 +2348,8 @@ const UIGame = {
       effectiveName = card.adventure.name;
     } else {
       effectiveCost = card.mana_cost;
-      effectiveCmc = card.cmc;
+      // Use the effective CMC calculated in getPlayableCards (which includes cost reductions)
+      effectiveCmc = card._effectiveCmc !== undefined ? card._effectiveCmc : card.cmc;
       effectiveText = card.oracle_text;
       effectiveName = card.name;
     }
@@ -2311,14 +2432,65 @@ const UIGame = {
     const spellEffects = !isPerm ? CardEngine.getSpellEffects(advCard) : [];
     const relevantEffects = isPerm ? etbEffects : spellEffects;
 
-    const needsTarget = relevantEffects.some(e =>
+    // Helper function to check if an effect needs targeting
+    const effectNeedsTarget = (e) =>
       ['damage', 'destroy', 'exile', 'bounce', 'buff', 'debuff', 'counter', 'fight', 'tap', 'untap'].includes(e.type) &&
       e.target !== 'all_own_creatures' && e.target !== 'opponent' && e.target !== 'player' &&
       e.target !== 'creatures' && e.target !== 'nonland' && e.target !== 'opponent_creatures' &&
-      e.target !== 'each opponent' && e.target !== 'all_creatures'
-    );
+      e.target !== 'each opponent' && e.target !== 'all_creatures' &&
+      e.target !== undefined && e.target !== null && e.target !== '';
+
+    // Helper function to check if valid targets exist for the spell
+    const hasValidTargets = (effects) => {
+      const oppBf = gs.players[1].zones.battlefield.cards;
+      const effectsNeedingTargets = effects.filter(effectNeedsTarget);
+
+      if (effectsNeedingTargets.length === 0) return false;
+
+      for (const effect of effectsNeedingTargets) {
+        let hasValid = false;
+
+        if (effect.target === 'attacking_or_blocking_creature') {
+          // Must have at least one attacking or blocking creature
+          hasValid = oppBf.some(c => c._attacking || c._blocking);
+        } else if (effect.target === 'creature' || effect.target === 'creature_or_player') {
+          // Must have at least one creature
+          hasValid = oppBf.some(c => CardEngine.isCreature(c));
+        } else if (effect.target === 'artifact' || effect.target === 'enchantment') {
+          // Must have the specific permanent type
+          const typeKey = effect.target;
+          hasValid = oppBf.some(c => {
+            const typeLower = (c.type_line || '').toLowerCase();
+            return typeLower.includes(typeKey);
+          });
+        } else {
+          // Other target types - assume there could be a valid target
+          hasValid = true;
+        }
+
+        // If any effect doesn't have a valid target, can't cast
+        if (!hasValid) return false;
+      }
+
+      return true;
+    };
+
+    // Check direct effects (but NOT for modal spells - modal targeting happens AFTER mode choice)
+    const hasModal = !isPerm && spellEffects.some(e => e.type === 'modal');
+    let needsTarget = !hasModal && relevantEffects.some(effectNeedsTarget);
 
     if (needsTarget) {
+      // Validate that valid targets exist before entering targeting mode
+      if (!hasValidTargets(relevantEffects)) {
+        this.showToast('Sem alvo válido disponível!', 'info');
+        return;
+      }
+
+      // Save mana state before tapping in case spell fails during targeting
+      const bf = gs.players[0].zones.battlefield.cards;
+      const landStatesBefore = new Map(bf.filter(c => CardEngine.isLand(c)).map(land => [land._uid, land._tapped]));
+      const preTapManaPool = { ...gs.manaPool[0] };
+
       GameState.autoTapForSpell(gs, 0, effectiveCost, effectiveCmc, card);
       this.targetingMode = {
         card,
@@ -2327,7 +2499,10 @@ const UIGame = {
         castingAdventure,
         castingEvoke,
         returnToInstantPriority: wasInstantPriority,
-        instantPriorityPhase
+        instantPriorityPhase,
+        // Save mana state for refund if spell fails
+        preTapManaPool,
+        landStatesBefore
       };
       gs.waitingForInput = { type: 'choose_target', playerId: 0 };
       this.render();
@@ -2335,10 +2510,26 @@ const UIGame = {
     }
 
     // Auto-tap and cast
+    // Save mana pool state before tapping in case spell fails
+    const preTapManaPool = { ...gs.manaPool[0] };
+    const bf = gs.players[0].zones.battlefield.cards;
+    const landStatesBefore = new Map(bf.filter(c => CardEngine.isLand(c)).map(land => [land._uid, land._tapped]));
+
+    // Tap lands for mana
     GameState.autoTapForSpell(gs, 0, effectiveCost, effectiveCmc, card);
+
     const result = GameState.castSpell(gs, 0, uid, [], castingAdventure, castingEvoke);
     if (!result.success) {
+      // Spell failed - undo mana taps
+      for (const [landUid, wasTapped] of landStatesBefore) {
+        const land = gs.players[0].zones.battlefield.get(landUid);
+        if (land) land._tapped = wasTapped;
+      }
+      gs.manaPool[0] = { ...preTapManaPool };
       gs.log.push(result.msg);
+      this.showToast('Mana reembolsada', 'info');
+      this.render();
+      return;
     }
 
     // Show cast notification + toast
@@ -2367,8 +2558,30 @@ const UIGame = {
   },
 
   selectTarget(type, playerId, uid) {
-    if (!this.targetingMode) return;
     const gs = this.gameState;
+
+    // Handle saga chapter targeting
+    if (gs._pendingSagaChapter && !this.targetingMode) {
+      const { saga, chapter, effects, controller } = gs._pendingSagaChapter;
+      const targets = [{ type, player: playerId, uid }];
+
+      gs.log.push(`${saga.name} — Capitulo ${chapter}: alvo escolhido.`);
+
+      // Clear pending saga state
+      gs._pendingSagaChapter = null;
+      gs.waitingForInput = null;
+
+      // Resolve chapter effects through the stack
+      GameStack.push(gs.stack, { card: saga, controller, targets, effects: [...effects] });
+      const stackLog = GameStack.resolve(gs.stack, gs);
+      gs.log.push(...stackLog);
+
+      this.render();
+      this._continueIfAI();
+      return;
+    }
+
+    if (!this.targetingMode) return;
 
     // Handle graveyard ability targeting
     if (this.targetingMode.graveyardAbility) {
@@ -2388,6 +2601,7 @@ const UIGame = {
         this.render();
         return;
       }
+
 
       // Pay mana cost now that we have a valid target
       if (ability.cost.mana) {
@@ -2434,30 +2648,101 @@ const UIGame = {
       return;
     }
 
-    const { card, returnToInstantPriority, instantPriorityPhase, castingAdventure, castingEvoke } = this.targetingMode;
+    const { card, effects, returnToInstantPriority, instantPriorityPhase, castingAdventure, castingEvoke, modalMode } = this.targetingMode;
 
-    const targets = [{ type, player: playerId, uid }];
-    const result = GameState.castSpell(gs, 0, card._uid, targets, castingAdventure, castingEvoke);
-    if (!result.success) {
-      gs.log.push(result.msg);
+    // Initialize targets array if not already done
+    if (!this.targetingMode.collectedTargets) {
+      this.targetingMode.collectedTargets = [];
     }
 
-    // Show cast notification
-    if (result.success) {
-      const targetCard = gs.players[playerId].zones.battlefield.get(uid);
-      const targetName = targetCard ? targetCard.name : '';
-      if (castingEvoke) {
-        this.showTriggerNotification(`${card.name}: Evocado!`, '💨');
-      } else if (CardEngine.isPermanent(card)) {
-        this.showTriggerNotification(`${card.name}: Entra no Campo!`, '✨');
-      } else {
-        this.showTriggerNotification(`${card.name}${targetName ? ' -> ' + targetName : ''}`, '🎯');
+    // Add this target
+    const target = { type, player: playerId, uid };
+    this.targetingMode.collectedTargets.push(target);
+
+    // Check if we need more targets (multiple effects with different target_index)
+    const effectsWithTargets = effects.filter(e =>
+      ['damage', 'destroy', 'exile', 'bounce', 'buff', 'debuff', 'counter', 'fight', 'tap', 'untap'].includes(e.type) &&
+      e.target !== 'all_own_creatures' && e.target !== 'opponent' && e.target !== 'player' &&
+      e.target !== 'creatures' && e.target !== 'nonland' && e.target !== 'opponent_creatures' &&
+      e.target !== 'each opponent' && e.target !== 'all_creatures'
+    );
+
+    const uniqueTargetIndices = new Set(effectsWithTargets.map(e => e.target_index !== undefined ? e.target_index : 0));
+    const needsMoreTargets = this.targetingMode.collectedTargets.length < uniqueTargetIndices.size;
+
+    if (needsMoreTargets) {
+      // Need more targets, show hint
+      const targetCount = this.targetingMode.collectedTargets.length;
+      const totalNeeded = uniqueTargetIndices.size;
+      gs.log.push(`Alvo ${targetCount}/${totalNeeded} selecionado. Escolha o proximo alvo.`);
+      this.render();
+      return;
+    }
+
+    // All targets collected
+    const targets = this.targetingMode.collectedTargets;
+
+    // Fire creature_targeted_by_opponent trigger for opponent's creatures being targeted
+    if (targets && targets.length > 0) {
+      for (const target of targets) {
+        if (target.player === 1) { // Targeting opponent's creatures
+          GameState.fireTrigger(gs, 'creature_targeted_by_opponent', { playerId: 1 });
+        }
+      }
+    }
+
+    // If this is a modal spell targeting, resolve through stack instead of castSpell
+    if (modalMode && gs._pendingModalAfterTargets) {
+      const modalData = gs._pendingModalAfterTargets;
+      if (modalData.allEffects.length > 0) {
+        GameStack.push(gs.stack, {
+          card: modalData.card,
+          controller: modalData.controller,
+          targets: targets,
+          effects: modalData.allEffects
+        });
+        const stackLog = GameStack.resolve(gs.stack, gs);
+        gs.log.push(...stackLog);
+      }
+      gs._pendingModalAfterTargets = null;
+    } else {
+      // Normal spell casting with targets
+      const result = GameState.castSpell(gs, 0, card._uid, targets, castingAdventure, castingEvoke);
+      if (!result.success) {
+        // Spell failed after target selection - refund mana if it was tapped
+        if (this.targetingMode.preTapManaPool && this.targetingMode.landStatesBefore) {
+          // Restore land tapped states
+          for (const [landUid, wasTapped] of this.targetingMode.landStatesBefore) {
+            const land = gs.players[0].zones.battlefield.get(landUid);
+            if (land) land._tapped = wasTapped;
+          }
+          // Restore mana pool
+          gs.manaPool[0] = { ...this.targetingMode.preTapManaPool };
+          gs.log.push('Mana reembolsada - Conjuração falhou.');
+          this.showToast('Mana reembolsada', 'info');
+        } else {
+          gs.log.push(result.msg);
+          this.showToast('Conjuração falhou', 'info');
+        }
+      }
+
+      // Show cast notification
+      if (result.success) {
+        const targetCard = gs.players[playerId].zones.battlefield.get(uid);
+        const targetName = targetCard ? targetCard.name : '';
+        if (castingEvoke) {
+          this.showTriggerNotification(`${card.name}: Evocado!`, '💨');
+        } else if (CardEngine.isPermanent(card)) {
+          this.showTriggerNotification(`${card.name}: Entra no Campo!`, '✨');
+        } else {
+          this.showTriggerNotification(`${card.name}${targetName ? ' -> ' + targetName : ''}`, '🎯');
+        }
       }
     }
 
     this.targetingMode = null;
     // Return to instant priority if that's where we came from
-    if (returnToInstantPriority && result.success) {
+    if (returnToInstantPriority) {
       gs.waitingForInput = { type: 'instant_priority', playerId: 0, phase: instantPriorityPhase };
     } else if (!gs.waitingForInput || gs.waitingForInput.type === 'choose_target') {
       // Only reset to main_phase if castSpell didn't set a special waitingForInput (e.g. scry/surveil from ETB)
@@ -2859,6 +3144,7 @@ const UIGame = {
       const validTargets = gs.players[0].zones.battlefield.cards
         .filter(c => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, 0));
 
+
       if (validTargets.length === 0) {
         gs.log.push(`Nenhum alvo valido para ${card.name}.`);
         this.render();
@@ -2870,7 +3156,7 @@ const UIGame = {
         graveyardAbility: true,
         card: card,
         ability: ability,
-        effects: ability.effects.filter(e => e.target === 'creature')
+        effects: ability.effects
       };
       gs.waitingForInput = { type: 'choose_target', playerId: 0 };
       gs.log.push(`Escolha um alvo para ${card.name}.`);
@@ -2916,7 +3202,7 @@ const UIGame = {
 
   // =================== Harmonize (cast from graveyard) ===================
 
-  castHarmonize(cardUid) {
+  castHarmonize(cardUid, selectedCreatureUid = null) {
     const gs = this.gameState;
     if (!gs || gs.winner !== null) return;
 
@@ -2927,27 +3213,58 @@ const UIGame = {
     const harmonizeCost = CardEngine.getHarmonizeCost(card);
     if (!harmonizeCost) return;
 
-    // Find best creature to tap for discount (weakest with power > 0)
-    const bf = gs.players[0].zones.battlefield;
-    const tapCandidates = bf.cards.filter(c =>
-      CardEngine.isCreature(c) && !c._tapped && !c._summoningSick && CardEngine.getPower(c) > 0
-    ).sort((a, b) => CardEngine.getPower(a) - CardEngine.getPower(b));
+    // If no creature selected yet, show creature choice overlay
+    if (selectedCreatureUid === null) {
+      const bf = gs.players[0].zones.battlefield;
+      const tapCandidates = bf.cards.filter(c =>
+        CardEngine.isCreature(c) && !c._tapped && CardEngine.getPower(c) > 0
+      );
 
-    let tappedUid = null;
-    if (tapCandidates.length > 0) {
-      tappedUid = tapCandidates[0]._uid;
+      if (tapCandidates.length > 0) {
+        // Show creature selection overlay
+        gs._pendingHarmonize = {
+          cardUid,
+          card,
+          creatures: tapCandidates
+        };
+        gs.waitingForInput = { type: 'harmonize_tap_creature', playerId: 0 };
+        this.render();
+        return;
+      }
+      // No creatures available, cast without discount
+      selectedCreatureUid = null;
     }
 
     // castHarmonize handles autoTap + creature tap + payment internally
-    const result = GameState.castHarmonize(gs, 0, cardUid, [], tappedUid);
+    const result = GameState.castHarmonize(gs, 0, cardUid, [], selectedCreatureUid);
     if (result.success) {
       this.showTriggerNotification(`${card.name}: Harmonize!`, '🎵');
     } else {
       gs.log.push(result.msg);
     }
 
+    gs._pendingHarmonize = null;
+    gs.waitingForInput = null;
     this._checkGameEnd();
     this.render();
+  },
+
+  selectHarmonizeCreature(creatureUid) {
+    const gs = this.gameState;
+    if (!gs._pendingHarmonize) return;
+
+    const pending = gs._pendingHarmonize;
+    // Call castHarmonize again with selected creature
+    this.castHarmonize(pending.cardUid, creatureUid);
+  },
+
+  skipHarmonizeCreature() {
+    const gs = this.gameState;
+    if (!gs._pendingHarmonize) return;
+
+    const pending = gs._pendingHarmonize;
+    // Cast without creature discount
+    this.castHarmonize(pending.cardUid, null);
   },
 
   // =================== Sacrifice ===================
@@ -3149,6 +3466,47 @@ const UIGame = {
   closeAbilityModal() {
     this._actionModal = null;
     this.render();
+  },
+
+  // Art picker modal functions
+  async openArtPickerModal(cardUid) {
+    const gs = this.gameState;
+    if (!gs) return;
+
+    let card = null;
+    // Try to find card in all zones
+    for (const player of gs.players) {
+      for (const zone of [player.zones.battlefield, player.zones.hand, player.zones.graveyard, player.zones.exile]) {
+        card = zone.get?.(cardUid) || zone.cards?.find(c => c._uid === cardUid);
+        if (card) break;
+      }
+      if (card) break;
+    }
+    if (!card) return;
+
+    // Fetch available arts
+    const arts = await CardEngine.getAvailableArts(card);
+    if (arts.length <= 1) {
+      UIGame.showToast('Essa carta não possui artes alternativas', 'info');
+      return;
+    }
+
+    this._artPickerCard = card;
+    this._artPickerArts = arts;
+    this.render();
+  },
+
+  closeArtPickerModal() {
+    this._artPickerCard = null;
+    this._artPickerArts = [];
+    this.render();
+  },
+
+  selectArt(artIndex) {
+    if (!this._artPickerCard || !this._artPickerArts[artIndex]) return;
+    CardEngine.setSelectedArt(this._artPickerCard, artIndex);
+    this.showToast('Arte alterada!', 'info');
+    this.closeArtPickerModal();
   },
 
   _hasVariableXCost(ability) {
@@ -3518,6 +3876,141 @@ const UIGame = {
     this.playCard(uid); // Re-enter playCard with the choice flag set
   },
 
+  // =================== Legendary Choice Modal ===================
+
+  chooseLegendaryAction(choice) {
+    const gs = this.gameState;
+    if (!gs._pendingLegendaryChoice) return;
+
+    const {
+      cardToCast,
+      cardUid,
+      targets,
+      castingAdventure,
+      castingEvoke,
+      existingCards,
+      playerId
+    } = gs._pendingLegendaryChoice;
+
+    if (choice === 'cast_keep_new') {
+      // Player chose to cast and keep the new card
+      gs._legendaryChoice = 'keep_new';
+      gs._pendingLegendaryChoice = null;
+      gs.waitingForInput = null;
+
+      // Set flag to skip legendary check on this cast (already approved by player)
+      gs._skipLegendaryCheck = true;
+
+      // Continue with the original cast
+      const result = GameState.castSpell(gs, playerId, cardUid, targets, castingAdventure, castingEvoke);
+      if (!result.success) {
+        gs.log.push(result.msg);
+      }
+
+      // Clear the flag
+      gs._skipLegendaryCheck = false;
+      gs._legendaryChoice = null;
+    } else if (choice === 'cast_keep_existing') {
+      // Player chose to cast but keep the existing card
+      gs._legendaryChoice = 'keep_existing';
+      gs._pendingLegendaryChoice = null;
+      gs.waitingForInput = null;
+
+      // Set flag to skip legendary check on this cast (already approved by player)
+      gs._skipLegendaryCheck = true;
+
+      // Continue with the original cast
+      const result = GameState.castSpell(gs, playerId, cardUid, targets, castingAdventure, castingEvoke);
+      if (!result.success) {
+        gs.log.push(result.msg);
+      }
+
+      // Clear the flag
+      gs._skipLegendaryCheck = false;
+      gs._legendaryChoice = null;
+    } else {
+      // Player chose to cancel - don't cast the card
+      gs._pendingLegendaryChoice = null;
+      gs.waitingForInput = null;
+      gs.log.push(`Conjuração de ${cardToCast.name} cancelada.`);
+    }
+
+    this.render();
+  },
+
+  _renderLegendaryChoiceModal() {
+    const gs = this.gameState;
+    if (!gs._pendingLegendaryChoice || gs.waitingForInput?.type !== 'legendary_choice_pre_cast') return '';
+
+    const { cardToCast, existingCards } = gs._pendingLegendaryChoice;
+
+    return `
+      <div class="modal-overlay">
+        <div class="modal-dialog legendary-choice-modal">
+          <div class="modal-header">
+            <h3>⚠️ Regra Lendária</h3>
+            <p>Você já controla uma criatura lendária com esse nome. Você pode conjurar <strong>${cardToCast.name}</strong>, mas deve escolher qual versão manter:</p>
+          </div>
+          <div class="modal-body">
+            <div class="legendary-warning">
+              <div class="existing-card">
+                <img src="${existingCards[0].image_small || '/img/card-back.jpg'}" alt="${existingCards[0].name}" />
+                <p><strong>No campo:</strong> ${existingCards[0].name}</p>
+              </div>
+              <div class="arrow">→</div>
+              <div class="new-card">
+                <img src="${cardToCast.image_small || '/img/card-back.jpg'}" alt="${cardToCast.name}" />
+                <p><strong>Conjurando:</strong> ${cardToCast.name}</p>
+              </div>
+            </div>
+            <div class="legendary-choices">
+              <button class="btn btn-cancel" onclick="UIGame.chooseLegendaryAction('cancel')">
+                Cancelar Conjuração
+              </button>
+              <button class="btn btn-primary" onclick="UIGame.chooseLegendaryAction('cast_keep_new')">
+                Conjurar - Manter Nova
+              </button>
+              <button class="btn btn-warning" onclick="UIGame.chooseLegendaryAction('cast_keep_existing')">
+                Conjurar - Manter Existente
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  _renderArtPickerModal() {
+    if (!this._artPickerCard || !this._artPickerArts || this._artPickerArts.length === 0) return '';
+
+    return `
+      <div class="modal-overlay" onclick="UIGame.closeArtPickerModal()">
+        <div class="modal-dialog art-picker-modal" onclick="event.stopPropagation()">
+          <div class="modal-header">
+            <h3>🎨 Escolher Arte</h3>
+            <p>${this._artPickerCard.name}</p>
+          </div>
+          <div class="modal-body art-picker-body">
+            <div class="art-grid">
+              ${this._artPickerArts.map((art, idx) => `
+                <div class="art-option" onclick="UIGame.selectArt(${idx})">
+                  <img src="${art.image}" alt="Arte ${idx + 1}" loading="lazy">
+                  <div class="art-info">
+                    <small>${art.setName}</small>
+                    <small>#${art.collector}</small>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="UIGame.closeArtPickerModal()">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
   _renderAdventureChoiceModal() {
     if (!this._pendingAdventureChoice) return '';
     const { card } = this._pendingAdventureChoice;
@@ -3827,10 +4320,20 @@ const UIGame = {
 
     const blocker = gs.players[0].zones.battlefield.get(this._pendingBlockerUid);
     if (blocker) {
-      CombatSystem.declareBlocker(gs.combat, blocker, attackerUid);
-      const atkName = gs.combat.attackers.find(a => a.uid === attackerUid)?.card.name || 'atacante';
-      gs.log.push(`${blocker.name} bloqueia ${atkName}.`);
-      this.selectedBlockers[this._pendingBlockerUid] = attackerUid;
+      const success = CombatSystem.declareBlocker(gs.combat, blocker, attackerUid, gs);
+      if (success) {
+        const atkName = gs.combat.attackers.find(a => a.uid === attackerUid)?.card.name || 'atacante';
+        gs.log.push(`${blocker.name} bloqueia ${atkName}.`);
+        this.selectedBlockers[this._pendingBlockerUid] = attackerUid;
+      } else {
+        // Blocker is already blocking another attacker
+        if (blocker._blocking) {
+          const currentAtkName = gs.combat.attackers.find(a => a.uid === blocker._blocking)?.card.name || 'atacante';
+          gs.log.push(`${blocker.name} ja esta bloqueando ${currentAtkName}.`);
+        } else {
+          gs.log.push(`${blocker.name} nao pode bloquear este atacante.`);
+        }
+      }
     }
     this._pendingBlockerUid = null;
     this.render();
@@ -4050,6 +4553,19 @@ const UIGame = {
       if (drawn) {
         gs.players[0].zones.hand.add(drawn);
         gs.log.push(`Voce compra uma carta.`);
+      }
+    }
+
+    // Check if this should return a card from graveyard (Awaken the Honored Dead)
+    if (gs._pendingOptionalDiscard.returnFromGY) {
+      const returnCards = gs._pendingOptionalDiscard.returnCards || [];
+      if (returnCards.length > 0) {
+        // Return best creature or land from graveyard
+        returnCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+        const returned = returnCards[0];
+        gs.players[0].zones.graveyard.remove(returned._uid);
+        gs.players[0].zones.hand.add(returned);
+        gs.log.push(`Retorna ${returned.name} do cemiterio para a mao.`);
       }
     }
 
@@ -4344,33 +4860,74 @@ const UIGame = {
     const chosenMode = pending.modes[index];
     if (!chosenMode) return;
 
+    // Track modal choice on enchantments for conditional triggers
+    if (pending.card && pending.card.name) {
+      const cardName = pending.card.name.toLowerCase();
+      if (cardName === 'glacierwood siege') {
+        pending.card._temurMode = (index === 0); // Temur is index 0
+      } else if (cardName === 'frostcliff siege') {
+        pending.card._jeskaiMode = (index === 0); // Jeskai is index 0
+        pending.card._temurMode = (index === 1); // Temur is index 1
+      }
+    }
+
     const modeEffects = Array.isArray(chosenMode) ? chosenMode : [chosenMode];
     const allEffects = [...modeEffects, ...(pending.remainingEffects || [])];
 
     gs.log.push(`Modo escolhido: ${this._describeModalMode(chosenMode)}.`);
 
-    // Resolve the remaining effects through the stack
-    if (allEffects.length > 0) {
-      GameStack.push(gs.stack, {
+    // Check if chosen mode needs targets
+    const effectNeedsTarget = (e) =>
+      ['damage', 'destroy', 'exile', 'bounce', 'buff', 'debuff', 'counter', 'fight', 'tap', 'untap'].includes(e.type) &&
+      e.target !== 'all_own_creatures' && e.target !== 'opponent' && e.target !== 'player' &&
+      e.target !== 'creatures' && e.target !== 'nonland' && e.target !== 'opponent_creatures' &&
+      e.target !== 'each opponent' && e.target !== 'all_creatures';
+
+    const modeNeedsTargets = modeEffects.some(effectNeedsTarget);
+
+    if (modeNeedsTargets) {
+      // Modal mode needs targets - enter targeting mode
+      gs._pendingModalAfterTargets = {
         card: pending.card,
         controller: pending.controller,
-        targets: pending.targets || [],
-        effects: allEffects
-      });
-      const stackLog = GameStack.resolve(gs.stack, gs);
-      gs.log.push(...stackLog);
+        allEffects: allEffects,
+        remainingEffects: pending.remainingEffects || []
+      };
+      gs._pendingModal = null;
+
+      this.targetingMode = {
+        card: pending.card,
+        effects: modeEffects,
+        isPermanent: false,
+        modalMode: true,
+        returnToInstantPriority: false
+      };
+      gs.waitingForInput = { type: 'choose_target', playerId: 0 };
+      this.render();
+    } else {
+      // No targets needed, resolve immediately
+      if (allEffects.length > 0) {
+        GameStack.push(gs.stack, {
+          card: pending.card,
+          controller: pending.controller,
+          targets: pending.targets || [],
+          effects: allEffects
+        });
+        const stackLog = GameStack.resolve(gs.stack, gs);
+        gs.log.push(...stackLog);
+      }
+
+      gs._pendingModal = null;
+      gs.waitingForInput = null;
+
+      const isMainPhase = gs.phase === 'main1' || gs.phase === 'main2';
+      if (isMainPhase && gs.activePlayer === 0) {
+        gs.waitingForInput = { type: 'main_phase', playerId: 0 };
+      }
+
+      this.render();
+      this._continueIfAI();
     }
-
-    gs._pendingModal = null;
-    gs.waitingForInput = null;
-
-    const isMainPhase = gs.phase === 'main1' || gs.phase === 'main2';
-    if (isMainPhase && gs.activePlayer === 0) {
-      gs.waitingForInput = { type: 'main_phase', playerId: 0 };
-    }
-
-    this.render();
-    this._continueIfAI();
   },
 
   // =================== Clash ===================
@@ -4656,6 +5213,218 @@ const UIGame = {
     this._continueIfAI();
   },
 
+  // === Unless Pay Decision (Counter spell with payment option) ===
+  resolveUnlessPay(shouldPay) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingUnlessPay) return;
+    GameState.resolveUnlessPay(gs, shouldPay);
+    this.render();
+    this._continueIfAI();
+  },
+
+  _renderUnlessPayOverlay(pending) {
+    const costStr = pending.wasDragonBeheld ? `{${pending.cost}} (Dragon Beheld)` : `{${pending.cost}}`;
+    return `
+      <div class="hideaway-overlay">
+        <div class="hideaway-box" style="max-width:500px">
+          <h3>Counter com Taxa de Pagamento</h3>
+          <p class="hideaway-hint">${pending.spell.name} será anulado a menos que seu controlador pague ${costStr}</p>
+          <div style="display:flex;gap:16px;justify-content:center;margin:16px 0">
+            <button class="btn btn-success btn-lg" onclick="UIGame.resolveUnlessPay(true)" style="cursor:pointer;padding:12px 24px">
+              💰 Pagar ${costStr}
+            </button>
+            <button class="btn btn-danger btn-lg" onclick="UIGame.resolveUnlessPay(false)" style="cursor:pointer;padding:12px 24px">
+              ✗ Deixar Anular
+            </button>
+          </div>
+          <p style="font-size:11px;color:#888;margin-top:8px">Tecla <kbd>1</kbd> para Pagar, <kbd>2</kbd> para Não Pagar</p>
+        </div>
+      </div>
+    `;
+  },
+
+  // === Behold Choice ===
+  resolveBeholdChoiceMultiple(card) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingBeholdChoice) return;
+
+    const pending = gs._pendingBeholdChoice;
+    const cardUid = pending.cardUid;
+    const handCard = gs.players[pending.playerId].zones.hand.get(cardUid);
+    if (handCard) {
+      handCard._beholdPaid = true;
+      handCard._beholdCardUid = card._uid;
+    }
+
+    // Continue casting with behold selected
+    const result = GameState.castSpell(gs, pending.playerId, cardUid);
+    if (!result.success) {
+      gs.log.push(result.msg);
+    }
+    gs._pendingBeholdChoice = null;
+    gs.waitingForInput = null;
+    this.render();
+    this._continueIfAI();
+  },
+
+  resolveBeholdChoiceDecline() {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingBeholdChoice) return;
+
+    // Clear behold choice without setting _beholding
+    gs._pendingBeholdChoice = null;
+    gs.waitingForInput = null;
+
+    // Continue casting the spell (effects will skip create_token due to condition check)
+    this.render();
+    this._continueIfAI();
+  },
+
+  resolveBeholdChoiceOptional(choice) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingBeholdChoice) return;
+
+    const pending = gs._pendingBeholdChoice;
+    const cardUid = pending.cardUid;
+
+    if (choice === 'reveal') {
+      // User wants to show card selector overlay
+      this._setupBeholdCardChoice();
+      return;
+    } else {
+      // Pay mana instead
+      const result = GameState.castSpell(gs, pending.playerId, cardUid);
+      if (!result.success) {
+        gs.log.push(result.msg);
+      }
+    }
+    gs._pendingBeholdChoice = null;
+    gs.waitingForInput = null;
+    this.render();
+    this._continueIfAI();
+  },
+
+  _setupBeholdCardChoice() {
+    const gs = this.gameState;
+    const pending = gs._pendingBeholdChoice;
+    const hand = gs.players[pending.playerId].zones.hand;
+    const candidates = hand.getAll().filter(c =>
+      CardEngine.hasCreatureType(c, pending.beholdCost.subtype)
+    );
+
+    if (candidates.length > 0) {
+      gs.waitingForInput = { type: 'behold_card_choice' };
+      gs._pendingBeholdCardChoice = {
+        cardUid: pending.cardUid,
+        candidates,
+        playerId: pending.playerId
+      };
+      this.render();
+    }
+  },
+
+  confirmBeholdCardChoice(idx) {
+    const gs = this.gameState;
+    const pending = gs._pendingBeholdCardChoice;
+    if (!pending || idx < 0 || idx >= pending.candidates.length) return;
+
+    const card = pending.candidates[idx];
+    const cardUid = pending.cardUid;
+
+    // Mark card for behold
+    const handCard = gs.players[pending.playerId].zones.hand.get(cardUid);
+    if (handCard) {
+      handCard._beholdPaid = true;
+      handCard._beholdCardUid = card._uid;
+    }
+
+    // Continue casting
+    const result = GameState.castSpell(gs, pending.playerId, cardUid);
+    if (!result.success) {
+      gs.log.push(result.msg);
+    }
+
+    gs._pendingBeholdChoice = null;
+    gs._pendingBeholdCardChoice = null;
+    gs.waitingForInput = null;
+    this.render();
+    this._continueIfAI();
+  },
+
+  _renderBeholdChoiceMultipleOverlay(pending) {
+    const candidates = pending.candidates;
+    const baseType = pending.beholdCost ? pending.beholdCost.subtype : 'Dragon';
+    const isOptional = pending.isOptional === true;
+    return `
+      <div class="hideaway-overlay">
+        <div class="hideaway-box" style="max-width:600px">
+          <h3>Revelar ${baseType} para Behold${isOptional ? ' (Opcional)' : ''}</h3>
+          <p class="hideaway-hint">Escolha qual ${baseType} revelar:</p>
+          <div class="hideaway-cards" style="gap:12px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+            ${candidates.map((card, idx) => `
+              <div class="hideaway-card" onclick="UIGame.resolveBeholdChoiceMultiple(UIGame.gameState._pendingBeholdChoice.candidates[${idx}])" style="cursor:pointer">
+                <div class="hideaway-card-name">${card.name}</div>
+                <div class="hideaway-card-type" style="font-size:10px;color:#aaa">${card.type_line || ''}</div>
+              </div>
+            `).join('')}
+          </div>
+          ${isOptional ? `
+            <button class="btn btn-warning" onclick="UIGame.resolveBeholdChoiceDecline()" style="width:100%;margin-top:12px;padding:8px">
+              Declinar
+            </button>
+          ` : ''}
+          <p style="font-size:11px;color:#888;margin-top:12px">Clique para escolher ou pressione <kbd>1</kbd>-<kbd>${candidates.length}</kbd>${isOptional ? ' ou <kbd>Esc</kbd> para declinar' : ''}</p>
+        </div>
+      </div>
+    `;
+  },
+
+  _renderBeholdChoiceOptionalOverlay(pending) {
+    const alternateCost = pending.beholdCost ? pending.beholdCost.alternateCost || 1 : 1;
+    const baseType = pending.beholdCost ? pending.beholdCost.subtype : 'Dragon';
+    return `
+      <div class="hideaway-overlay">
+        <div class="hideaway-box" style="max-width:500px">
+          <h3>Behold (Opcional)</h3>
+          <p class="hideaway-hint">Você não tem ${baseType} na mão</p>
+          <div style="display:flex;gap:16px;justify-content:center;margin:16px 0">
+            <button class="btn btn-info btn-lg" onclick="UIGame.resolveBeholdChoiceOptional('reveal')" style="cursor:pointer;padding:12px 24px">
+              🐉 Revelar ${baseType}
+            </button>
+            <button class="btn btn-warning btn-lg" onclick="UIGame.resolveBeholdChoiceOptional('pay')" style="cursor:pointer;padding:12px 24px">
+              💰 Pagar {${alternateCost}}
+            </button>
+          </div>
+          <p style="font-size:11px;color:#888;margin-top:8px">Tecla <kbd>1</kbd> para Revelar, <kbd>2</kbd> para Pagar</p>
+        </div>
+      </div>
+    `;
+  },
+
+  _renderBeholdCardChoiceOverlay() {
+    const gs = this.gameState;
+    const pending = gs._pendingBeholdCardChoice;
+    if (!pending) return '';
+
+    const candidates = pending.candidates;
+    return `
+      <div class="hideaway-overlay">
+        <div class="hideaway-box" style="max-width:600px">
+          <h3>Escolher Dragão para Revelar</h3>
+          <p class="hideaway-hint">Clique em um dragão para revelar:</p>
+          <div class="hideaway-cards" style="gap:12px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+            ${candidates.map((card, idx) => `
+              <div class="hideaway-card" onclick="UIGame.confirmBeholdCardChoice(${idx})" style="cursor:pointer">
+                <div class="hideaway-card-name">${card.name}</div>
+                <div class="hideaway-card-type" style="font-size:10px;color:#aaa">${card.type_line || ''}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
   // === Endure Choice ===
   _renderEndureOverlay(pending) {
     const cardName = (() => {
@@ -4682,6 +5451,32 @@ const UIGame = {
             </div>
           </div>
           <p style="font-size:11px;color:#888;margin-top:8px">Tecla 1 = Counters, 2 = Spirits</p>
+        </div>
+      </div>
+    `;
+  },
+
+  _renderHarmonizeCreatureOverlay(pending) {
+    return `
+      <div class="hideaway-overlay">
+        <div class="hideaway-box">
+          <h3>Harmonizar: ${pending.card.name}</h3>
+          <p class="hideaway-hint">Escolha uma criatura para virar e ajudar a pagar o custo (poder = desconto genérico)</p>
+          <div class="hideaway-cards" style="gap:12px;max-height:300px;overflow-y:auto;">
+            ${pending.creatures.map((c, idx) => `
+              <div class="hideaway-card creature-choice" onclick="UIGame.selectHarmonizeCreature('${c._uid}')" style="cursor:pointer;display:flex;gap:8px;align-items:center;padding:8px;border:1px solid #2ecc71;border-radius:6px;">
+                <img src="${c.image_small || c.image_normal}" style="width:40px;height:40px;border-radius:4px;object-fit:cover;" alt="${c.name}">
+                <div style="flex:1;min-width:0;">
+                  <div style="font-weight:bold;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name}</div>
+                  <div style="font-size:11px;color:#aaa">Poder: ${CardEngine.getPower(c)} (desconto −${CardEngine.getPower(c)})</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <button onclick="UIGame.skipHarmonizeCreature()" style="margin-top:12px;width:100%;padding:8px;background:#555;border:none;border-radius:4px;color:#fff;cursor:pointer;font-weight:bold">
+            Nenhuma Criatura (pagar custo cheio)
+          </button>
+          <p style="font-size:10px;color:#888;margin-top:8px">Click em criatura para selecionar, ou clique em "Nenhuma"</p>
         </div>
       </div>
     `;
@@ -4924,21 +5719,40 @@ const UIGame = {
 
     // Determine target player based on choice
     const efgPid = choice === 'opponent' ? opponent : controller;
-
-    // Execute the exile from graveyard effect
     const efgGy = gs.players[efgPid].zones.graveyard;
-    const efgExile = gs.players[efgPid].zones.exile;
-    const efgAmt = effect.amount || 1;
     const efgCards = efgGy.getAll();
 
     if (efgCards.length > 0) {
-      // Pick highest CMC cards
-      efgCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
-      for (let efgI = 0; efgI < efgAmt && efgI < efgCards.length; efgI++) {
-        const picked = efgCards[efgI];
-        efgGy.remove(picked._uid);
-        efgExile.add(picked);
-        gs.log.push(`${picked.name} exilado do cemiterio.`);
+      // Check if human player needs to choose specific cards
+      if (effect.choose_cards && controller === 0) {
+        // For "up to X" effects, allow choosing 0 to X cards
+        const efgAmt = effect.amount || 1;
+        const maxAmount = effect.up_to_max ? efgAmt : efgAmt;
+        const minAmount = effect.up_to_max ? 0 : efgAmt;
+
+        gs.waitingForInput = { type: 'graveyard_card_choice', playerId: controller };
+        gs._pendingGraveyardCardChoice = {
+          playerId: efgPid,
+          amount: maxAmount,
+          minAmount: minAmount,
+          cards: efgCards,
+          effect,
+          controller,
+          remainingEffects: [], // Will be handled by stack resolution
+          targets: []
+        };
+        this._selectedGraveyardCards = []; // Reset selection
+      } else {
+        // Auto-pick highest CMC cards (AI or not choose_cards)
+        const efgExile = gs.players[efgPid].zones.exile;
+        const efgAmt = effect.amount || 1;
+        efgCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+        for (let efgI = 0; efgI < efgAmt && efgI < efgCards.length; efgI++) {
+          const picked = efgCards[efgI];
+          efgGy.remove(picked._uid);
+          efgExile.add(picked);
+          gs.log.push(`${picked.name} exilado do cemiterio.`);
+        }
       }
     }
 
@@ -5030,7 +5844,7 @@ const UIGame = {
     // Clear the card selection and go back to graveyard choice
     this._selectedGraveyardCards = [];
     gs._pendingGraveyardCardChoice = null;
-    gs.waitingForInput = 'graveyard_choice';
+    gs.waitingForInput = { type: 'graveyard_choice', playerId: 0 };
 
     this.render();
   },
@@ -5084,7 +5898,7 @@ const UIGame = {
     // Restore previous state before graveyard choice
     gs._pendingGraveyardChoice = undoInfo.pendingState;
     gs._pendingGraveyardCardChoice = null;
-    gs.waitingForInput = 'graveyard_choice';
+    gs.waitingForInput = { type: 'graveyard_choice', playerId: 0 };
     this._selectedGraveyardCards = [];
   },
 
@@ -5319,6 +6133,78 @@ const UIGame = {
     `;
   },
 
+  _renderLookTopLandOverlay(pending) {
+    const pickCount = pending.pickCount || 1;
+    const selectedCount = pending.selected ? pending.selected.length : 0;
+    const remainingPicks = pickCount - selectedCount;
+    const allCards = [...(pending.lands || []), ...(pending.nonLands || [])];
+
+    return `
+      <div class="scry-overlay">
+        <div class="scry-box">
+          <h3>🌍 Revelar Terrenos</h3>
+          <p class="scry-hint">Escolha até <strong>${pickCount}</strong> terreno(s) para ir para a <strong>Mão</strong>. Os demais irão para o <strong>Fundo</strong>.</p>
+          <div class="scry-cards">
+            ${allCards.map((card) => {
+              const isLand = pending.lands.includes(card);
+              const isSelected = pending.selected.includes(card.uid);
+              return `
+                <div class="scry-card ${isSelected ? 'scry-keep' : 'scry-away'} ${!isLand ? 'scry-nonland' : ''}"
+                     onclick="${isLand ? `UIGame.toggleLookTopLandCard('${card.uid}')` : ''}"
+                     style="${!isLand ? 'opacity:0.6;cursor:default' : 'cursor:pointer'}">
+                  <img src="${card.image_normal || card.image_small}" alt="${card.name}" ${CardZoom.attr(card)}>
+                  <div class="scry-card-label ${isSelected ? 'label-top' : 'label-away'}">
+                    ${isSelected ? '✋ Mão' : (isLand ? '🌍 Fundo' : '📋 Não-terra')}
+                  </div>
+                  <div class="scry-card-name">${card.name}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          <button class="btn btn-primary" onclick="UIGame.confirmLookTopLand()">
+            Confirmar (${selectedCount} terreno(s))
+          </button>
+        </div>
+      </div>
+    `;
+  },
+
+  _renderLookTopPermanentOverlay(pending) {
+    const putCount = pending.putCount || 0;
+    const selectedCount = (pending.selected || []).length;
+    const remainingSelections = putCount - selectedCount;
+
+    return `
+      <div class="scry-overlay">
+        <div class="scry-box">
+          <h3>⚔️ Revelar Permanentes</h3>
+          <p class="scry-hint">Escolha até <strong>${putCount}</strong> permanente(s) nao-criatura nao-terreno (CMC ≤ 3) para colocar no campo. Os demais irão para o fundo.</p>
+          <div class="scry-cards">
+            ${pending.cards.map((card, idx) => {
+              const isCandidate = pending.candidates.includes(card);
+              const isSelected = pending.selected.includes(card._uid || card.id || idx);
+              return `
+                <div class="scry-card ${isSelected ? 'scry-keep' : 'scry-away'} ${!isCandidate ? 'scry-nonland' : ''}"
+                     onclick="UIGame.toggleLookTopPermanent(${idx})"
+                     style="${!isCandidate ? 'opacity:0.5;cursor:not-allowed' : 'cursor:pointer'}">
+                  <img src="${card.image_normal || card.image_small}" alt="${card.name}" ${CardZoom.attr(card)}>
+                  <div class="scry-card-label ${isSelected ? 'label-top' : 'label-away'}">
+                    ${isSelected ? '✋ Campo' : isCandidate ? '❌ Fundo' : '⚠️ Inelegivel'}
+                  </div>
+                  <div class="scry-card-name">${card.name}</div>
+                  <div class="scry-card-type" style="font-size:10px;color:#aaa">${card.type_line || ''}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          <button class="btn btn-primary" onclick="UIGame.confirmLookTopPermanent()" ${remainingSelections < 0 ? 'disabled' : ''}>
+            Confirmar${selectedCount < putCount ? ` (${selectedCount}/${putCount})` : ''}
+          </button>
+        </div>
+      </div>
+    `;
+  },
+
   toggleScryCard(index) {
     const gs = this.gameState;
     if (!gs || !gs._pendingScry) return;
@@ -5407,6 +6293,28 @@ const UIGame = {
     this.render();
   },
 
+  toggleLookTopLandCard(cardUid) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingLookTop) return;
+
+    const pending = gs._pendingLookTop;
+    const pickCount = pending.pickCount || 1;
+    const selectedCount = pending.selected ? pending.selected.length : 0;
+
+    const idx = pending.selected.indexOf(cardUid);
+    if (idx >= 0) {
+      // Card is already selected, deselect it
+      pending.selected.splice(idx, 1);
+    } else {
+      // Card is not selected, select it (only if under limit)
+      if (selectedCount < pickCount) {
+        pending.selected.push(cardUid);
+      }
+    }
+
+    this.render();
+  },
+
   confirmLookTop() {
     const gs = this.gameState;
     if (!gs || !gs._pendingLookTop) return;
@@ -5466,6 +6374,151 @@ const UIGame = {
     this._continueIfAI();
   },
 
+  confirmLookTopLand() {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingLookTop) return;
+
+    const pending = gs._pendingLookTop;
+    const pickCount = pending.pickCount || 1;
+    const selectedCount = pending.selected ? pending.selected.length : 0;
+
+    const handCards = [];
+    const bottomCards = [];
+
+    // Process selected lands to hand
+    pending.lands.forEach(land => {
+      if (pending.selected.includes(land.uid)) {
+        handCards.push(land);
+      } else {
+        bottomCards.push(land);
+      }
+    });
+
+    // Add non-land cards to bottom
+    if (pending.nonLands) {
+      bottomCards.push(...pending.nonLands);
+    }
+
+    // Add cards to appropriate zones
+    const player = gs.players[pending.playerId];
+    const lib = player.zones.library;
+
+    handCards.forEach(c => {
+      player.zones.hand.add(c);
+      gs.log.push(`${c.name} (terreno) vai para a mao.`);
+    });
+
+    bottomCards.forEach(c => lib.addToBottom(c));
+
+    if (bottomCards.length > 0) {
+      gs.log.push(`${bottomCards.length} carta(s) vao para o fundo do grimorio.`);
+    }
+
+    gs._pendingLookTop = null;
+    gs.waitingForInput = null;
+
+    // Resume pending stack effects if any
+    if (gs._pendingStackEffects) {
+      const pendingStack = gs._pendingStackEffects;
+      gs._pendingStackEffects = null;
+      const resumeLog = GameStack._resolveItem(
+        { card: pendingStack.card, controller: pendingStack.controller, targets: pendingStack.targets, effects: pendingStack.effects },
+        gs
+      );
+      gs.log.push(...resumeLog);
+    }
+
+    const isMainPhaseAfterLookTop = gs.phase === 'main1' || gs.phase === 'main2';
+    if (isMainPhaseAfterLookTop && gs.activePlayer === 0) {
+      gs.waitingForInput = { type: 'main_phase', playerId: 0 };
+    }
+
+    this.render();
+    this._continueIfAI();
+  },
+
+  toggleLookTopPermanent(index) {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingLookTop) return;
+
+    const pending = gs._pendingLookTop;
+    const putCount = pending.putCount || 0;
+    const card = pending.cards[index];
+    const isCandidate = pending.candidates.includes(card);
+
+    if (!isCandidate) return; // Can't select non-candidates
+
+    const idx = pending.selected.indexOf(card._uid || card.id || index);
+    if (idx >= 0) {
+      // Card is already selected, deselect it
+      pending.selected.splice(idx, 1);
+    } else {
+      // Card is not selected, select it (only if under limit and is candidate)
+      if (pending.selected.length < putCount) {
+        pending.selected.push(card._uid || card.id || index);
+      }
+    }
+
+    this.render();
+  },
+
+  confirmLookTopPermanent() {
+    const gs = this.gameState;
+    if (!gs || !gs._pendingLookTop) return;
+
+    const pending = gs._pendingLookTop;
+    const putCount = pending.putCount || 0;
+
+    // Get selected permanent cards to put on battlefield
+    const toBfCards = pending.candidates.filter(c =>
+      pending.selected.includes(c._uid || c.id || pending.cards.indexOf(c))
+    );
+
+    // Get all other cards (rest go to bottom)
+    const toBottomCards = pending.cards.filter(c => !toBfCards.includes(c));
+
+    // Add cards to appropriate zones
+    const player = gs.players[pending.playerId];
+    const bf = player.zones.battlefield;
+    const lib = player.zones.library;
+
+    // Place selected permanents on battlefield
+    toBfCards.forEach(c => {
+      bf.add(c);
+      gs.log.push(`${c.name} entra no campo.`);
+    });
+
+    // Shuffle remaining cards to bottom of library
+    const shuffled = toBottomCards.sort(() => Math.random() - 0.5);
+    shuffled.forEach(c => lib.addToBottom(c));
+
+    if (shuffled.length > 0) {
+      gs.log.push(`${shuffled.length} carta(s) vao para o fundo do grimorio.`);
+    }
+
+    gs._pendingLookTop = null;
+    gs.waitingForInput = null;
+
+    // Resume pending stack effects if any
+    if (gs._pendingStackEffects) {
+      const pendingStack = gs._pendingStackEffects;
+      gs._pendingStackEffects = null;
+      const resumeLog = GameStack._resolveItem(
+        { card: pendingStack.card, controller: pendingStack.controller, targets: pendingStack.targets, effects: pendingStack.effects },
+        gs
+      );
+      gs.log.push(...resumeLog);
+    }
+
+    const isMainPhaseAfterLookTop = gs.phase === 'main1' || gs.phase === 'main2';
+    if (isMainPhaseAfterLookTop && gs.activePlayer === 0) {
+      gs.waitingForInput = { type: 'main_phase', playerId: 0 };
+    }
+
+    this.render();
+    this._continueIfAI();
+  },
+
   // ========== RAMP LAND CHOICE ==========
 
   _renderRampOverlay(pending) {
@@ -5498,8 +6551,8 @@ const UIGame = {
     return `
       <div class="scry-overlay">
         <div class="scry-box" style="max-width:700px">
-          <h3>Mão Revelada do Oponente</h3>
-          <p class="scry-hint">Escolha uma carta não-terreno para exilar da mão revelada</p>
+          <h3>Aggressive Negotiations</h3>
+          <p class="scry-hint">Escolha uma carta não-terreno da sua mão para exilar</p>
           <div class="scry-cards">
             ${cards.map(card => `
               <div class="scry-card scry-keep" onclick="UIGame.selectHandExileTarget('${card._uid}')" style="cursor:pointer">

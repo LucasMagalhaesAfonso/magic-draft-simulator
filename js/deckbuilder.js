@@ -28,7 +28,12 @@ const DeckBuilder = {
 
     // Count pips from deck cards, and track non-basic lands
     const source = deck.length > 0 ? deck : this.state.pool;
-    source.forEach(card => {
+
+    // Optimize for large collections - cache regex
+    const manaRegex = /\{([WUBRG])\}/g;
+
+    for (let i = 0; i < source.length; i++) {
+      const card = source[i];
       const typeLine = (card.type_line || '').toLowerCase();
 
       // Count non-basic lands that produce colors
@@ -38,21 +43,27 @@ const DeckBuilder = {
           const landColors = typeof ManaSystem !== 'undefined'
             ? ManaSystem.getLandManaColors(card)
             : (card.color_identity || []);
-          for (const c of landColors) {
+          for (let j = 0; j < landColors.length; j++) {
+            const c = landColors[j];
             if (dualLandColors[c] !== undefined) dualLandColors[c]++;
           }
         }
-        return;
+        continue;
       }
 
+      // Count mana symbols more efficiently
       const mc = card.mana_cost || '';
-      (mc.match(/\{([WUBRG])\}/g) || []).forEach(m => {
-        const c = m.replace(/[{}]/g, '');
-        if (colorPips[c] !== undefined) colorPips[c]++;
-      });
-    });
+      if (mc) {
+        let match;
+        manaRegex.lastIndex = 0; // Reset regex state
+        while ((match = manaRegex.exec(mc)) !== null) {
+          const c = match[1];
+          if (colorPips[c] !== undefined) colorPips[c]++;
+        }
+      }
+    }
 
-    const totalPips = Object.values(colorPips).reduce((a, b) => a + b, 0);
+    const totalPips = colorPips.W + colorPips.U + colorPips.B + colorPips.R + colorPips.G;
     if (totalPips === 0) return;
 
     const nonLandCards = deck.length > 0
@@ -62,36 +73,49 @@ const DeckBuilder = {
 
     // Adjust pips by dual land coverage
     const adjustedPips = { ...colorPips };
-    for (const [color, count] of Object.entries(dualLandColors)) {
+    const colorKeys = ['W', 'U', 'B', 'R', 'G'];
+    for (let i = 0; i < colorKeys.length; i++) {
+      const color = colorKeys[i];
+      const count = dualLandColors[color];
       adjustedPips[color] = Math.max(0, adjustedPips[color] - count);
     }
-    const adjustedTotal = Object.values(adjustedPips).reduce((a, b) => a + b, 0);
+
+    const adjustedTotal = adjustedPips.W + adjustedPips.U + adjustedPips.B + adjustedPips.R + adjustedPips.G;
     const distPips = adjustedTotal > 0 ? adjustedPips : colorPips;
     const distTotal = adjustedTotal > 0 ? adjustedTotal : totalPips;
 
-    Object.keys(this.state.lands).forEach(c => {
+    // Calculate land distribution
+    for (let i = 0; i < colorKeys.length; i++) {
+      const c = colorKeys[i];
       if (distPips[c] > 0) {
         this.state.lands[c] = Math.max(1, Math.round((distPips[c] / distTotal) * totalLands));
       } else {
         this.state.lands[c] = 0;
       }
-    });
+    }
 
     // Adjust to hit exactly totalLands
-    let currentTotal = Object.values(this.state.lands).reduce((a, b) => a + b, 0);
-    const activeColors = Object.entries(this.state.lands).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+    let currentTotal = this.state.lands.W + this.state.lands.U + this.state.lands.B + this.state.lands.R + this.state.lands.G;
+    const activeColors = colorKeys.filter(c => this.state.lands[c] > 0).sort((a, b) => this.state.lands[b] - this.state.lands[a]);
 
-    while (currentTotal > totalLands && activeColors.length > 0) {
-      for (const [c] of activeColors) {
-        if (this.state.lands[c] > 1 && currentTotal > totalLands) {
-          this.state.lands[c]--;
-          currentTotal--;
+    // Distribute remaining lands
+    let attempts = 0;
+    while (currentTotal !== totalLands && activeColors.length > 0 && attempts < 20) {
+      if (currentTotal > totalLands) {
+        // Remove lands
+        for (let i = 0; i < activeColors.length && currentTotal > totalLands; i++) {
+          const c = activeColors[i];
+          if (this.state.lands[c] > 1) {
+            this.state.lands[c]--;
+            currentTotal--;
+          }
         }
+      } else {
+        // Add lands
+        this.state.lands[activeColors[0]]++;
+        currentTotal++;
       }
-    }
-    while (currentTotal < totalLands && activeColors.length > 0) {
-      this.state.lands[activeColors[0][0]]++;
-      currentTotal++;
+      attempts++;
     }
   },
 
@@ -114,17 +138,55 @@ const DeckBuilder = {
   },
 
   addAllToDeck() {
-    this.state.deck.push(...this.state.pool);
-    this.state.pool = [];
-    this._autoSuggestLands();
-    this.render();
+    // Prevent multiple clicks during processing
+    const button = event?.target;
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Processando...';
+    }
+
+    // Use setTimeout to prevent UI blocking for large pools
+    setTimeout(() => {
+      try {
+        // More efficient way to move cards (avoid spread operator issues)
+        while (this.state.pool.length > 0) {
+          this.state.deck.push(this.state.pool.pop());
+        }
+
+        this._autoSuggestLands();
+        this.render();
+      } catch (error) {
+        console.error('Error adding all cards to deck:', error);
+        this._showToast('Erro ao adicionar cartas. Tente novamente.');
+        this.render(); // Ensure UI is restored even on error
+      }
+    }, 10);
   },
 
   removeAllFromDeck() {
-    this.state.pool.push(...this.state.deck);
-    this.state.deck = [];
-    this._autoSuggestLands();
-    this.render();
+    // Prevent multiple clicks during processing
+    const button = event?.target;
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Processando...';
+    }
+
+    // Use setTimeout to prevent UI blocking for large decks
+    setTimeout(() => {
+      try {
+        // More efficient way to move cards
+        while (this.state.deck.length > 0) {
+          this.state.pool.push(this.state.deck.pop());
+        }
+
+        this._autoSuggestLands();
+        this.render();
+      } catch (error) {
+        console.error('Error removing all cards from deck:', error);
+        this._showToast('Erro ao remover cartas. Tente novamente.');
+        this.render(); // Ensure UI is restored even on error
+      }
+    }, 10);
   },
 
   setLandCount(color, count) {
@@ -218,7 +280,17 @@ const DeckBuilder = {
   },
 
   render() {
+    // Debounce rapid renders to prevent UI blocking
+    if (this._renderTimeout) {
+      clearTimeout(this._renderTimeout);
+    }
+    this._renderTimeout = setTimeout(() => this._doRender(), 0);
+  },
+
+  _doRender() {
     const container = document.getElementById('screen-deckbuilder');
+    if (!container) return;
+
     const deckSorted = this._sortCards(this.state.deck, this.state.sortBy);
     const poolSorted = this._sortCards(this.state.pool, this.state.sortBy);
     const totalSize = this.getTotalDeckSize();
@@ -240,7 +312,7 @@ const DeckBuilder = {
           </div>
           <div class="db-actions">
             <button class="btn btn-secondary btn-sm" onclick="DeckBuilder.autoBuild()">Auto-Build</button>
-            <button class="btn btn-secondary btn-sm" onclick="DeckBuilder.addAllToDeck()">Add Tudo</button>
+            <button class="btn btn-secondary btn-sm" onclick="DeckBuilder.addAllToDeck()" disabled title="Temporariamente desabilitado">Add Tudo</button>
             <button class="btn btn-secondary btn-sm" onclick="DeckBuilder.removeAllFromDeck()">Remover Tudo</button>
             <button class="btn btn-secondary btn-sm" onclick="DeckBuilder.exportDeck()">Exportar</button>
             <button class="btn btn-secondary btn-sm" onclick="DeckBuilder.saveDeck()">Salvar</button>
@@ -311,7 +383,10 @@ const DeckBuilder = {
               <div class="db-card" ${CardZoom.attr(c)} onclick="DeckBuilder.removeFromDeck('${c._uid}')"
                    onmouseenter="Draft._showPreview('${c.image_large || c.image_normal}')"
                    onmouseleave="Draft._hidePreview()">
-                <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                <div class="card-image-container">
+                  <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                  <button class="card-art-button" onclick="event.stopPropagation(); DeckBuilder.openArtPickerDb('${c._uid}')" title="Escolher arte">🎨</button>
+                </div>
                 <div class="card-rarity-dot ${c.rarity}"></div>
               </div>
             `).join('')}
@@ -326,7 +401,10 @@ const DeckBuilder = {
                   <div class="db-card" ${CardZoom.attr(c)} onclick="DeckBuilder.removeFromDeck('${c._uid}')"
                        onmouseenter="Draft._showPreview('${c.image_large || c.image_normal}')"
                        onmouseleave="Draft._hidePreview()">
-                    <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                    <div class="card-image-container">
+                      <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                      <button class="card-art-button" onclick="event.stopPropagation(); DeckBuilder.openArtPickerDb('${c._uid}')" title="Escolher arte">🎨</button>
+                    </div>
                     <div class="card-rarity-dot ${c.rarity}"></div>
                   </div>
                 `).join('')}
@@ -357,7 +435,10 @@ const DeckBuilder = {
               <div class="db-card pool-card" ${CardZoom.attr(c)} onclick="DeckBuilder.addToDeck('${c._uid}')"
                    onmouseenter="Draft._showPreview('${c.image_large || c.image_normal}')"
                    onmouseleave="Draft._hidePreview()">
-                <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                <div class="card-image-container">
+                  <img src="${c.image_normal || c.image_small}" alt="${c.name}" loading="lazy">
+                  <button class="card-art-button" onclick="event.stopPropagation(); DeckBuilder.openArtPickerDb('${c._uid}')" title="Escolher arte">🎨</button>
+                </div>
                 <div class="card-rarity-dot ${c.rarity}"></div>
               </div>
             `).join('')}
@@ -370,6 +451,8 @@ const DeckBuilder = {
       <div class="card-preview" id="card-preview" style="display:none">
         <img id="card-preview-img" src="" alt="Preview">
       </div>
+
+      ${this.renderArtPickerModalDb()}
     `;
   },
 
@@ -1010,5 +1093,72 @@ const DeckBuilder = {
       (c.colors || c.color_identity || []).forEach(cl => colors.add(cl));
     });
     return [...colors].map(c => `<span class="mana-${c}">${colorMap[c] || c}</span>`).join('');
+  },
+
+  // ========== ART PICKER FOR DECKBUILDER ==========
+  _artPickerCardDb: null,
+  _artPickerArtsDb: [],
+
+  async openArtPickerDb(cardUid) {
+    // Find card in deck or pool
+    let card = this.state.deck.find(c => c._uid === cardUid);
+    if (!card) {
+      card = this.state.pool.find(c => c._uid === cardUid);
+    }
+    if (!card) return;
+
+    // Fetch available arts
+    const arts = await CardEngine.getAvailableArts(card);
+    if (arts.length <= 1) {
+      alert('Essa carta não possui artes alternativas');
+      return;
+    }
+
+    this._artPickerCardDb = card;
+    this._artPickerArtsDb = arts;
+    this.render();
+  },
+
+  closeArtPickerDb() {
+    this._artPickerCardDb = null;
+    this._artPickerArtsDb = [];
+    this.render();
+  },
+
+  selectArtDb(artIndex) {
+    if (!this._artPickerCardDb || !this._artPickerArtsDb[artIndex]) return;
+    CardEngine.setSelectedArt(this._artPickerCardDb, artIndex);
+    this.closeArtPickerDb();
+  },
+
+  renderArtPickerModalDb() {
+    if (!this._artPickerCardDb || !this._artPickerArtsDb || this._artPickerArtsDb.length === 0) return '';
+
+    return `
+      <div class="modal-overlay" onclick="DeckBuilder.closeArtPickerDb()">
+        <div class="modal-dialog art-picker-modal" onclick="event.stopPropagation()">
+          <div class="modal-header">
+            <h3>🎨 Escolher Arte</h3>
+            <p>${this._artPickerCardDb.name}</p>
+          </div>
+          <div class="modal-body art-picker-body">
+            <div class="art-grid">
+              ${this._artPickerArtsDb.map((art, idx) => `
+                <div class="art-option" onclick="DeckBuilder.selectArtDb(${idx})">
+                  <img src="${art.image}" alt="Arte ${idx + 1}" loading="lazy">
+                  <div class="art-info">
+                    <small>${art.setName}</small>
+                    <small>#${art.collector}</small>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="DeckBuilder.closeArtPickerDb()">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 };

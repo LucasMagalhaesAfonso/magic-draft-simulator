@@ -88,7 +88,22 @@ const CardZoom = {
 
   // Helper to generate data-zoom attribute for any card
   attr(card) {
-    const url = card.image_large || card.image_normal || card.image_small || '';
+    let url = '';
+
+    // Check if card has selected art
+    if (card._selectedArtIndex !== undefined && card._allPrints && card._allPrints[card._selectedArtIndex]) {
+      const selectedPrint = card._allPrints[card._selectedArtIndex];
+      // Try to find large image from selected print
+      url = selectedPrint.image_uris?.large ||
+            selectedPrint.image_uris?.normal ||
+            selectedPrint.image_large ||
+            selectedPrint.image_normal ||
+            selectedPrint.image_small || '';
+    } else {
+      // Use default image if no art selected
+      url = card.image_large || card.image_normal || card.image_small || '';
+    }
+
     return url ? `data-zoom="${url}"` : '';
   }
 };

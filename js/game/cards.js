@@ -96,6 +96,9 @@ const CardEngine = {
 
   // Get activated abilities - check database first (excludes loyalty and graveyard abilities)
   getActivatedAbilities(card) {
+    // If creature loses all abilities (e.g., Fresh Start), return empty
+    if (card._losesAllAbilities) return [];
+
     const db = this.getPreprocessedEffects(card);
     if (db && db.activated) return db.activated.filter(a =>
       (!a.cost || !a.cost.zone || a.cost.zone !== 'graveyard') &&
@@ -112,6 +115,24 @@ const CardEngine = {
     }
 
     return this.parseActivatedAbilities(card);
+  },
+
+  // Get mana-generating abilities (for smart auto-tap)
+  getManaAbilities(card) {
+    const abilities = [];
+    const allAbilities = this.getActivatedAbilities(card);
+
+    for (const ability of allAbilities) {
+      // Check if this ability generates mana
+      if (ability.effects && Array.isArray(ability.effects)) {
+        const hasManaEffect = ability.effects.some(e => e.type === 'add_mana');
+        if (hasManaEffect) {
+          abilities.push(ability);
+        }
+      }
+    }
+
+    return abilities;
   },
 
   // Get loyalty abilities (planeswalker only)
@@ -332,17 +353,17 @@ const CardEngine = {
     return true;
   },
 
-  canBlock(card, attacker) {
+  canBlock(card, attacker, gameState = null) {
     if (!this.isCreature(card)) return false;
     if (card._tapped) return false;
     if (card._cantBlockThisTurn) return false;
 
     // Unblockable: attacker with unblockable static or keyword can't be blocked
-    if (attacker._unblockable || this.hasKeyword(attacker, 'Unblockable')) return false;
+    if (attacker._unblockable || this.hasKeyword(attacker, 'Unblockable', gameState)) return false;
 
     // Flying - can only be blocked by flying or reach
-    if (this.hasKeyword(attacker, 'Flying')) {
-      if (!this.hasKeyword(card, 'Flying') && !this.hasKeyword(card, 'Reach')) {
+    if (this.hasKeyword(attacker, 'Flying', gameState)) {
+      if (!this.hasKeyword(card, 'Flying', gameState) && !this.hasKeyword(card, 'Reach', gameState)) {
         return false;
       }
     }
@@ -1176,6 +1197,11 @@ const CardEngine = {
     return true;
   },
 
+  // Check if a creature loses all abilities (e.g., from Fresh Start aura)
+  losesAllAbilities(card) {
+    return !!card._losesAllAbilities;
+  },
+
   // === Type checks ===
 
   isAura(card) {
@@ -1186,6 +1212,18 @@ const CardEngine = {
   isEquipment(card) {
     const typeLine = (card.type_line || '').toLowerCase();
     return typeLine.includes('artifact') && typeLine.includes('equipment');
+  },
+
+  isLegendary(card) {
+    const typeLine = (card.type_line || '').toLowerCase();
+    return typeLine.includes('legendary');
+  },
+
+  // Find legendary cards with the same name on the battlefield
+  findLegendaryDuplicates(gameState, playerId, cardName) {
+    return gameState.players[playerId].zones.battlefield.cards.filter(
+      c => this.isLegendary(c) && c.name === cardName
+    );
   },
 
   // === Aura effects ===
@@ -1659,5 +1697,87 @@ const CardEngine = {
     }
 
     return abilities;
+  },
+
+  // ========== ART PICKER SYSTEM ==========
+
+  // Get available arts for a card from Scryfall
+  async getAvailableArts(card) {
+    try {
+      // Use cards already fetched or fetch from Scryfall
+      if (card._allPrints && Array.isArray(card._allPrints)) {
+        // Already cached all prints
+        return card._allPrints.map((print, idx) => ({
+          index: idx,
+          image: print.image_uris?.small || print.image_uris?.normal || print.image_small || print.image_normal,
+          imageSmall: print.image_uris?.small || print.image_small,
+          imageNormal: print.image_uris?.normal || print.image_normal,
+          url: print.scryfall_uri,
+          setName: print.set_name,
+          collector: print.collector_number,
+          fullArt: print.full_art || false,
+          borderless: print.borderless || false,
+          foil: print.foil || false
+        }));
+      }
+
+      // Fetch from Scryfall if not cached
+      const searchUrl = `https://api.scryfall.com/cards/search?q=!"${encodeURIComponent(card.name)}"&unique=prints&order=released&dir=desc`;
+      const response = await fetch(searchUrl);
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      if (!data.data || data.data.length === 0) return [];
+
+      // Cache all prints on the card object
+      card._allPrints = data.data;
+
+      return data.data.map((print, idx) => ({
+        index: idx,
+        image: print.image_uris?.small || print.image_uris?.normal || print.image_small || print.image_normal,
+        imageSmall: print.image_uris?.small || print.image_small,
+        imageNormal: print.image_uris?.normal || print.image_normal,
+        url: print.scryfall_uri,
+        setName: print.set_name,
+        collector: print.collector_number,
+        fullArt: print.full_art || false,
+        borderless: print.borderless || false,
+        foil: print.foil || false
+      }));
+    } catch (e) {
+      console.warn('Failed to fetch card arts:', e);
+      return [];
+    }
+  },
+
+  // Get currently selected art for a card
+  getSelectedArt(card) {
+    if (card._selectedArtIndex !== undefined && card._allPrints) {
+      const print = card._allPrints[card._selectedArtIndex];
+      if (print) {
+        return print.image_uris?.small || print.image_uris?.normal || print.image_small || print.image_normal;
+      }
+    }
+    return card.image_small || card.image_normal;
+  },
+
+  // Set selected art for a card
+  setSelectedArt(card, artIndex) {
+    if (card._allPrints && card._allPrints[artIndex]) {
+      card._selectedArtIndex = artIndex;
+      const print = card._allPrints[artIndex];
+      // Update with correct image URIs from Scryfall
+      if (print.image_uris) {
+        card.image_small = print.image_uris.small;
+        card.image_normal = print.image_uris.normal;
+        card.image_uris = print.image_uris;
+      } else {
+        // Fallback to direct image properties
+        card.image_small = print.image_small;
+        card.image_normal = print.image_normal;
+      }
+      return true;
+    }
+    return false;
   }
 };

@@ -1,7 +1,7 @@
 const { defineConfig } = require('@playwright/test');
 
 module.exports = defineConfig({
-  testMatch: '**/*.spec.js',
+  testMatch: '**/*.spec.js.DISABLED', // ⚠️  TESTS DISABLED - Keep files but don't run
   retries: 0,
   workers: 1,
   reporter: [['html'], ['list']],

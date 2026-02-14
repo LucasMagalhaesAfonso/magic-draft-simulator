@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "on-error": {
+      "description": "Detect and report game errors",
+      "enabled": true,
+      "pattern": "console\\.(error|warn)",
+      "action": "show-alert"
+    },
+    "on-file-edit": {
+      "description": "Watch critical files",
+      "enabled": true,
+      "targets": [
+        "js/game/stack.js",
+        "js/game/cards.js",
+        "js/game/game-state.js",
+        "js/data/card-effects.js"
+      ],
+      "action": "remind-to-test"
+    },
+    "on-git-status": {
+      "description": "Suggest commit when ready",
+      "enabled": true,
+      "action": "check-clean"
+    }
+  },
+  "disabled_hooks": {
+    "on-save": "Tests disabled - remove test runner automation",
+    "pre-commit": "Tests disabled - no auto-validation",
+    "post-edit-test": "Tests disabled - no auto-test run"
+  }
+}

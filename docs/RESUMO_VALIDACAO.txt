@@ -1,0 +1,108 @@
+═══════════════════════════════════════════════════════════════════════════
+                    🎯 RESUMO - SISTEMA DE VALIDAÇÃO
+═══════════════════════════════════════════════════════════════════════════
+
+✅ IMPLEMENTADO (Phase 1 + Phase 2)
+
+1. FERRAMENTAS CRIADAS (5 arquivos):
+   ├─ tools/ai-validator.js ........... AI semantic validation (c/ Claude API)
+   ├─ tools/static-validator.js ....... Fast checks (15 validações automáticas)
+   ├─ tools/validate-card.js .......... CLI interface (completo)
+   ├─ tools/validate-single.js ........ 1 carta + fixes automáticos (NOVO)
+   └─ tools/demo-validator.js ......... Demo sem API key (NOVO)
+
+2. TESTE PRÁTICO: SAGE OF THE SKIES
+
+   Problema encontrado:
+   ├─ Trigger usa "second_spell" (ERRADO)
+   │  └─ Dispara para QUALQUER card, não só Sage
+   └─ Falta condition gate (ERRADO)
+      └─ Não verifica "if you cast another spell"
+
+   Fixes aplicados:
+   ├─ ✅ js/data/card-effects.js:539
+   │  └─ Mudou: event: "second_spell" → event: "cast_spell" com self: true
+   ├─ ✅ js/data/card-effects.js:541
+   │  └─ Adicionou: condition: "cast_with_another_spell"
+   └─ ✅ js/game/game-state.js:497
+      └─ Implementou nova condition no engine
+
+3. VERIFICAÇÕES AUTOMÁTICAS (15+):
+   ✅ ETB effects            ✅ Optional flags      ✅ Fight mechanics
+   ✅ Cast effects           ✅ Graveyard abilities ✅ Modal spells
+   ✅ Triggered abilities    ✅ Target indexing     ✅ Equipment config
+   ✅ Keywords               ✅ Sacrifice costs     ✅ Transform/DFC cards
+
+═══════════════════════════════════════════════════════════════════════════
+
+🚀 COMO USAR AGORA
+
+Validar uma carta:
+  $ node tools/validate-single.js "Sage of the Skies"
+
+Com verbose:
+  $ node tools/validate-single.js "Sage of the Skies" --verbose
+
+Ver demo (sem API key):
+  $ node tools/demo-validator.js
+
+═══════════════════════════════════════════════════════════════════════════
+
+📊 RESULTADOS
+
+Antes:
+┌─────────────────────────────────────────────┐
+│ SAGE OF THE SKIES                           │
+│ Trigger: event: "second_spell"              │ ❌ ERRADO
+│ Sem condition gate                          │ ❌ FALTANDO
+│ Score: 42/100 ❌                            │
+└─────────────────────────────────────────────┘
+
+Depois:
+┌─────────────────────────────────────────────┐
+│ SAGE OF THE SKIES                           │
+│ Trigger: event: "cast_spell", self: true    │ ✅ CORRETO
+│ Condition: "cast_with_another_spell"        │ ✅ ADICIONADO
+│ Pronto para testar no browser               │
+└─────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════
+
+⏭️  PRÓXIMOS PASSOS (Opcional - só se vir ganho real)
+
+Se quiser validar TODAS as 277 cartas:
+  $ node tools/validate-set.js tdm --report
+
+Isso geraria:
+  - Relatório de todas as cartas
+  - Top 10 bugs mais críticos
+  - Scores por categoria
+  - Tempo estimado para fixar
+
+═══════════════════════════════════════════════════════════════════════════
+
+📝 ARQUIVOS ALTERADOS
+
+Criados:
+  + tools/ai-validator.js
+  + tools/static-validator.js
+  + tools/validate-card.js
+  + tools/validate-single.js (NOVO)
+  + tools/demo-validator.js (NOVO)
+  + .env.example
+  + VALIDATION_REPORT.md
+  + RESUMO_VALIDACAO.txt
+
+Modificados:
+  ~ js/data/card-effects.js .................. Sage fix
+  ~ js/game/game-state.js ................... Condition support
+
+═══════════════════════════════════════════════════════════════════════════
+
+🎯 CONCLUSÃO
+
+Sistema está funcional! Detectou bug real na Sage of the Skies e aplicou fix.
+
+Próximo: Testar no browser se funciona corretamente.
+
+═══════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,120 @@
+cartas seguem quebradas.. acho q ele pulou varios testes...
+achoq ue vou ter que ir carta a carta falando oq ue tem quef azer e pegando bug...
+
+listar todos erros aqui conforme for pegando e pedir para ele corrigir...
+
+Princípios dos Testes Anti-Bug:
+
+  1. Diferença Humano vs IA: Humanos devem ter prompts, IA deve ser automática
+  2. Auditoria de Efeitos: Detectar cartas que deveriam ser interativas mas não são
+  3. Teste de Estado: Verificar waitingForInput e _pendingChoice flags
+  4. Cobertura Completa: Testar todos os tipos de escolha (modal, scry, look_top, hideaway, etc.)
+
+
+PARA TESTAR
+- Rescue Leopard ta triggando a habilidade mas nao funciona.. nao ta deixando eu descartar a carta para comprar outro.. so dispara ahablidade e e isso..
+- Trade Route Envoy ta botando marcardor +1+1 e comprando uma carta se tiver outra critura com marcado..
+- Evolving Wilds ta errado, virando e gerando uma mana incolor ao inves de sacrififcar e pegar uma mana
+- Feral Deathgorger // Dusk Sight e embaralhado na biblioteca (Omen). mas o efeito nao aconteceu... ou foi automatic.. nao ta deixando eu exilar carta do meu cemiterio ou scolher
+- Adorned Crocodile nao deixando eu escolher em quem botar o marcador e sem csuto 
+- Aggressive negotiation travando na hora de descaratr da mao..
+- Awaken the Honored Dead nao destruiu a criatura alvo, millou as 3 cartas mas nao mostrou animacao nem modal nem nada..terceiro capitulo nao triggou.. automaticamente falou ue optei por nao descartar sem me dar possbilidade de nada...
+- Embermouth Sentinel nao ta triggando sem dragao (e nao sei se trigga com Dragao tb)
+- Traveling Botanist ta triggando mas nao ta revelando o topo.. tem que abrir um modal.. e caso for manda permitir botar na mao...
+- CONTINUA COM ERRO Breaching Dragonstorm ta exilando mas nao ta deixando castar em pagar o custo de mana.. mesmo exliando uma carta custo 3...e ao inves de botar na mao ta sendo exilado para sempre
+- cartas de mana hibrida erradas
+- tanyback nao triggando
+- Runescale Stormbrood // Chilling Screech e embaralhado na biblioteca (Omen). nao ta funcionando o Omen, nao ta dando chance de counter e ta deixando da target em anda...
+- Harmonize nao ta aparecendo para jogar proximo da mao... nao acho que nem da para ser ativado na real...Apareceu o Harmonize mas so quando eu podia castar... achoq ue podia deixar na divisao da mao sempre mas se nao puder castar fica cinza igual na mao
+- Harmonize nao ta me dando a opcao de ocmo castar.. se vou virar uma criatura para pagar o custo ou nao...
+- Disruptive Stormbrood errado... quando joguei ele como dragao eu tive que dar um target... nao pude nao dar, mas e opcional.. escolhi uma criatura (sendo ue nao pode) eele matou a criatura..
+- Geradores de mana (como o dragon globe) nao ta considerando automaticamente virar mana para as cartas... so entender quando eu uso a habilidade para virar a mana na pool
+- Counter nao funciona entao Dispeling Exhale nao funciona
+- Temur battlecrier nao tem anda indicando o custo reduzido.. 
+- Surrak nao ta funcionando.. sofre target do opponent e nao comprei carta
+- Fresh start ta errado.. castei e ele sumiu do campo..
+- Arashin Sunshield errado.. nao permiteu escolher o alvo do exilio
+- Caustic Exhale nao me permit escolher revelar um dragao.. automaticamente ja revelou.. e acho que quando o oponente revela eu nao to vendo a carta...
+- Jeskai devote errado, ta adicionando jeskai mana ao inves de uma mana so podendo escolher...flurry funciona
+- Overwhelming Surge abriu o modal, botei para dar 3 de dano na criatura mas nao aconteceu
+Osseous Exhale errado..ta permitindo castar mesmo sem ser attacker ou blocker, ai ele gasta a mana e nao ta dando para voltar a mana.. a carta nao e castada, mas a mana fica na pool e nao consigo voltar... 
+- Ugin ta exilando quando entra mas ta bem estranho a UI UX.. ele nao diz nada de dar alvo, so fica na mao cinza como se nao tivesse funcionado...alem disso a habilidade estatica de castar outra permanente incolor nao ta funcioanndo, na verdade trigou uma vez e outra nao... meio estranho... preciso melhorar..tambem nao sei como ta funcionando o ataque no planeswalker.. provavelmente nao ta implementado. e acho que ele ta exilando 2 s ezes... e o ult nao ta aparecendo....tirando isso, parece ok haha
+- Tem que implementar o dano a planinalta e any target tambem
+- dragon prey nao funcinou qd opoente tentou matar minha critaura..
+- Unsparing Boltcaster nao ta funcionadno.. ate deu alvo mas nao deu o dano
+- Champion of Dusan quase bom... mas acho que ta selecionando automatic o marcador.. ou o clique foi pra carta errada que cliquei..e achoq ue nao custou mana...
+-Stormplain Detainment carta exilada nao esta embaixo do encatamento.. e se destruir encatamente nao sei se ta voltando para o campo
+- Dragons Prey nao deixou eu castar no dragao mas mesmo bug de botar a mana na pool ao inves de voltar tudo...e nao ta deixando apgar 5 para matar dragao	
+- Sarkhan resolve nao abrindo modal de escolha das opcoes
+- Renew ta podendo ser usado sem pagar mana..
+- Purging Stormbrood nao triggando..
+-  Glacierwood Siege ta millando sozinho.. as vezes quero me millar mas ele nao ta deixando...
+- Dragonbroods relic nao permitindo escolher qual criatura eu viro..e tambem ta virando sem ter criatura.. nao gera mana mas nao deixa eu voltar entao eu so viro atoa..e dragao nao ta triggando o etb dele.. e nao tem lifelink e fly
+- United Battlefront nao mostrando s cartas reveladas e nao sei se triggou corretamente..
+- Frostcliff siege nao dando impeto para todas criaturas.. so uma aprantemnte
+- Digur Island Dragon nao ta virando critura ou ta automatic sem eu escolher
+- Severence Pritest MT errado.. exilando do campo, sem oponente revelar a mao.. e acho que nao ta ficando embaxio a carta dele para depois ter o trigger negativo se morrer..
+-Sultai monument procurando mana branca..
+- Strategic betrayal ta deixando eu dar target em quem que quero q ele sacrifique..nao everia, e nao exiliou cemiterio
+- Duty Beyond Death nao dando indestrutivel te o fim do turno ou esta deixando morrer antes de acabar o turno
+- Glacial Dragonhunt mtt errado
+- kin-tree severance nao funcioandno o custo mana.e nao funciona...
+- Host of the Hereafter nao ntrou com marcador e nao sei se ta triggando?
+- Skirmish Rhino parece ok mas acho que ta sme trample
+- Marang River Regent // Coil and Catch e embaralhado na biblioteca (Omen). Omen ta funcionando rrado !Marang River Regent etb nao ta dando bounce
+- Starry eyed Skyrider nao dando fly pros tokens da IA
+-Thunder Unity trigger 2 ta consdierando qq permantente nao so criatura, e 3 achoq ue nao fica ativo pq destroy a saga
+-Sunpearl Kirin ta triggando bounce na criatura do oponente...
+- Piercing Exhale errado
+- Treasure ta errado... ta adicionando todas cores e deveria ser somente 1 que eu escolher das 5
+- Great Arashin City nao ta ficando em pe se tenho floresta ou pantano.. 
+- Equilibrium adept ta ficando somente ate o fim do mesmo turno nao do outro turno (end of next turn)...e flurry nao ta dando double strike
+- Sagu pummeler nao deixando escolher em quem ponho o marcador
+- Dragonback assault ta tudo ok mas nao triggou na segunda mana do evolving wilds
+- Dragon globe nao ta dando marcador pros tokens de dragao(e eria) ou o token nao ta entrnado como dragao
+- Dragonstorm forecast nao ta deixando eu escolher entre dragon globo ou o boldeborn dragao
+- Focus de mind sem flurry para custar menos
+- Karyakyk guardians sem hexproof
+- Cartas de anule seguem nao funcionando...
+- Whirlwing Stormbrood nao ta dando flash pros meus dragoes..
+
+
+
+LISTA COM TODOS OS ERROS AINDA EM VIGOR
+
+
+- worthy cost ta quase bom.. mas se eu sacrificar a criatura e desistir depois eu nao consigo voltar...
+- Naga Fleshcrafter bem errado .. implatacao dessa vai ser dificil
+- Taigam nao ta triggando
+- Ainock Wayfare nao ta abrindo modal.. mesmo que nao tenha mana para escolher acho qeu tinahq ue ter algo visual.. tenho ue pensar como..
+- combate e bloqueio ta meio confusinho ainda...
+- depois de declarar o bloqueio ele implementes nao ta deixando eu nao bloqeuar.. nem confirmei o bloqueio, so de cliclar ele loca e ja era... alem disso se clico nas minhas proproas criaturas para fazer um double bloc ele nao entender.. tenho que ir um a um
+- bug visual osso.. olhar image copy 6
+- quando bloqueia com mais de 1 e precisa selecionar quem vai causar dano antes ta travando.. ate "deixa"escolher mas nao da para confrimar ate o fim
+-autopass nao mt funcioonal ainda..
+- mecaninca do jogo pre combate errada... nao deixou eu virar a criatura antes do ataque..
+- Surveil 2 nao ta deixando scolher a ordem de qual fica em cima ou embaixo
+- Melhorar muito a UI/UX.. principalmente questao e modal, poder ver o campo de batalha voltar e etc..
+- jogo ta cheio de ecra? errado, acentos e etc tudo disconfigurado
+- jogo trvaou do nada.."GET /img/sprites/fire_1.png HTTP/1.1" 304 
+::1 - - [11/Feb/2026 14:11:23] code 404, message File not found
+::1 - - [11/Feb/2026 14:11:23] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+- Summit Intimidator ta virando a criatura ao inves de nao deixar bloquear
+erro: 31cards.js:202 Uncaught TypeError: k.toLowerCase is not a function
+    at cards.js:202:62
+    at Array.some (<anonymous>)
+    at Object.hasKeyword (cards.js:202:50)
+    at Object.hasHexproof (cards.js:891:17)
+    at Object.canBeTargeted (cards.js:1173:14)
+    at Object._renderBfCard (ui-game.js:1049:36)
+    at ui-game.js:967:33
+    at Array.map (<anonymous>)
+    at Object._renderBattlefield (ui-game.js:967:19)
+    at Object.render (ui-game.js:541:20)
+
+
+
+RESOLVIDOS DA LISTA:
+- Sagu wildling omen botando mano no BF
+- Dual e Tri land so gerando mana de uma cor...
+- uma criatura ta podendo bloquear duas.. loucura

@@ -1,0 +1,27 @@
+🧪 TESTE SAGE - INSTRUÇÕES FINAIS
+
+1. Abra o jogo:
+   http://127.0.0.1:8080
+
+2. Pressione F12 (Console)
+
+3. Cole ISTO:
+   const script = document.createElement('script');
+   script.src = 'test-sage-final.js';
+   document.head.appendChild(script);
+
+4. Vá para a tela de DRAFT
+
+5. Clique "Pular pro Jogo"
+
+6. Pronto! Cards vão estar PLAYÁVEIS:
+   ✅ 3x Sage of the Skies (na mão)
+   ✅ 1x Test Creature {W}
+   ✅ 15x Plains (mana pra jogar)
+
+7. TESTE O TRIGGER:
+   - Cast Test Creature
+   - Cast Sage of the Skies
+   - Check: Token copy criado?
+
+🎮 Let's go!

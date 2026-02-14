@@ -1,0 +1,14 @@
+{
+  "skills": [
+    {
+      "name": "fix-card",
+      "description": "Fix card bugs with 5-phase protocol (Scryfall → Analysis → Fix → Validation)",
+      "file": ".claude/skills/fix-card.md",
+      "usage": "/fix-card <card-name> \"<error-description>\"",
+      "examples": [
+        "/fix-card Zurgo \"não causa dano ao bloquear\"",
+        "/fix-card \"Sagu Pummeler\" \"efeito ETB não ativa\""
+      ]
+    }
+  ]
+}

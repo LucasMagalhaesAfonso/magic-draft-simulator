@@ -1,0 +1,115 @@
+{
+  "skills": [
+    {
+      "name": "run-game",
+      "description": "Start local server + open game in browser",
+      "command": "npm start && start \"\" \"index.html\"",
+      "category": "quick-start",
+      "hotkey": "alt+g"
+    },
+    {
+      "name": "process-set",
+      "description": "Analyze MTG set: fetch all cards, validate effects, map mechanics",
+      "parameters": {
+        "code": "Set code (e.g., 'ECL', 'TDM', 'LRW')",
+        "validate": "Validate effects in CardEffectsDB? (default: true)"
+      },
+      "category": "analysis",
+      "notes": "Uses Scryfall API, runs in subagent (Explore)"
+    },
+    {
+      "name": "find-card",
+      "description": "Search CardEffectsDB + show card status",
+      "parameters": {
+        "name": "Card name (fuzzy match)",
+        "show_effects": "Show parsed effects? (default: true)"
+      },
+      "category": "lookup",
+      "example": "/find-card Zurgo"
+    },
+    {
+      "name": "validate-effects",
+      "description": "Validate all CardEffectsDB entries",
+      "checks": [
+        "Syntax validation",
+        "Effect type exists in stack.js",
+        "ETB regex matches",
+        "Keyword detection works",
+        "Cost format correct"
+      ],
+      "category": "validation",
+      "output": "Report of errors + warnings"
+    },
+    {
+      "name": "test-layer",
+      "description": "Run specific test layer manually",
+      "parameters": {
+        "layer": "Layer name (completeness, effect-runtime, etc)",
+        "headed": "Show browser? (default: false)"
+      },
+      "category": "testing",
+      "note": "Tests are disabled by default - use this to run specific test"
+    },
+    {
+      "name": "build-deck",
+      "description": "Generate deck from available cards",
+      "parameters": {
+        "strategy": "BREAD (default), aggressive, control",
+        "format": "Show as text or JSON? (default: text)"
+      },
+      "category": "tools",
+      "uses": "BotAI.buildDeck() with BREAD scoring"
+    },
+    {
+      "name": "debug-state",
+      "description": "Dump current game state (if game running)",
+      "parameters": {
+        "player": "Player ID (0 or 1, default: both)",
+        "zone": "Zone to inspect (hand, bf, gy, library)"
+      },
+      "category": "debugging",
+      "requires": "Game running in browser"
+    },
+    {
+      "name": "fix-card",
+      "description": "MAIN COMMAND - Fix card with error following complete protocol",
+      "parameters": {
+        "card_name": "Card name (required)",
+        "error_description": "What's broken (required)"
+      },
+      "category": "fix-bug",
+      "hotkey": "ctrl+alt+f",
+      "workflow": "See .claude/FIX_CARD_PROTOCOL.md",
+      "example": "/fix-card Zurgo \"dano ao bloquear não funciona\"",
+      "phases": [
+        "1. Busca Scryfall → oracle_text completo",
+        "2. Entender erro → qual habilidade está bugada",
+        "3. Análise código → CardEffectsDB + Stack.js + Cards.js",
+        "4. Corrigir → adicionar/ajustar código",
+        "5. Validação 100% → confirmar tudo funciona"
+      ],
+      "guarantee": "Carta funcionará 100% de acordo com Scryfall após conclusão"
+    },
+    {
+      "name": "check-console",
+      "description": "Read browser console errors",
+      "filters": {
+        "errors_only": "Show only errors? (default: true)",
+        "pattern": "Regex pattern to filter messages"
+      },
+      "category": "debugging",
+      "requires": "Browser tab open"
+    }
+  ],
+  "keyboard_shortcuts": {
+    "alt+g": "run-game",
+    "alt+v": "validate-effects",
+    "alt+f": "find-card (then type name)",
+    "ctrl+shift+d": "debug-state"
+  },
+  "workflow_tips": {
+    "quick_fix": "Run game → Find card → Check console → Edit file → Manual test",
+    "new_set": "Process set → Validate effects → Add to DB → Run game → Test",
+    "bug_hunt": "Check console → Debug state → Find culprit file → Edit → Test"
+  }
+}

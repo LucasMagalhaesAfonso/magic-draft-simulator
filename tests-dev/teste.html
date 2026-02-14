@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Guia Avançado do Claude Code</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Fonte -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- Highlight.js -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+
+  <style>
+    :root {
+      --bg: #0f172a;
+      --sidebar: #020617;
+      --card: #020617;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --border: #1e293b;
+      --code-bg: #020617;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+    }
+
+    aside {
+      width: 280px;
+      background: var(--sidebar);
+      padding: 24px;
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+    }
+
+    aside h2 {
+      font-size: 16px;
+      margin-bottom: 16px;
+      color: var(--accent);
+    }
+
+    aside a {
+      display: block;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 6px 0;
+      font-size: 14px;
+    }
+
+    aside a:hover {
+      color: var(--accent);
+    }
+
+    main {
+      margin-left: 280px;
+      padding: 40px;
+      max-width: 1100px;
+      width: 100%;
+    }
+
+    h1 {
+      font-size: 36px;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      margin-top: 48px;
+      font-size: 28px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+
+    h3 {
+      margin-top: 32px;
+      font-size: 20px;
+    }
+
+    p {
+      line-height: 1.6;
+      color: var(--text);
+    }
+
+    code {
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 90%;
+    }
+
+    pre {
+      background: var(--code-bg);
+      padding: 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin-top: 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      background: var(--card);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+
+    th {
+      background: #020617;
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .badge {
+      background: #020617;
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    footer {
+      margin-top: 80px;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      aside {
+        display: none;
+      }
+      main {
+        margin-left: 0;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <aside>
+    <h2>Claude Code</h2>
+    <a href="#hooks">Hooks</a>
+    <a href="#agents">Agentes</a>
+    <a href="#skills">Skills</a>
+    <a href="#commands">Slash Commands</a>
+    <a href="#mcp">MCP Servers</a>
+    <a href="#plugins">Plugins</a>
+    <a href="#tokens">Economia de Tokens</a>
+    <a href="#reference">Referência Rápida</a>
+  </aside>
+
+  <main>
+    <h1>Guia Avançado do Claude Code</h1>
+    <p class="badge">Hooks • Agentes • Skills • MCP • Plugins • Tokens</p>
+
+    <section id="hooks">
+      <h2>1. Hooks — Automação Determinística</h2>
+      <p>
+        Hooks são scripts que executam automaticamente em eventos específicos
+        do ciclo de vida do Claude Code. Eles são <strong>determinísticos</strong>,
+        não sugestões.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Evento</th>
+            <th>Quando dispara</th>
+            <th>Uso típico</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>PreToolUse</td>
+            <td>Antes de rodar uma tool</td>
+            <td>Bloquear comandos perigosos</td>
+          </tr>
+          <tr>
+            <td>PostToolUse</td>
+            <td>Após execução</td>
+            <td>Lint, formatter, testes</td>
+          </tr>
+          <tr>
+            <td>SessionStart</td>
+            <td>Início da sessão</td>
+            <td>Carregar contexto</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Exemplo: Auto-formatar código</h3>
+      <pre><code class="language-json">
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "prettier --write \"$CLAUDE_FILE_PATHS\""
+          }
+        ]
+      }
+    ]
+  }
+}
+      </code></pre>
+    </section>
+
+    <section id="agents">
+      <h2>2. Agentes e Sub-agentes</h2>
+      <p>
+        Sub-agentes trabalham em contexto separado (até 200k tokens) e retornam
+        apenas um resumo, reduzindo drasticamente o uso de tokens.
+      </p>
+
+      <h3>Exemplo: Codebase Analyzer</h3>
+      <pre><code class="language-markdown">
+---
+name: codebase-analyzer
+description: Escaneia o codebase para planejamento.
+tools: Read, Grep, Glob
+---
+Você analisa codebases e retorna planos de implementação.
+NUNCA modifique arquivos.
+      </code></pre>
+    </section>
+
+    <section id="skills">
+      <h2>3. Skills</h2>
+      <p>
+        Skills são instruções carregadas automaticamente quando o contexto é relevante.
+        Diferente de slash commands, elas são ativadas pelo Claude.
+      </p>
+
+      <h3>Exemplo: db-migrations</h3>
+      <pre><code class="language-markdown">
+---
+name: db-migrations
+description: Regras para migrations de banco
+allowed-tools: Bash, Read, Edit
+---
+SEMPRE use IF NOT EXISTS
+NUNCA use DROP TABLE sem confirmação
+      </code></pre>
+    </section>
+
+    <section id="commands">
+      <h2>4. Slash Commands</h2>
+      <p>Comandos manuais invocados com <code>/</code>.</p>
+
+      <pre><code class="language-markdown">
+---
+name: review
+---
+Revise o código focando em bugs, segurança e padrões.
+      </code></pre>
+    </section>
+
+    <section id="mcp">
+      <h2>5. MCP Servers</h2>
+      <p>
+        MCP conecta Claude Code a serviços externos como GitHub, Postgres,
+        Playwright, Slack e outros.
+      </p>
+
+      <pre><code class="language-json">
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"]
+    }
+  }
+}
+      </code></pre>
+    </section>
+
+    <section id="plugins">
+      <h2>6. Plugins</h2>
+      <p>
+        Plugins agrupam commands, agents, skills, hooks e MCPs em uma unidade instalável.
+      </p>
+    </section>
+
+    <section id="tokens">
+      <h2>7. Economia de Tokens</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Técnica</th>
+            <th>Economia</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Sub-agentes</td>
+            <td>50–60%</td>
+          </tr>
+          <tr>
+            <td>Modelo Haiku</td>
+            <td>10–20x mais barato</td>
+          </tr>
+          <tr>
+            <td>/clear entre tarefas</td>
+            <td>Contexto limpo</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="reference">
+      <h2>Referência Rápida</h2>
+      <pre><code>
+.claude/
+  agents/
+  skills/
+  commands/
+  docs/
+.mcp.json
+.claudeignore
+CLAUDE.md
+      </code></pre>
+    </section>
+
+    <footer>
+      Guia Avançado do Claude Code — Documentação Interna
+    </footer>
+  </main>
+
+</body>
+</html>

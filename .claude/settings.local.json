@@ -74,7 +74,23 @@
       "Bash(pkill:*)",
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(if exist nul del nul)"
+      "Bash(if exist nul del nul)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git remote:*)",
+      "Bash(ssh:*)",
+      "Bash(ssh-add:*)",
+      "Bash(\"C:\\\\Users\\\\lucas\\\\OneDrive\\\\Área de:*)",
+      "Bash(for card in \"Cori Mountain Monastery\" \"Great Arashin City\" \"Kishla Village\" \"Mistrise Village\")",
+      "Bash(do:*)",
+      "Bash(echo:*)",
+      "Bash(/tmp/get_lands.py:*)",
+      "Bash(/tmp/get_cycle.py:*)",
+      "Bash(/tmp/analyze_tdm.py:*)",
+      "Bash(/tmp/fetch_tdm.js:*)",
+      "Bash(export ANTHROPIC_API_KEY=\"sk-ant-v0c3GY5-7WI6TRKQYPcwfKvGsxUQ9-8NRDUqVgD7VdUJHWvW0GnJKnfFW4EfSuWVaVk1RGmxz8V6ov0mQNBxqQ\")",
+      "Bash(\"/c/Users/lucas/OneDrive/Área de:*)"
     ]
   }
 }

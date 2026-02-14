@@ -372,7 +372,14 @@ const GameState = {
         shouldFire = true;
       }
       // Cast-related triggers (controller-based)
-      if ((trigger.event === 'cast_spell' || trigger.event === 'cast_noncreature' ||
+      // CRITICAL: cast_spell must check self flag (e.g. Sage of the Skies)
+      if (trigger.event === 'cast_spell') {
+        if (trigger.self && data.cardUid === trigger.cardUid) {
+          shouldFire = true;
+        } else if (!trigger.self && data.playerId === trigger.controllerId) {
+          shouldFire = true;
+        }
+      } else if ((trigger.event === 'cast_noncreature' ||
            trigger.event === 'cast_colorless' || trigger.event === 'cast_noncreature_or_dragon' ||
            trigger.event === 'creature_enters_cast') && data.playerId === trigger.controllerId) {
         shouldFire = true;
@@ -492,6 +499,9 @@ const GameState = {
         return !!((state._castCreatureThisTurn && state._castCreatureThisTurn[pid]) &&
                (state._castNoncreatureThisTurn && state._castNoncreatureThisTurn[pid]));
       case 'two_spells_this_turn':
+        return (state._spellsThisTurn[pid] || 0) >= 2;
+      case 'cast_with_another_spell':
+        // True if at least 2 spells have been cast this turn
         return (state._spellsThisTurn[pid] || 0) >= 2;
       case '3+_attacking':
         return !!(state.combat && state.combat.attackers && state.combat.attackers.length >= 3);

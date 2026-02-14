@@ -538,7 +538,7 @@ const CardEffectsDB = {
 
   "sage of the skies": {
     static: [{ type: "has_keyword", keywords: ["flying", "lifelink"] }],
-    triggered: [{ event: "second_spell", effects: [{ type: "copy_self" }] }]
+    triggered: [{ event: "cast_spell", self: true, condition: "cast_with_another_spell", effects: [{ type: "copy_self" }] }]
   },
 
   "sarkhan, dragon ascendant": {

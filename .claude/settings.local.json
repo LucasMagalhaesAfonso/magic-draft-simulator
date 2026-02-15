@@ -90,7 +90,18 @@
       "Bash(/tmp/analyze_tdm.py:*)",
       "Bash(/tmp/fetch_tdm.js:*)",
       "Bash(export ANTHROPIC_API_KEY=\"sk-ant-v0c3GY5-7WI6TRKQYPcwfKvGsxUQ9-8NRDUqVgD7VdUJHWvW0GnJKnfFW4EfSuWVaVk1RGmxz8V6ov0mQNBxqQ\")",
-      "Bash(\"/c/Users/lucas/OneDrive/Área de:*)"
+      "Bash(\"/c/Users/lucas/OneDrive/Área de:*)",
+      "Bash(for card in \"ambling stormshell\" \"boulderborn dragon\" \"descendant of storms\" \"marshal of the lost\" \"avenger of the fallen\")",
+      "Bash(for card in \"bone-cairn butcher\" \"dalkovan packbeasts\" \"dragonback lancer\" \"equilibrium adept\" \"jeskai devotee\")",
+      "Bash(/tmp/parse_tdm.py:*)",
+      "Bash(cat:*)",
+      "Bash(chmod:*)",
+      "Bash(for card in \"Abzan Devotee\" \"Abzan Monument\" \"A-Cori-Steel Cutter\" \"Adorned Crocodile\" \"Aegis Sculptor\")",
+      "Bash(for card in \"Abzan Monument\" \"A-Cori-Steel Cutter\" \"Adorned Crocodile\" \"Aegis Sculptor\")",
+      "Bash(for card in \"All-Out Assault\" \"Ambling Stormshell\" \"Anafenza, Unyielding Lineage\" \"Arashin Sunshield\" \"Armament Dragon\")",
+      "Bash(for card in \"Blossoming Sands\" \"Bone-Cairn Butcher\" \"Boulderborn Dragon\" \"Breaching Dragonstorm\" \"Call the Spirit Dragons\")",
+      "Bash(for batch in batch1 batch2 batch3 batch4 batch5 batch6 batch7 batch8 batch9 batch10 batch11 batch12)",
+      "Bash(tee:*)"
     ]
   }
 }

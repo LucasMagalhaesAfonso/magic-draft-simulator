@@ -1,0 +1,8 @@
+TRIGGER ANALYSIS REPORT
+2026-02-15T04:57:51.672Z
+
+Total triggered abilities: 0 cards
+Cast spell triggers (CRITICAL): 0
+Self triggers without condition: 0
+
+Detailed card list:

@@ -146,11 +146,11 @@ BATCH 16 (Cards 76-80):
 
 BATCH 17 (Cards 81-85):
 --------------------------------------------------------------------------------
-  [ ] Fleeting Effigy                                    | {R}             | Creature -- Elemental
-  [ ] Focus the Mind                                     | {4}{U}          | Instant
-  [ ] Forest                                             | (No cost)       | Basic Land -- Forest
-  [ ] Formation Breaker                                  | {1}{G}          | Creature -- Beast
-  [ ] Fortress Kin-Guard                                 | {1}{W}          | Creature -- Dog Soldier
+  [X] Fleeting Effigy                                    | {R}             | Creature -- Elemental
+  [X] Focus the Mind                                     | {4}{U}          | Instant
+  [X] Forest                                             | (No cost)       | Basic Land -- Forest
+  [X] Formation Breaker                                  | {1}{G}          | Creature -- Beast
+  [X] Fortress Kin-Guard                                 | {1}{W}          | Creature -- Dog Soldier
 
 BATCH 18 (Cards 86-90):
 --------------------------------------------------------------------------------

@@ -976,6 +976,10 @@ const CARDS_BATCH = {
   batch14: [
     'Dusyut Earthcarver', 'Duty Beyond Death', 'Effortless Master',
     'Elspeth, Storm Slayer', 'Embermouth Sentinel'
+  ],
+  batch15: [
+    'Encroaching Dragonstorm', 'Equilibrium Adept', 'Eshki Dragonclaw',
+    'Essence Anchor', 'Evolving Wilds'
   ]
 };
 

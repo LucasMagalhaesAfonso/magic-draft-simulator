@@ -943,7 +943,7 @@ const CardEffectsDB = {
   // --- Blue spells & enchantments ---
 
   "essence anchor": {
-    triggered: [{ event: "upkeep", effects: [{ type: "surveil", amount: 1 }] }],
+    triggered: [{ event: "upkeep", effects: [{ type: "surveil", amount: 1, optional: true }] }],
     activated: [{ cost: { tap: true }, effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid" }], condition: "card_left_graveyard" }]
   },
 

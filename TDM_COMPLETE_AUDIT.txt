@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 20/277 (7.2%)
+Current Progress: 25/277 (9.0%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -34,11 +34,11 @@ BATCH 2 (Cards 6-10):
 
 BATCH 3 (Cards 11-15):
 --------------------------------------------------------------------------------
-  [ ] All-Out Assault                                    | {2}{R}{W}{B}    | Enchantment
-  [ ] Ambling Stormshell                                 | {3}{U}{U}       | Creature -- Turtle
-  [ ] Anafenza, Unyielding Lineage                       | {2}{W}          | Legendary Creature -- Spirit Soldier
-  [ ] Arashin Sunshield                                  | {3}{W}          | Creature -- Human Warrior
-  [ ] Armament Dragon                                    | {3}{W}{B}{G}    | Creature -- Dragon
+  [X] All-Out Assault                                    | {2}{R}{W}{B}    | Enchantment
+  [X] Ambling Stormshell                                 | {3}{U}{U}       | Creature -- Turtle
+  [X] Anafenza, Unyielding Lineage                       | {2}{W}          | Legendary Creature -- Spirit Soldier
+  [X] Arashin Sunshield                                  | {3}{W}          | Creature -- Human Warrior
+  [X] Armament Dragon                                    | {3}{W}{B}{G}    | Creature -- Dragon
 
 BATCH 4 (Cards 16-20):
 --------------------------------------------------------------------------------

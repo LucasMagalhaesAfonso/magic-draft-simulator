@@ -43,10 +43,18 @@ const cardsContent = fs.readFileSync(cardsPath, 'utf8');
 const aiPath = path.join(__dirname, '../js/game/game-ai.js');
 const aiContent = fs.readFileSync(aiPath, 'utf8');
 
-// Extract supported effect types from stack.js
+// Extract supported effect types from stack.js AND game-state.js
 function getSupportedEffectTypes() {
-  const matches = stackContent.match(/case '([^']+)':/g) || [];
-  return matches.map(m => m.replace(/case '|':/g, ''));
+  // From stack.js
+  const stackMatches = stackContent.match(/case '([^']+)':/g) || [];
+  const stackTypes = stackMatches.map(m => m.replace(/case '|':/g, ''));
+
+  // From game-state.js (_resolveSimpleEffect)
+  const gsMatches = gsContent.match(/case '([^']+)':/g) || [];
+  const gsTypes = gsMatches.map(m => m.replace(/case '|':/g, ''));
+
+  // Combine and deduplicate
+  return [...new Set([...stackTypes, ...gsTypes])];
 }
 
 // Extract trigger events from game-state.js
@@ -806,6 +814,10 @@ const CARDS_BATCH = {
   batch2: [
     'Bone-Cairn Butcher', 'Dalkovan Packbeasts', 'Dragonback Lancer',
     'Equilibrium Adept', 'Jeskai Devotee'
+  ],
+  batch3: [
+    'All-Out Assault', 'Ambling Stormshell', 'Anafenza, Unyielding Lineage',
+    'Arashin Sunshield', 'Armament Dragon'
   ]
 };
 

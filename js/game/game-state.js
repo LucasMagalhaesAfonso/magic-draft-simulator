@@ -553,6 +553,9 @@ const GameState = {
         const card = bf.find(c => c.name && c.name.toLowerCase() === 'frostcliff siege');
         return !!(card && card._temurMode === true);
       }
+      case 'cast_turtle_spell':
+        // Check if the casted spell is a Turtle (for Ambling Stormshell trigger)
+        return !!(data && data.card && CardEngine.hasCreatureType(data.card, 'Turtle'));
       default:
         // Unknown condition - log and allow (fail open)
         state.log.push(`(condição desconhecida: ${cond})`);

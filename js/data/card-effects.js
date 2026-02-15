@@ -157,7 +157,7 @@ const CardEffectsDB = {
 
   "armament dragon": {
     etb: [{ type: "counter", counter: "+1/+1", amount: 3, target: "distribute_creatures" }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 
   "constrictor sage": {
@@ -191,9 +191,10 @@ const CardEffectsDB = {
   // =================== TARKIR DRAGONSTORM - CREATURES WITH TRIGGERS ===================
 
   "ambling stormshell": {
-    static: [{ type: "has_keyword", keyword: "ward", ward_cost: 2 }],
+    static: [{ type: "has_keyword", keywords: ["ward"] }],
     triggered: [
-      { event: "attacks", self: true, effects: [{ type: "stun_counter_self", amount: 3 }, { type: "draw", amount: 3 }] }
+      { event: "attacks", self: true, effects: [{ type: "stun_counter_self", amount: 3 }, { type: "draw", amount: 3 }] },
+      { event: "cast_spell", self: false, condition: "cast_turtle_spell", effects: [{ type: "untap_self" }] }
     ]
   },
 
@@ -336,11 +337,13 @@ const CardEffectsDB = {
   "all-out assault": {
     static: [
       { type: "buff_all", power: 1, toughness: 1, target: "own_creatures" },
-      { type: "grant_all", keyword: "deathtouch", target: "own_creatures" }
+      { type: "grant_all", keywords: ["deathtouch"], target: "own_creatures" }
     ],
     etb: [
-      { type: "extra_combat", condition: "main_phase" },
-      { type: "register_temp_trigger", event: "combat_begin", effects: [{ type: "untap_all", target: "own_creatures" }], duration: "this_turn" }
+      { type: "extra_combat", condition: "main_phase" }
+    ],
+    triggered: [
+      { event: "attacks", self: true, effects: [{ type: "untap_all", target: "own_creatures" }] }
     ]
   },
 

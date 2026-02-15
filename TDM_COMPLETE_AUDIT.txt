@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 85/277 (30.7%)
+Current Progress: 90/277 (32.5%) - BATCH 16 COMPLETE (Feb 15, 2026)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -138,11 +138,11 @@ BATCH 15 (Cards 71-75):
 
 BATCH 16 (Cards 76-80):
 --------------------------------------------------------------------------------
-  [ ] Fangkeeper's Familiar                              | {1}{B}{G}{U}    | Creature -- Snake
-  [ ] Felothar, Dawn of the Abzan                        | {W}{B}{G}       | Legendary Creature -- Human Warrior
-  [ ] Feral Deathgorger // Dusk Sight                    | {5}{B} // {1}{B} | Creature -- Dragon // Sorcery -- Omen
-  [ ] Fire-Rim Form                                      | {1}{R}          | Enchantment -- Aura
-  [ ] Flamehold Grappler                                 | {U}{R}{W}       | Creature -- Human Monk
+  [X] Fangkeeper's Familiar                              | {1}{B}{G}{U}    | Creature -- Snake
+  [X] Felothar, Dawn of the Abzan                        | {W}{B}{G}       | Legendary Creature -- Human Warrior
+  [X] Feral Deathgorger // Dusk Sight                    | {5}{B} // {1}{B} | Creature -- Dragon // Sorcery -- Omen
+  [X] Fire-Rim Form                                      | {1}{R}          | Enchantment -- Aura
+  [X] Flamehold Grappler                                 | {U}{R}{W}       | Creature -- Human Monk
 
 BATCH 17 (Cards 81-85):
 --------------------------------------------------------------------------------

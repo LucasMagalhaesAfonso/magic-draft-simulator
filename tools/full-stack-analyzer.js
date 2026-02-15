@@ -907,6 +907,10 @@ const CARDS_BATCH = {
   batch10: [
     'Defibrillating Current', 'Delta Bloodflies', 'Descendant of Storms',
     'Desperate Measures', 'Devoted Duelist'
+  ],
+  batch11: [
+    'Dirgur Island Dragon', 'Dismal Backwater', 'Dispelling Exhale',
+    'Disruptive Stormbrood', 'Dracogenesis'
   ]
 };
 

@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 60/277 (21.7%)
+Current Progress: 65/277 (23.5%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -98,11 +98,11 @@ BATCH 10 (Cards 46-50):
 
 BATCH 11 (Cards 51-55):
 --------------------------------------------------------------------------------
-  [ ] Dirgur Island Dragon // Skimming Strike            | {5}{U} // {1}{U} | Creature -- Dragon // Instant -- Omen
-  [ ] Dismal Backwater                                   | (No cost)       | Land
-  [ ] Dispelling Exhale                                  | {1}{U}          | Instant
-  [ ] Disruptive Stormbrood // Petty Revenge             | {4}{G} // {1}{B} | Creature -- Dragon // Sorcery -- Omen
-  [ ] Dracogenesis                                       | {6}{R}{R}       | Enchantment
+  [X] Dirgur Island Dragon // Skimming Strike            | {5}{U} // {1}{U} | Creature -- Dragon // Instant -- Omen
+  [X] Dismal Backwater                                   | (No cost)       | Land
+  [X] Dispelling Exhale                                  | {1}{U}          | Instant
+  [X] Disruptive Stormbrood // Petty Revenge             | {4}{G} // {1}{B} | Creature -- Dragon // Sorcery -- Omen
+  [X] Dracogenesis                                       | {6}{R}{R}       | Enchantment
 
 BATCH 12 (Cards 56-60):
 --------------------------------------------------------------------------------

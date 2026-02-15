@@ -406,7 +406,8 @@ const CardEffectsDB = {
 
   "dragonback lancer": {
     static: [{ type: "has_keyword", keywords: ["flying"] }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }]
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }],
+    mobilize: 1
   },
 
   "nightblade brigade": {
@@ -1083,6 +1084,7 @@ const CardEffectsDB = {
   // =================== TDM - ARTIFACTS ===================
 
   "dragonbroods' relic": {
+    etb: [],
     activated: [
       { cost: { tap: true, tap_creature: true }, effects: [{ type: "add_mana", color: "any" }], sorcerySpeed: false },
       { cost: { mana: "3WUBRG", sacrifice: true }, effects: [{ type: "create_token", power: 4, toughness: 4, name: "Reliquary Dragon", type_line: "Dragon", keywords: ["flying", "lifelink"], colors: ["W", "U", "B", "R", "G"], etb_damage: 3 }], sorcerySpeed: true }

@@ -911,6 +911,10 @@ const CARDS_BATCH = {
   batch11: [
     'Dirgur Island Dragon', 'Dismal Backwater', 'Dispelling Exhale',
     'Disruptive Stormbrood', 'Dracogenesis'
+  ],
+  batch12: [
+    'Dragonback Assault', 'Dragonback Lancer', 'Dragonbroods\' Relic',
+    'Dragonclaw Strike', 'Dragonfire Blade'
   ]
 };
 

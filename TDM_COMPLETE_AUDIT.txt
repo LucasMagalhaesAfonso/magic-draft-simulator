@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 65/277 (23.5%)
+Current Progress: 70/277 (25.3%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -106,11 +106,11 @@ BATCH 11 (Cards 51-55):
 
 BATCH 12 (Cards 56-60):
 --------------------------------------------------------------------------------
-  [ ] Dragonback Assault                                 | {3}{G}{U}{R}    | Enchantment
-  [ ] Dragonback Lancer                                  | {3}{W}          | Creature -- Human Soldier
-  [ ] Dragonbroods' Relic                                | {1}{G}          | Artifact
-  [ ] Dragonclaw Strike                                  | {2/G}{2/U}{2/R} | Sorcery
-  [ ] Dragonfire Blade                                   | {1}             | Artifact -- Equipment
+  [X] Dragonback Assault                                 | {3}{G}{U}{R}    | Enchantment
+  [X] Dragonback Lancer                                  | {3}{W}          | Creature -- Human Soldier
+  [X] Dragonbroods' Relic                                | {1}{G}          | Artifact
+  [X] Dragonclaw Strike                                  | {2/G}{2/U}{2/R} | Sorcery
+  [X] Dragonfire Blade                                   | {1}             | Artifact -- Equipment
 
 BATCH 13 (Cards 61-65):
 --------------------------------------------------------------------------------

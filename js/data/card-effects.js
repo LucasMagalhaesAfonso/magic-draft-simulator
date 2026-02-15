@@ -44,6 +44,14 @@ const CardEffectsDB = {
     }]
   },
 
+  "craterhoof behemoth": {
+    static: [{ type: "has_keyword", keywords: ["haste"] }],
+    etb: [
+      { type: "buff", power: "creature_count", toughness: "creature_count", target: "own_creatures", duration: "permanent" },
+      { type: "grant", keywords: ["trample"], target: "own_creatures", duration: "permanent" }
+    ]
+  },
+
   "cruel truths": {
     cast: [
       { type: "surveil", amount: 2 },
@@ -180,12 +188,12 @@ const CardEffectsDB = {
 
   "dusyut earthcarver": {
     etb: [{ type: "endure", amount: 3 }],
-    static: [{ type: "has_keyword", keyword: "reach" }]
+    static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
 
   "equilibrium adept": {
     etb: [{ type: "exile_top_play", amount: 1, duration: "next_end_step" }],
-    triggered: [{ event: "second_spell", self: true, condition: "cast_with_another_spell", effects: [{ type: "grant", keyword: "double_strike", target: "self", duration: "end_of_turn" }] }]
+    triggered: [{ event: "second_spell", self: true, condition: "cast_with_another_spell", effects: [{ type: "grant", keywords: ["double_strike"], target: "self", duration: "end_of_turn" }] }]
   },
 
   // =================== TARKIR DRAGONSTORM - CREATURES WITH TRIGGERS ===================
@@ -226,7 +234,7 @@ const CardEffectsDB = {
 
   "delta bloodflies": {
     triggered: [{ event: "attacks", self: true, condition: "control_creature_with_counter", effects: [{ type: "lose_life", amount: 1, target: "each_opponent" }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 
   "descendant of storms": {
@@ -234,13 +242,13 @@ const CardEffectsDB = {
   },
 
   "devoted duelist": {
-    static: [{ type: "has_keyword", keyword: "haste" }],
+    static: [{ type: "has_keyword", keywords: ["haste"] }],
     triggered: [{ event: "second_spell", effects: [{ type: "damage_each_opponent", amount: 1 }] }]
   },
 
   "felothar, dawn of the abzan": {
     triggered: [{ event: "enters_or_attacks", effects: [{ type: "sacrifice", target: "nonland_permanent", optional: true }, { type: "counter_all", counter: "+1/+1", amount: 1, target: "own_creatures" }] }],
-    static: [{ type: "has_keyword", keyword: "trample" }]
+    static: [{ type: "has_keyword", keywords: ["trample"] }]
   },
 
   "furious forebear": {
@@ -275,22 +283,22 @@ const CardEffectsDB = {
 
   "kheru goldkeeper": {
     triggered: [{ event: "cards_leave_graveyard", effects: [{ type: "create_token", name: "Treasure" }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 
   "kishla skimmer": {
     triggered: [{ event: "card_leaves_graveyard", once_per_turn: true, effects: [{ type: "draw", amount: 1 }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 
   "kotis, the fangkeeper": {
-    static: [{ type: "has_keyword", keyword: "indestructible" }],
+    static: [{ type: "has_keyword", keywords: ["indestructible"] }],
     triggered: [{ event: "combat_damage_player", self: true, effects: [{ type: "exile_top_opponent", amount: "X", note: "X = damage dealt" }] }]
   },
 
   "marshal of the lost": {
     triggered: [{ event: "attacks", effects: [{ type: "buff", power: "X", toughness: "X", target: "creature", duration: "end_of_turn", note: "X = attacking creatures" }] }],
-    static: [{ type: "has_keyword", keyword: "deathtouch" }]
+    static: [{ type: "has_keyword", keywords: ["deathtouch"] }]
   },
 
   "poised practitioner": {
@@ -307,12 +315,12 @@ const CardEffectsDB = {
   },
 
   "a-cori-steel cutter": {
-    static: [{ type: "grant", keyword: "haste", target: "equipped" }],
+    static: [{ type: "grant", keywords: ["haste"], target: "equipped" }],
     triggered: [{ event: "second_spell", self: false, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Monk", keywords: ["prowess"] }, { type: "attach", target: "token", optional: true }] }]
   },
 
   "bearer of glory": {
-    static: [{ type: "grant", keyword: "first_strike", condition: "your_turn", target: "self" }],
+    static: [{ type: "grant", keywords: ["first_strike"], condition: "your_turn", target: "self" }],
     activated: [{ cost: { mana: "4W" }, effects: [{ type: "buff_all", power: 1, toughness: 1, target: "own_creatures", duration: "end_of_turn" }] }]
   },
 
@@ -391,30 +399,31 @@ const CardEffectsDB = {
   },
 
   "dalkovan packbeasts": {
-    static: [{ type: "has_keyword", keyword: "vigilance" }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 3, attacking: true, sacrificeAtEndStep: true }] }]
+    static: [{ type: "has_keyword", keywords: ["vigilance"] }],
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 3, attacking: true, sacrificeAtEndStep: true }] }],
+    mobilize: 3
   },
 
   "dragonback lancer": {
-    static: [{ type: "has_keyword", keyword: "flying" }],
+    static: [{ type: "has_keyword", keywords: ["flying"] }],
     triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }]
   },
 
   "nightblade brigade": {
-    static: [{ type: "has_keyword", keyword: "deathtouch" }],
+    static: [{ type: "has_keyword", keywords: ["deathtouch"] }],
     triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }],
     etb: [{ type: "surveil", amount: 1 }]
   },
 
   "reigning victor": {
-    etb: [{ type: "buff", power: 1, toughness: 0, target: "creature", duration: "end_of_turn" }, { type: "grant", keyword: "indestructible", target: "creature", duration: "end_of_turn" }],
+    etb: [{ type: "buff", power: 1, toughness: 0, target: "creature", duration: "end_of_turn" }, { type: "grant", keywords: ["indestructible"], target: "creature", duration: "end_of_turn" }],
     triggered: [
       { event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }
     ]
   },
 
   "shock brigade": {
-    static: [{ type: "has_keyword", keyword: "menace" }],
+    static: [{ type: "has_keyword", keywords: ["menace"] }],
     triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }]
   },
 
@@ -436,12 +445,12 @@ const CardEffectsDB = {
   },
 
   "kin-tree nurturer": {
-    static: [{ type: "has_keyword", keyword: "lifelink" }],
+    static: [{ type: "has_keyword", keywords: ["lifelink"] }],
     etb: [{ type: "endure", amount: 1 }]
   },
 
   "sandskitter outrider": {
-    static: [{ type: "has_keyword", keyword: "menace" }],
+    static: [{ type: "has_keyword", keywords: ["menace"] }],
     etb: [{ type: "endure", amount: 2 }]
   },
 
@@ -480,7 +489,7 @@ const CardEffectsDB = {
   },
 
   "fangkeeper's familiar": {
-    static: [{ type: "has_keyword", keyword: "flash" }],
+    static: [{ type: "has_keyword", keywords: ["flash"] }],
     etb: [{
       type: "modal",
       modes: [
@@ -503,12 +512,12 @@ const CardEffectsDB = {
   },
 
   "lotuslight dancers": {
-    static: [{ type: "has_keyword", keyword: "lifelink" }],
+    static: [{ type: "has_keyword", keywords: ["lifelink"] }],
     etb: [{ type: "search_library_to_graveyard", colors: ["B", "G", "U"] }]
   },
 
   "magmatic hellkite": {
-    static: [{ type: "has_keyword", keyword: "flying" }],
+    static: [{ type: "has_keyword", keywords: ["flying"] }],
     etb: [
       { type: "destroy", target: "nonbasic_land" },
       {
@@ -555,13 +564,13 @@ const CardEffectsDB = {
 
   "sarkhan, dragon ascendant": {
     etb: [{ type: "behold_dragon", optional: true }, { type: "create_token", name: "Treasure", condition: "if_beheld_dragon" }],
-    triggered: [{ event: "dragon_enters", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "become_dragon", keyword: "flying" }] }]
+    triggered: [{ event: "dragon_enters", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "become_dragon", keywords: ["flying"] }] }]
   },
 
   // =================== TARKIR DRAGONSTORM - MYTHICS ===================
 
   "call the spirit dragons": {
-    static: [{ type: "grant", keyword: "indestructible", target: "dragons" }],
+    static: [{ type: "grant", keywords: ["indestructible"], target: "dragons" }],
     triggered: [{ event: "upkeep", effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "dragon_each_color" }] }]
   },
 
@@ -578,7 +587,7 @@ const CardEffectsDB = {
     static: [{ type: "token_doubling" }],
     activated: [
       { cost: { loyalty: 1 }, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Soldier" }] },
-      { cost: { loyalty: 0 }, effects: [{ type: "counter_all", counter: "+1/+1", amount: 1, target: "own_creatures" }, { type: "grant_all", keyword: "flying", target: "own_creatures", duration: "next_turn" }] },
+      { cost: { loyalty: 0 }, effects: [{ type: "counter_all", counter: "+1/+1", amount: 1, target: "own_creatures" }, { type: "grant_all", keywords: ["flying"], target: "own_creatures", duration: "next_turn" }] },
       { cost: { loyalty: -3 }, effects: [{ type: "destroy", target: "opponent_creature_mv3+" }] }
     ]
   },
@@ -599,7 +608,7 @@ const CardEffectsDB = {
 
   "neriv, heart of the storm": {
     static: [
-      { type: "has_keyword", keyword: "flying" },
+      { type: "has_keyword", keywords: ["flying"] },
       { type: "double_damage", target: "creatures_entered_this_turn" }
     ]
   },
@@ -624,9 +633,9 @@ const CardEffectsDB = {
 
   "stormscale scion": {
     static: [
-      { type: "has_keyword", keyword: "flying" },
+      { type: "has_keyword", keywords: ["flying"] },
       { type: "buff_all", power: 1, toughness: 1, target: "other_dragons" },
-      { type: "has_keyword", keyword: "storm" }
+      { type: "has_keyword", keywords: ["storm"] }
     ]
   },
 
@@ -639,7 +648,7 @@ const CardEffectsDB = {
   "duty beyond death": {
     additional_costs: [{ type: "sacrifice", target: "creature" }],
     cast: [
-      { type: "grant_all", keyword: "indestructible", target: "own_creatures", duration: "end_of_turn" },
+      { type: "grant_all", keywords: ["indestructible"], target: "own_creatures", duration: "end_of_turn" },
       { type: "counter_all", counter: "+1/+1", amount: 1, target: "own_creatures" }
     ]
   },
@@ -837,14 +846,14 @@ const CardEffectsDB = {
 
   "starry-eyed skyrider": {
     static: [
-      { type: "has_keyword", keyword: "flying" },
-      { type: "grant", keyword: "flying", target: "attacking_tokens" }
+      { type: "has_keyword", keywords: ["flying"] },
+      { type: "grant", keywords: ["flying"], target: "attacking_tokens" }
     ],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "grant", keyword: "flying", target: "other_own_creature", duration: "end_of_turn" }] }]
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "grant", keywords: ["flying"], target: "other_own_creature", duration: "end_of_turn" }] }]
   },
 
   "static snare": {
-    static: [{ type: "has_keyword", keyword: "flash" }],
+    static: [{ type: "has_keyword", keywords: ["flash"] }],
     etb: [{ type: "exile", target: "opponent_artifact_or_creature", until_source_leaves: true }],
     cost_reduction: { condition: "per_attacking_creature", amount: 1 }
   },
@@ -870,7 +879,7 @@ const CardEffectsDB = {
   },
 
   "tempest hawk": {
-    static: [{ type: "has_keyword", keyword: "flying" }],
+    static: [{ type: "has_keyword", keywords: ["flying"] }],
     triggered: [{ event: "combat_damage_player", self: true, effects: [{ type: "search_library", target: "named_card", name: "Tempest Hawk" }] }]
   },
 
@@ -895,11 +904,11 @@ const CardEffectsDB = {
   },
 
   "highspire bell-ringer": {
-    static: [{ type: "has_keyword", keyword: "flying" }, { type: "cost_reduction", target: "second_spell", reduction: 1 }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }, { type: "cost_reduction", target: "second_spell", reduction: 1 }]
   },
 
   "humbling elder": {
-    static: [{ type: "has_keyword", keyword: "flash" }],
+    static: [{ type: "has_keyword", keywords: ["flash"] }],
     etb: [{ type: "debuff", power: -2, toughness: 0, target: "opponent_creature", duration: "end_of_turn" }]
   },
 
@@ -916,12 +925,12 @@ const CardEffectsDB = {
   },
 
   "snowmelt stag": {
-    static: [{ type: "has_keyword", keyword: "vigilance" }],
-    activated: [{ cost: { mana: "5UU" }, effects: [{ type: "grant", keyword: "unblockable", target: "self", duration: "end_of_turn" }] }]
+    static: [{ type: "has_keyword", keywords: ["vigilance"] }],
+    activated: [{ cost: { mana: "5UU" }, effects: [{ type: "grant", keywords: ["unblockable"], target: "self", duration: "end_of_turn" }] }]
   },
 
   "temur devotee": {
-    static: [{ type: "has_keyword", keyword: "defender" }],
+    static: [{ type: "has_keyword", keywords: ["defender"] }],
     activated: [{ cost: { mana: "1", once_per_turn: true }, effects: [{ type: "add_mana", color: "GUR", choose: 1 }] }]
   },
 
@@ -1068,7 +1077,7 @@ const CardEffectsDB = {
   },
   "mistrise village": {
     static: [{ type: "enters_tapped_conditional" }],
-    activated: [{ cost: { mana: "U", tap: true }, effects: [{ type: "grant", keyword: "uncounterable", target: "next_spell" }] }]
+    activated: [{ cost: { mana: "U", tap: true }, effects: [{ type: "grant", keywords: ["uncounterable"], target: "next_spell" }] }]
   },
 
   // =================== TDM - ARTIFACTS ===================
@@ -1080,7 +1089,7 @@ const CardEffectsDB = {
     ]
   },
   "dragonfire blade": {
-    static: [{ type: "grant", power: 2, toughness: 2, target: "equipped", keyword: "hexproof" }]
+    static: [{ type: "grant", power: 2, toughness: 2, target: "equipped", keywords: ["hexproof"] }]
   },
   "dragonstorm globe": {
     static: [{ type: "dragon_etb_counter" }],
@@ -1091,7 +1100,7 @@ const CardEffectsDB = {
   },
   "jade-cast sentinel": {
     activated: [{ cost: { mana: "2", tap: true }, effects: [{ type: "exile_from_graveyard", target: "card" }] }],
-    static: [{ type: "has_keyword", keyword: "reach" }]
+    static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
   "jeskai monument": {
     etb: [{ type: "ramp", target: "basic_land", to_hand: true }],
@@ -1115,7 +1124,7 @@ const CardEffectsDB = {
   "herd heirloom": {
     activated: [
       { cost: { tap: true }, effects: [{ type: "add_mana", color: "any", restriction: "creature_only" }] },
-      { cost: { tap: true }, effects: [{ type: "grant", keyword: "trample", target: "own_creature_power4", duration: "end_of_turn" }, { type: "grant", keyword: "combat_draw", target: "own_creature_power4", duration: "end_of_turn" }] }
+      { cost: { tap: true }, effects: [{ type: "grant", keywords: ["trample"], target: "own_creature_power4", duration: "end_of_turn" }, { type: "grant", keywords: ["combat_draw"], target: "own_creature_power4", duration: "end_of_turn" }] }
     ],
     triggered: [{ event: "combat_damage_player", condition: "has_combat_draw", effects: [{ type: "draw", amount: 1 }] }]
   },
@@ -1139,7 +1148,7 @@ const CardEffectsDB = {
 
   "fire-rim form": {
     static: [{ type: "grant", power: 2, toughness: 0, target: "enchanted" }],
-    etb: [{ type: "grant", keyword: "first_strike", target: "enchanted", duration: "end_of_turn" }]
+    etb: [{ type: "grant", keywords: ["first_strike"], target: "enchanted", duration: "end_of_turn" }]
   },
   "reverberating summons": {
     triggered: [{ event: "combat_begin", condition: "two_spells_this_turn", effects: [{ type: "become_creature", power: 3, toughness: 3, keywords: ["haste"] }] }],
@@ -1150,7 +1159,7 @@ const CardEffectsDB = {
     triggered: [{ event: "attacks", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", attacking: true, sacrificeAtEndStep: true }] }]
   },
   "wingspan stride": {
-    static: [{ type: "grant", power: 1, toughness: 1, target: "enchanted", keyword: "flying" }],
+    static: [{ type: "grant", power: 1, toughness: 1, target: "enchanted", keywords: ["flying"] }],
     activated: [{ cost: { mana: "2U" }, effects: [{ type: "bounce_self" }] }]
   },
   "the sibsig ceremony": {
@@ -1212,7 +1221,7 @@ const CardEffectsDB = {
     chapters: {
       1: [{ type: "look_top", amount: 3, pick: 1, rest_to: "bottom" }],
       2: [{ type: "look_top", amount: 3, pick: 1, rest_to: "bottom" }],
-      3: [{ type: "grant", keyword: "double_strike", target: "own_creature", condition: "cast_noncreature", duration: "end_of_turn" }]
+      3: [{ type: "grant", keywords: ["double_strike"], target: "own_creature", condition: "cast_noncreature", duration: "end_of_turn" }]
     }
   },
   "revival of the ancestors": {
@@ -1273,7 +1282,7 @@ const CardEffectsDB = {
     cast: [{ type: "damage", amount: 2, target: "divided", max_targets: 2 }]
   },
   "snakeskin veil": {
-    cast: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }, { type: "grant", keyword: "hexproof", target: "creature", duration: "end_of_turn" }]
+    cast: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }, { type: "grant", keywords: ["hexproof"], target: "creature", duration: "end_of_turn" }]
   },
   "inevitable defeat": {
     cast: [{ type: "exile", target: "nonland_permanent" }, { type: "drain", amount: 3 }]
@@ -1300,7 +1309,7 @@ const CardEffectsDB = {
     harmonize: "{4}{G}"
   },
   "wild ride": {
-    cast: [{ type: "buff", power: 3, toughness: 0, target: "creature", duration: "end_of_turn" }, { type: "grant", keyword: "haste", target: "creature", duration: "end_of_turn" }],
+    cast: [{ type: "buff", power: 3, toughness: 0, target: "creature", duration: "end_of_turn" }, { type: "grant", keywords: ["haste"], target: "creature", duration: "end_of_turn" }],
     harmonize: "{4}{R}"
   },
   "nature's rhythm": {
@@ -1312,7 +1321,7 @@ const CardEffectsDB = {
 
   "gurmag rakshasa": {
     etb: [{ type: "debuff", power: -2, toughness: -2, target: "opponent_creature", duration: "end_of_turn" }, { type: "buff", power: 2, toughness: 2, target: "own_creature", duration: "end_of_turn" }],
-    static: [{ type: "has_keyword", keyword: "menace" }]
+    static: [{ type: "has_keyword", keywords: ["menace"] }]
   },
   "iridescent tiger": {
     etb: [{ type: "add_mana", colors: ["W", "U", "B", "R", "G"] }]
@@ -1322,11 +1331,11 @@ const CardEffectsDB = {
   },
   "shocking sharpshooter": {
     triggered: [{ event: "other_creature_enters", effects: [{ type: "damage", amount: 1, target: "opponent" }] }],
-    static: [{ type: "has_keyword", keyword: "reach" }]
+    static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
   "summit intimidator": {
     etb: [{ type: "tap", target: "opponent_creature" }],
-    static: [{ type: "has_keyword", keyword: "reach" }]
+    static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
   "skirmish rhino": {
     etb: [{ type: "drain", amount: 2 }],
@@ -1334,7 +1343,7 @@ const CardEffectsDB = {
   },
   "sonic shrieker": {
     etb: [{ type: "damage", amount: 2, target: "any" }, { type: "gainLife", amount: 2 }, { type: "discard", amount: 1, target: "damaged_player" }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "severance priest": {
     etb: [{ type: "exile", target: "opponent_hand_nonland", show_hand: true }],
@@ -1373,14 +1382,14 @@ const CardEffectsDB = {
   },
   "underfoot underdogs": {
     etb: [{ type: "create_token", power: 1, toughness: 1, name: "Goblin", colors: ["R"], type_line: "Creature — Goblin" }],
-    activated: [{ cost: { mana: "1", tap: true }, effects: [{ type: "grant", keyword: "unblockable", target: "own_creature_power2", duration: "end_of_turn" }] }]
+    activated: [{ cost: { mana: "1", tap: true }, effects: [{ type: "grant", keywords: ["unblockable"], target: "own_creature_power2", duration: "end_of_turn" }] }]
   },
 
   // =================== TDM - CREATURES WITH TRIGGERED ABILITIES ===================
 
   "wingblade disciple": {
     triggered: [{ event: "second_spell", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Bird", keywords: ["flying"] }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "rescue leopard": {
     triggered: [{ event: "becomes_tapped", self: true, effects: [{ type: "optional_discard_draw" }] }]
@@ -1401,18 +1410,18 @@ const CardEffectsDB = {
   },
   "sinkhole surveyor": {
     triggered: [{ event: "attacks", self: true, effects: [{ type: "loseLife", amount: 1 }, { type: "endure", amount: 1 }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "venerated stormsinger": {
     triggered: [{ event: "any_creature_dies", controller: true, effects: [{ type: "drain", amount: 1 }] }]
   },
   "yathan tombguard": {
     triggered: [{ event: "combat_damage_player", condition: "creature_with_counter", effects: [{ type: "draw", amount: 1 }, { type: "loseLife", amount: 1 }] }],
-    static: [{ type: "has_keyword", keyword: "menace" }]
+    static: [{ type: "has_keyword", keywords: ["menace"] }]
   },
   "stalwart successor": {
     triggered: [{ event: "counter_placed", effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "same_creature" }], once_per_creature_per_turn: true }],
-    static: [{ type: "has_keyword", keyword: "menace" }]
+    static: [{ type: "has_keyword", keywords: ["menace"] }]
   },
   "warden of the grove": {
     triggered: [
@@ -1421,7 +1430,7 @@ const CardEffectsDB = {
     ]
   },
   "surrak, elusive hunter": {
-    static: [{ type: "has_keyword", keyword: "trample" }, { type: "uncounterable" }],
+    static: [{ type: "has_keyword", keywords: ["trample"] }, { type: "uncounterable" }],
     triggered: [{ event: "creature_targeted_by_opponent", effects: [{ type: "draw", amount: 1 }] }]
   },
 
@@ -1430,22 +1439,22 @@ const CardEffectsDB = {
   "fleeting effigy": {
     triggered: [{ event: "end_step", effects: [{ type: "bounce_self" }] }],
     activated: [{ cost: { mana: "2R" }, effects: [{ type: "buff", power: 2, toughness: 0, target: "self", duration: "end_of_turn" }] }],
-    static: [{ type: "has_keyword", keyword: "haste" }]
+    static: [{ type: "has_keyword", keywords: ["haste"] }]
   },
   "krotiq nestguard": {
-    activated: [{ cost: { mana: "2G" }, effects: [{ type: "grant", keyword: "can_attack", target: "self", duration: "end_of_turn" }] }],
-    static: [{ type: "has_keyword", keyword: "defender" }]
+    activated: [{ cost: { mana: "2G" }, effects: [{ type: "grant", keywords: ["can_attack"], target: "self", duration: "end_of_turn" }] }],
+    static: [{ type: "has_keyword", keywords: ["defender"] }]
   },
   "unburied earthcarver": {
     activated: [{ cost: { mana: "2", sacrifice_creature: true }, effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }] }]
   },
   "unrooted ancestor": {
-    activated: [{ cost: { mana: "1", sacrifice_creature: true }, effects: [{ type: "grant", keyword: "indestructible", target: "self", duration: "end_of_turn" }, { type: "tap", target: "self" }] }],
-    static: [{ type: "has_keyword", keyword: "flash" }]
+    activated: [{ cost: { mana: "1", sacrifice_creature: true }, effects: [{ type: "grant", keywords: ["indestructible"], target: "self", duration: "end_of_turn" }, { type: "tap", target: "self" }] }],
+    static: [{ type: "has_keyword", keywords: ["flash"] }]
   },
   "undergrowth leopard": {
     activated: [{ cost: { mana: "1", sacrifice: true }, effects: [{ type: "destroy", target: "artifact_or_enchantment" }] }],
-    static: [{ type: "has_keyword", keyword: "vigilance" }]
+    static: [{ type: "has_keyword", keywords: ["vigilance"] }]
   },
   "sunset strikemaster": {
     activated: [
@@ -1458,7 +1467,7 @@ const CardEffectsDB = {
   },
   "sultai devotee": {
     activated: [{ cost: { mana: "1", once_per_turn: true }, effects: [{ type: "add_mana", color: "BGU", choose: 1 }] }],
-    static: [{ type: "has_keyword", keyword: "deathtouch" }]
+    static: [{ type: "has_keyword", keywords: ["deathtouch"] }]
   },
   "rainveil rejuvenator": {
     etb: [{ type: "mill", amount: 3, target: "self", optional: true }],
@@ -1502,14 +1511,14 @@ const CardEffectsDB = {
     static: [{ type: "cost_reduction", amount: 1, target: "spells", condition: "per_power4_creature" }]
   },
   "teval, arbiter of virtue": {
-    static: [{ type: "has_keyword", keyword: "flying" }, { type: "grant_delve" }],
+    static: [{ type: "has_keyword", keywords: ["flying"] }, { type: "grant_delve" }],
     triggered: [{ event: "cast_spell", effects: [{ type: "loseLife", amount: "mana_value" }] }]
   },
 
   // =================== TDM - CREATURES WITH RENEW ===================
 
   "champion of dusan": {
-    graveyard: [{ cost: { mana: "1G", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "grant", keyword: "Trample", target: "same", duration: "permanent" }] }],
+    graveyard: [{ cost: { mana: "1G", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "grant", keywords: ["Trample"], target: "same", duration: "permanent" }] }],
     static: [{ type: "has_keyword", keywords: ["trample"] }]
   },
   "sagu pummeler": {
@@ -1522,11 +1531,11 @@ const CardEffectsDB = {
   "tersa lightshatter": {
     etb: [{ type: "draw", amount: 2 }, { type: "discard", amount: 1 }],
     triggered: [{ event: "attacks", self: true, condition: "seven_cards_in_gy", effects: [{ type: "exile_top_play", amount: 1, from: "graveyard", random: true }] }],
-    static: [{ type: "has_keyword", keyword: "haste" }]
+    static: [{ type: "has_keyword", keywords: ["haste"] }]
   },
   "songcrafter mage": {
     etb: [{ type: "grant_harmonize", target: "instant_or_sorcery_in_gy" }],
-    static: [{ type: "has_keyword", keyword: "flash" }]
+    static: [{ type: "has_keyword", keywords: ["flash"] }]
   },
 
   // =================== TDM - URENI & LEGENDARY ===================
@@ -1552,13 +1561,13 @@ const CardEffectsDB = {
     cast: [{ type: "ramp", target: "basic_land", to_hand: true }],
     omen: true,
     etb: [{ type: "gainLife", amount: 3 }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "sagu wildling // roost seek": {
     cast: [{ type: "ramp", target: "basic_land", to_hand: true }],
     omen: true,
     etb: [{ type: "gainLife", amount: 3 }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "scavenger regent": {
     cast: [{ type: "debuff_all", power: -3, toughness: -3, target: "opponent_creatures" }],
@@ -1569,13 +1578,13 @@ const CardEffectsDB = {
     cast: [{ type: "loot", draw: 2, discard: 1 }],
     omen: true,
     activated: [{ cost: { mana: "1R" }, effects: [{ type: "buff", power: 1, toughness: 0, target: "self", duration: "end_of_turn" }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "twinmaw stormbrood": {
     cast: [{ type: "damage", amount: 5, target: "creature" }],
     omen: true,
     etb: [{ type: "gainLife", amount: 5 }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "whirlwing stormbrood": {
     cast: [{ type: "counter", counter: "+1/+1", amount: 3, target: "own_creature" }],

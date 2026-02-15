@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 50/277 (18.1%)
+Current Progress: 55/277 (19.9%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -82,11 +82,11 @@ BATCH 8 (Cards 36-40):
 
 BATCH 9 (Cards 41-45):
 --------------------------------------------------------------------------------
-  [ ] Craterhoof Behemoth                                | {5}{G}{G}{G}    | Creature -- Beast
-  [ ] Cruel Truths                                       | {3}{B}          | Instant
-  [ ] Dalkovan Encampment                                | (No cost)       | Land
-  [ ] Dalkovan Packbeasts                                | {2}{W}          | Creature -- Ox
-  [ ] Death Begets Life                                  | {5}{B}{G}{U}    | Sorcery
+  [X] Craterhoof Behemoth                                | {5}{G}{G}{G}    | Creature -- Beast
+  [X] Cruel Truths                                       | {3}{B}          | Instant
+  [X] Dalkovan Encampment                                | (No cost)       | Land
+  [X] Dalkovan Packbeasts                                | {2}{W}          | Creature -- Ox
+  [X] Death Begets Life                                  | {5}{B}{G}{U}    | Sorcery
 
 BATCH 10 (Cards 46-50):
 --------------------------------------------------------------------------------

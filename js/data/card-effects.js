@@ -238,7 +238,7 @@ const CardEffectsDB = {
   },
 
   "descendant of storms": {
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "endure", amount: 1, cost: "1W" }] }]
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "endure", amount: 1, cost: "1W", optional: true }] }]
   },
 
   "devoted duelist": {

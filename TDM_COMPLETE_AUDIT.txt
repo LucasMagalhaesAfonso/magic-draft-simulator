@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 55/277 (19.9%)
+Current Progress: 60/277 (21.7%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -90,11 +90,11 @@ BATCH 9 (Cards 41-45):
 
 BATCH 10 (Cards 46-50):
 --------------------------------------------------------------------------------
-  [ ] Defibrillating Current                             | {2/R}{2/W}{2/B} | Sorcery
-  [ ] Delta Bloodflies                                   | {1}{B}          | Creature -- Insect
-  [ ] Descendant of Storms                               | {W}             | Creature -- Human Soldier
-  [ ] Desperate Measures                                 | {B}             | Instant
-  [ ] Devoted Duelist                                    | {1}{R}          | Creature -- Goblin Monk
+  [X] Defibrillating Current                             | {2/R}{2/W}{2/B} | Sorcery
+  [X] Delta Bloodflies                                   | {1}{B}          | Creature -- Insect
+  [X] Descendant of Storms                               | {W}             | Creature -- Human Soldier
+  [X] Desperate Measures                                 | {B}             | Instant
+  [X] Devoted Duelist                                    | {1}{R}          | Creature -- Goblin Monk
 
 BATCH 11 (Cards 51-55):
 --------------------------------------------------------------------------------

@@ -222,8 +222,8 @@ class FullStackAnalyzer {
     const issues = [];
     if (!mana_cost) return issues;
 
-    // Check mana parsing
-    const hasValidMana = /\{\d+\}|\{[WUBRG]\}|X/.test(mana_cost);
+    // Check mana parsing - supports generic, colored, hybrid, and variable mana
+    const hasValidMana = /\{\d+\}|\{[WUBRG]\}|\{\d+\/[WUBRG]\}|X/.test(mana_cost);
     if (!hasValidMana && mana_cost !== '') {
       issues.push(`⚠️  Mana cost format unusual: "${mana_cost}"`);
     }
@@ -903,6 +903,10 @@ const CARDS_BATCH = {
   batch9: [
     'Craterhoof Behemoth', 'Cruel Truths', 'Dalkovan Encampment',
     'Dalkovan Packbeasts', 'Death Begets Life'
+  ],
+  batch10: [
+    'Defibrillating Current', 'Delta Bloodflies', 'Descendant of Storms',
+    'Desperate Measures', 'Devoted Duelist'
   ]
 };
 

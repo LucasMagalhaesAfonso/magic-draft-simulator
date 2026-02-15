@@ -291,11 +291,16 @@ class FullStackAnalyzer {
     const dbStr = JSON.stringify(dbEntry).toLowerCase();
     const hasLandMechanics = dbStr.includes('enters_tapped_conditional') ||
                              (dbStr.includes('activated') && !dbStr.includes('triggered'));
-    if (oracleTriggered !== dbTriggered && !dbEntry?.saga && !dbEntry?.chapters && !hasLandMechanics) {
-      issues.push(`⚠️  Triggered count mismatch: Oracle=${oracleTriggered}, DB=${dbTriggered}`);
+    // "enters or attacks" counts as 1 trigger in oracle but analyzer may count as 2
+    const hasEntersOrAttacks = dbStr.includes('enters_or_attacks');
+    const adjustedOracleCount = hasEntersOrAttacks && oracleTriggered > dbTriggered ?
+                                oracleTriggered - 1 : oracleTriggered;
+    if (adjustedOracleCount !== dbTriggered && !dbEntry?.saga && !dbEntry?.chapters && !hasLandMechanics) {
+      issues.push(`⚠️  Triggered count mismatch: Oracle=${adjustedOracleCount}, DB=${dbTriggered}`);
     }
 
-    const oracleHasEtb = /when[^.]*enters/i.test(oracle);
+    // Check for ETB but exclude "enters or attacks" composite events
+    const oracleHasEtb = /when[^.]*enters/i.test(oracle) && !/enters\s+or\s+attacks/i.test(oracle);
     const dbHasEtb = !!dbEntry?.etb;
     if (oracleHasEtb !== dbHasEtb) {
       issues.push(`⚠️  ETB mismatch: Oracle=${oracleHasEtb}, DB=${dbHasEtb}`);
@@ -326,7 +331,7 @@ class FullStackAnalyzer {
     const issues = [];
     if (!dbEntry) return issues; // Card not in database yet
 
-    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'card', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent', 'same', 'same_creature'];
+    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'card', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent', 'same', 'same_creature', 'enchanted', 'equipped'];
 
     const checkTargets = (effects) => {
       if (!Array.isArray(effects)) return;
@@ -454,7 +459,8 @@ class FullStackAnalyzer {
 
     // Count abilities in oracle
     const wheneverCount = (oracle.match(/whenever/gi) || []).length;
-    const whenCount = (oracle.match(/when\s+(?!.*enters)/gi) || []).length;
+    // Count "when" but exclude "when...enters" and "when you" (continuation of whenever)
+    const whenCount = (oracle.match(/when\s+(?!.*enters)(?!you\s)/gi) || []).length;
     const totalTriggersOracle = wheneverCount + whenCount;
     const totalTriggersDB = dbEntry.triggered?.length || 0;
 
@@ -980,6 +986,10 @@ const CARDS_BATCH = {
   batch15: [
     'Encroaching Dragonstorm', 'Equilibrium Adept', 'Eshki Dragonclaw',
     'Essence Anchor', 'Evolving Wilds'
+  ],
+  batch16: [
+    'Fangkeeper\'s Familiar', 'Felothar, Dawn of the Abzan', 'Feral Deathgorger',
+    'Fire-Rim Form', 'Flamehold Grappler'
   ]
 };
 

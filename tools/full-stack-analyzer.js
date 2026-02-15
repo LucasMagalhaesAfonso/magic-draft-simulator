@@ -619,6 +619,53 @@ class FullStackAnalyzer {
     return issues;
   }
 
+  validateTokens(dbEntry) {
+    const issues = [];
+    if (!dbEntry) return issues;
+
+    // Helper to check effects for token creation
+    const checkTokensInEffects = (effects, context = '') => {
+      if (!Array.isArray(effects)) return;
+      for (const effect of effects) {
+        if (effect.type === 'create_token') {
+          // Check token has required fields
+          if (!effect.name) {
+            issues.push(`❌ Token (${context}): Missing token name`);
+          }
+          if (effect.power === undefined || effect.toughness === undefined) {
+            issues.push(`❌ Token (${context}): Missing P/T (${effect.power}/${effect.toughness})`);
+          }
+          // Check for conflicting type definitions
+          if (effect.type_line && !effect.name) {
+            issues.push(`⚠️  Token (${context}): Has type_line but may be missing name`);
+          }
+          // Verify power/toughness are numbers or special values
+          if (typeof effect.power === 'string' && !['X', 'creature_count', 'greatest_power'].includes(effect.power)) {
+            issues.push(`⚠️  Token (${context}): Unusual power format "${effect.power}"`);
+          }
+        }
+      }
+    };
+
+    // Check cast, etb, triggered, and activated effects
+    if (dbEntry.cast) checkTokensInEffects(dbEntry.cast, 'cast');
+    if (dbEntry.etb) checkTokensInEffects(dbEntry.etb, 'etb');
+    if (dbEntry.triggered) {
+      for (const trigger of dbEntry.triggered) {
+        if (trigger.effects) checkTokensInEffects(trigger.effects, `triggered_${trigger.event}`);
+      }
+    }
+    if (dbEntry.activated) {
+      for (let i = 0; i < dbEntry.activated.length; i++) {
+        if (dbEntry.activated[i].effects) {
+          checkTokensInEffects(dbEntry.activated[i].effects, `activated_${i}`);
+        }
+      }
+    }
+
+    return issues;
+  }
+
   async analyzeCard(cardName) {
     console.log(`\n${'='.repeat(120)}`);
     console.log(`FULL-STACK ANALYSIS: ${cardName}`);
@@ -822,6 +869,9 @@ class FullStackAnalyzer {
       console.log('');
     }
 
+    // 20. TOKEN VALIDATION (optional)
+    const tokenIssues = this.validateTokens(dbEntry);
+
     // SUMMARY
     const allIssues = [
       ...effectIssues,
@@ -840,7 +890,8 @@ class FullStackAnalyzer {
       ...aiIssues,
       ...chainingIssues,
       ...humanIssues,
-      ...aiPlayabilityIssues
+      ...aiPlayabilityIssues,
+      ...tokenIssues
     ];
 
     console.log(`${'='.repeat(120)}`);

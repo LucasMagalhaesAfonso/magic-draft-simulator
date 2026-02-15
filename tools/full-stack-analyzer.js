@@ -612,7 +612,9 @@ class FullStackAnalyzer {
     // Check if card is too complex for AI
     const triggerCount = dbEntry.triggered?.length || 0;
     const activatedCount = dbEntry.activated?.length || 0;
-    if (triggerCount > 3 || activatedCount > 2) {
+    // Planeswalkers are allowed more abilities (loyalty abilities)
+    const isPlaneswalker = dbEntry.activated?.some(a => a.cost?.loyalty !== undefined);
+    if (triggerCount > 3 || (activatedCount > 2 && !isPlaneswalker)) {
       issues.push(`⚠️  [AI] Card has many triggers/abilities (${triggerCount}/${activatedCount}) - AI may struggle`);
     }
 
@@ -970,6 +972,10 @@ const CARDS_BATCH = {
   batch13: [
     'Dragonologist', 'Dragon Sniper', 'Dragon\'s Prey',
     'Dragonstorm Forecaster', 'Dragonstorm Globe'
+  ],
+  batch14: [
+    'Dusyut Earthcarver', 'Duty Beyond Death', 'Effortless Master',
+    'Elspeth, Storm Slayer', 'Embermouth Sentinel'
   ]
 };
 

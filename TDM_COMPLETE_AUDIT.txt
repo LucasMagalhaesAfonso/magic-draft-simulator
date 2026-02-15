@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 75/277 (27.1%)
+Current Progress: 80/277 (28.9%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -122,11 +122,11 @@ BATCH 13 (Cards 61-65):
 
 BATCH 14 (Cards 66-70):
 --------------------------------------------------------------------------------
-  [ ] Dusyut Earthcarver                                 | {5}{G}          | Creature -- Elephant Druid
-  [ ] Duty Beyond Death                                  | {1}{W}          | Instant
-  [ ] Effortless Master                                  | {2}{U}{R}       | Creature -- Orc Monk
-  [ ] Elspeth, Storm Slayer                              | {3}{W}{W}       | Legendary Planeswalker -- Elspeth
-  [ ] Embermouth Sentinel                                | {2}             | Artifact Creature -- Chimera
+  [X] Dusyut Earthcarver                                 | {5}{G}          | Creature -- Elephant Druid
+  [X] Duty Beyond Death                                  | {1}{W}          | Instant
+  [X] Effortless Master                                  | {2}{U}{R}       | Creature -- Orc Monk
+  [X] Elspeth, Storm Slayer                              | {3}{W}{W}       | Legendary Planeswalker -- Elspeth
+  [X] Embermouth Sentinel                                | {2}             | Artifact Creature -- Chimera
 
 BATCH 15 (Cards 71-75):
 --------------------------------------------------------------------------------

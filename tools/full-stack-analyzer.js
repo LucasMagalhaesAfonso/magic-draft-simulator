@@ -262,9 +262,29 @@ class FullStackAnalyzer {
       return issues;
     }
 
-    // Count "whenever", "when", and "at the beginning" triggers (but NOT "when enters")
-    const triggerMatches = oracle.match(/whenever[^.]+\.|when\s+(?!.*\benters\b)[^.]*\.|at\s+the\s+beginning[^.]*\./gi) || [];
-    const oracleTriggered = triggerMatches.filter(m => !m.toLowerCase().includes('enters')).length;
+    // Count triggers: "whenever", "when", and "at the beginning" (but NOT ETB: "when this/that enters")
+    // Split by sentences, but be careful about "at the beginning" inside keywords like Mobilize
+    let oracleTriggered = 0;
+
+    // Count "whenever" (main triggers)
+    const wheneverMatches = oracle.match(/whenever/gi) || [];
+    oracleTriggered += wheneverMatches.length;
+
+    // Count "when" but exclude ETB like "when this/that enters"
+    const whenMatches = oracle.match(/when\s+[^.]+\./gi) || [];
+    for (const match of whenMatches) {
+      if (!/when\s+(?:this|that)[^.]*enters/i.test(match)) {
+        oracleTriggered++;
+      }
+    }
+
+    // Count "at the beginning" only if NOT inside parentheses (keywords like Mobilize)
+    const sentences = oracle.replace(/\([^)]*\)/g, '').split(/[.!?]\s+/);
+    for (const sent of sentences) {
+      if (/at\s+the\s+beginning/i.test(sent)) {
+        oracleTriggered++;
+      }
+    }
     const dbTriggered = dbEntry?.triggered?.length || 0;
 
     // Skip trigger count check for Sagas (they use chapters, not triggered abilities)
@@ -850,6 +870,10 @@ const CARDS_BATCH = {
   batch5: [
     'Bearer of Glory', 'Betor, Kin to All', 'Bewildering Blizzard',
     'Bloodfell Caves', 'Bloomvine Regent'
+  ],
+  batch6: [
+    'Blossoming Sands', 'Bone-Cairn Butcher', 'Boulderborn Dragon',
+    'Breaching Dragonstorm', 'Call the Spirit Dragons'
   ]
 };
 

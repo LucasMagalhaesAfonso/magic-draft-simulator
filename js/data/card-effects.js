@@ -216,8 +216,8 @@ const CardEffectsDB = {
   },
 
   "boulderborn dragon": {
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "surveil", amount: 1 }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "surveil", amount: 1, optional: true }] }],
+    static: [{ type: "has_keyword", keywords: ["flying", "vigilance"] }]
   },
 
   "cori mountain stalwart": {
@@ -385,8 +385,9 @@ const CardEffectsDB = {
   },
 
   "bone-cairn butcher": {
+    mobilize: 2,
     triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }],
-    static: [{ type: "grant", keyword: "deathtouch", target: "attacking_tokens" }]
+    static: [{ type: "grant", keywords: ["deathtouch"], target: "attacking_tokens" }]
   },
 
   "dalkovan packbeasts": {
@@ -1122,7 +1123,7 @@ const CardEffectsDB = {
   // =================== TDM - DRAGONSTORM ENCHANTMENTS ===================
 
   "breaching dragonstorm": {
-    etb: [{ type: "exile_top_play", condition: "nonland", free: true, max_mv: 8, duration: "end_of_turn" }],
+    etb: [{ type: "exile_top_play", condition: "nonland", free: true, max_mv: 8, optional: true, duration: "end_of_turn" }],
     triggered: [{ event: "dragon_enters", effects: [{ type: "bounce_self" }] }]
   },
   "corroding dragonstorm": {

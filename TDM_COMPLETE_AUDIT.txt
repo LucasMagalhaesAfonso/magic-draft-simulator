@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 35/277 (12.6%)
+Current Progress: 40/277 (14.4%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -58,11 +58,11 @@ BATCH 5 (Cards 21-25):
 
 BATCH 6 (Cards 26-30):
 --------------------------------------------------------------------------------
-  [ ] Blossoming Sands                                   | (No cost)       | Land
-  [ ] Bone-Cairn Butcher                                 | {1}{R}{W}{B}    | Creature -- Demon
-  [ ] Boulderborn Dragon                                 | {5}             | Artifact Creature -- Dragon
-  [ ] Breaching Dragonstorm                              | {4}{R}          | Enchantment
-  [ ] Call the Spirit Dragons                            | {W}{U}{B}{R}{G} | Enchantment
+  [X] Blossoming Sands                                   | (No cost)       | Land
+  [X] Bone-Cairn Butcher                                 | {1}{R}{W}{B}    | Creature -- Demon
+  [X] Boulderborn Dragon                                 | {5}             | Artifact Creature -- Dragon
+  [X] Breaching Dragonstorm                              | {4}{R}          | Enchantment
+  [X] Call the Spirit Dragons                            | {W}{U}{B}{R}{G} | Enchantment
 
 BATCH 7 (Cards 31-35):
 --------------------------------------------------------------------------------

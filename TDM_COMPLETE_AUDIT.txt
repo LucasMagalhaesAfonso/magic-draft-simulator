@@ -154,11 +154,11 @@ BATCH 17 (Cards 81-85):
 
 BATCH 18 (Cards 86-90):
 --------------------------------------------------------------------------------
-  [ ] Fresh Start                                        | {1}{U}          | Enchantment -- Aura
-  [ ] Frontier Bivouac                                   | (No cost)       | Land
-  [ ] Frontline Rush                                     | {R}{W}          | Instant
-  [ ] Frostcliff Siege                                   | {1}{U}{R}       | Enchantment
-  [ ] Furious Forebear                                   | {1}{W}          | Creature -- Spirit Warrior
+  [X] Fresh Start                                        | {1}{U}          | Enchantment -- Aura
+  [X] Frontier Bivouac                                   | (No cost)       | Land
+  [X] Frontline Rush                                     | {R}{W}          | Instant
+  [X] Frostcliff Siege                                   | {1}{U}{R}       | Enchantment
+  [X] Furious Forebear                                   | {1}{W}          | Creature -- Spirit Warrior
 
 BATCH 19 (Cards 91-95):
 --------------------------------------------------------------------------------

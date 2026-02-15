@@ -255,7 +255,7 @@ const CardEffectsDB = {
     triggered: [{
       event: "any_creature_dies",
       condition: "own_creature",
-      effects: [{ type: "exile_top_play", amount: 1, duration: "next_turn" }]
+      effects: [{ type: "exile_top_play", amount: 1, duration: "next_turn", optional: true }]
     }]
   },
 

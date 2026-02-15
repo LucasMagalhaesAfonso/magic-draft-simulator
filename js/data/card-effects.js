@@ -283,7 +283,7 @@ const CardEffectsDB = {
   },
 
   "kheru goldkeeper": {
-    triggered: [{ event: "cards_leave_graveyard", effects: [{ type: "create_token", name: "Treasure" }] }],
+    triggered: [{ event: "cards_leave_graveyard", effects: [{ type: "create_token", name: "Treasure", power: 0, toughness: 1 }] }],
     static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 

@@ -178,11 +178,11 @@ BATCH 20 (Cards 96-100):
 
 BATCH 21 (Cards 101-105):
 --------------------------------------------------------------------------------
-  [ ] Host of the Hereafter                              | {2}{B}{G}       | Creature -- Zombie Warlock
-  [ ] Humbling Elder                                     | {U}             | Creature -- Human Monk
-  [ ] Hundred-Battle Veteran                             | {3}{B}          | Creature -- Zombie Warrior
-  [ ] Iceridge Serpent                                   | {4}{U}          | Creature -- Serpent
-  [ ] Inevitable Defeat                                  | {1}{R}{W}{B}    | Instant
+  [X] Host of the Hereafter                              | {2}{B}{G}       | Creature -- Zombie Warlock
+  [X] Humbling Elder                                     | {U}             | Creature -- Human Monk
+  [X] Hundred-Battle Veteran                             | {3}{B}          | Creature -- Zombie Warrior
+  [X] Iceridge Serpent                                   | {4}{U}          | Creature -- Serpent
+  [X] Inevitable Defeat                                  | {1}{R}{W}{B}    | Instant
 
 BATCH 22 (Cards 106-110):
 --------------------------------------------------------------------------------

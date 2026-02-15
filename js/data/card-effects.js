@@ -262,7 +262,7 @@ const CardEffectsDB = {
 
   "host of the hereafter": {
     etb: [{ type: "counter_self", counter: "+1/+1", amount: 2 }],
-    triggered: [{ event: "any_creature_dies", effects: [{ type: "move_counters", target: "creature" }], condition: "creature_died_with_counters" }]
+    triggered: [{ event: "any_creature_dies", effects: [{ type: "move_counters", target: "creature" }] }]
   },
 
   "inspirited vanguard": {
@@ -1505,7 +1505,7 @@ const CardEffectsDB = {
   },
   "hundred-battle veteran": {
     static: [{ type: "conditional_buff", power: 2, toughness: 4, condition: "three_counter_types" }],
-    graveyard: [{ cost: { cast_from_gy: true }, effects: [{ type: "counter_self", counter: "finality", amount: 1 }] }]
+    graveyard: [{ cost: { cast_from_gy: true }, effects: [{ type: "counter_self", counter: "finality", amount: 1 }], optional: true }]
   },
   "karakyk guardian": {
     static: [{ type: "has_keyword", keywords: ["flying", "vigilance", "trample", "hexproof"] }]

@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 30/277 (10.8%)
+Current Progress: 35/277 (12.6%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -50,11 +50,11 @@ BATCH 4 (Cards 16-20):
 
 BATCH 5 (Cards 21-25):
 --------------------------------------------------------------------------------
-  [ ] Bearer of Glory                                    | {1}{W}          | Creature -- Human Soldier
-  [ ] Betor, Kin to All                                  | {2}{W}{B}{G}    | Legendary Creature -- Spirit Dragon
-  [ ] Bewildering Blizzard                               | {4}{U}{U}       | Instant
-  [ ] Bloodfell Caves                                    | (No cost)       | Land
-  [ ] Bloomvine Regent // Claim Territory                | {3}{G}{G} // {2}{G} | Creature -- Dragon // Sorcery -- Omen
+  [X] Bearer of Glory                                    | {1}{W}          | Creature -- Human Soldier
+  [X] Betor, Kin to All                                  | {2}{W}{B}{G}    | Legendary Creature -- Spirit Dragon
+  [X] Bewildering Blizzard                               | {4}{U}{U}       | Instant
+  [X] Bloodfell Caves                                    | (No cost)       | Land
+  [X] Bloomvine Regent // Claim Territory                | {3}{G}{G} // {2}{G} | Creature -- Dragon // Sorcery -- Omen
 
 BATCH 6 (Cards 26-30):
 --------------------------------------------------------------------------------

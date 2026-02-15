@@ -212,7 +212,7 @@ const CardEffectsDB = {
     cast: [{ type: "ramp", target: "basic_forest", tapped: true }, { type: "ramp", target: "basic_forest", to_hand: true }],
     omen: true,
     triggered: [{ event: "dragon_enters", effects: [{ type: "gain_life", amount: 3 }] }],
-    static: [{ type: "has_keyword", keyword: "flying" }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 
   "boulderborn dragon": {
@@ -452,8 +452,16 @@ const CardEffectsDB = {
   },
 
   "betor, kin to all": {
-    static: [{ type: "has_keyword", keyword: "flying" }],
-    triggered: [{ event: "end_step", condition: "toughness_10+", effects: [{ type: "draw", amount: 1 }] }]
+    static: [{ type: "has_keyword", keywords: ["flying"] }],
+    triggered: [{
+      event: "end_step",
+      self: true,
+      effects: [
+        { type: "draw", amount: 1, condition: "toughness_10+" },
+        { type: "untap_all", target: "own_creatures", condition: "toughness_20+" },
+        { type: "opponent_loses_half_life", condition: "toughness_40+" }
+      ]
+    }]
   },
 
   // =================== TARKIR DRAGONSTORM - RARES ===================

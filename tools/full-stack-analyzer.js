@@ -257,8 +257,13 @@ class FullStackAnalyzer {
   compareSizeAndContent(oracle, dbEntry) {
     const issues = [];
 
-    // Count "whenever" and "when" triggers (but NOT "when enters")
-    const triggerMatches = oracle.match(/whenever[^.]+\.|when\s+(?!.*\benters\b)[^.]*\./gi) || [];
+    // Handle undefined oracle text (for DFC cards)
+    if (!oracle || typeof oracle !== 'string') {
+      return issues;
+    }
+
+    // Count "whenever", "when", and "at the beginning" triggers (but NOT "when enters")
+    const triggerMatches = oracle.match(/whenever[^.]+\.|when\s+(?!.*\benters\b)[^.]*\.|at\s+the\s+beginning[^.]*\./gi) || [];
     const oracleTriggered = triggerMatches.filter(m => !m.toLowerCase().includes('enters')).length;
     const dbTriggered = dbEntry?.triggered?.length || 0;
 
@@ -417,6 +422,11 @@ class FullStackAnalyzer {
   validateOracleCompleteness(oracle, dbEntry) {
     const issues = [];
 
+    // Handle undefined oracle text (for DFC cards)
+    if (!oracle || typeof oracle !== 'string') {
+      return issues;
+    }
+
     // Count abilities in oracle
     const wheneverCount = (oracle.match(/whenever/gi) || []).length;
     const whenCount = (oracle.match(/when\s+(?!.*enters)/gi) || []).length;
@@ -495,6 +505,11 @@ class FullStackAnalyzer {
 
   validateHumanInteractivity(dbEntry, oracle) {
     const issues = [];
+
+    // Handle undefined oracle text (for DFC cards)
+    if (!oracle || typeof oracle !== 'string') {
+      return issues;
+    }
 
     // Check if card requires human choice but might not have UI support
     const hasModal = dbEntry.cast?.some(e => e.type === 'modal') || dbEntry.etb?.some(e => e.type === 'modal');
@@ -581,9 +596,10 @@ class FullStackAnalyzer {
     }
     console.log(`✅ Found: ${card.name}`);
     console.log(`   Mana: ${card.mana_cost} | Type: ${card.type_line}`);
-    console.log(`   Oracle: ${card.oracle_text.substring(0, 80)}...\n`);
+    const oracleText = card.oracle_text || (card.card_faces && card.card_faces[0] && card.card_faces[0].oracle_text) || '';
+    console.log(`   Oracle: ${oracleText.substring(0, 80)}...\n`);
 
-    const oracleAnalysis = this.analyzeOracle(card.oracle_text, card.type_line);
+    const oracleAnalysis = this.analyzeOracle(oracleText, card.type_line);
 
     // 2. CARDEFECTSDB
     console.log(`[2/7] CARDEFECTSDB`);
@@ -830,6 +846,10 @@ const CARDS_BATCH = {
   batch4: [
     'Attuned Hunter', 'Auroral Procession', 'Avenger of the Fallen',
     'Awaken the Honored Dead', 'Barrensteppe Siege'
+  ],
+  batch5: [
+    'Bearer of Glory', 'Betor, Kin to All', 'Bewildering Blizzard',
+    'Bloodfell Caves', 'Bloomvine Regent'
   ]
 };
 

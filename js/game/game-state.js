@@ -615,6 +615,12 @@ const GameState = {
         return true; // X filtering handled by search_library itself
       case 'faeries_you_control':
         return bf.some(c => CardEngine.hasCreatureType(c, 'Faerie'));
+      case 'toughness_10+':
+        return bf.reduce((sum, c) => sum + (CardEngine.isCreature(c) ? CardEngine.getToughness(c) : 0), 0) >= 10;
+      case 'toughness_20+':
+        return bf.reduce((sum, c) => sum + (CardEngine.isCreature(c) ? CardEngine.getToughness(c) : 0), 0) >= 20;
+      case 'toughness_40+':
+        return bf.reduce((sum, c) => sum + (CardEngine.isCreature(c) ? CardEngine.getToughness(c) : 0), 0) >= 40;
       default:
         return true; // Unknown condition - allow (fail open)
     }
@@ -860,6 +866,12 @@ const GameState = {
         state.players[opponentId].life -= deAmt;
         this._checkWinner(state);
         return `${deAmt} dano a cada oponente.`;
+      }
+      case 'opponent_loses_half_life': {
+        const halfLife = Math.ceil(state.players[opponentId].life / 2);
+        state.players[opponentId].life -= halfLife;
+        this._checkWinner(state);
+        return `${opponentId === 0 ? 'Voce perde' : 'Oponente perde'} ${halfLife} vida (metade arredondada para cima).`;
       }
       case 'untap_self': {
         const card = state.players[controllerId].zones.battlefield.get(data.cardUid);

@@ -170,11 +170,11 @@ BATCH 19 (Cards 91-95):
 
 BATCH 20 (Cards 96-100):
 --------------------------------------------------------------------------------
-  [ ] Hardened Tactician                                 | {1}{W}{B}       | Creature -- Human Warrior
-  [ ] Herd Heirloom                                      | {1}{G}          | Artifact
-  [ ] Heritage Reclamation                               | {1}{G}          | Instant
-  [ ] Highspire Bell-Ringer                              | {2}{U}          | Creature -- Djinn Monk
-  [ ] Hollowmurk Siege                                   | {B}{G}          | Enchantment
+  [X] Hardened Tactician                                 | {1}{W}{B}       | Creature -- Human Warrior
+  [X] Herd Heirloom                                      | {1}{G}          | Artifact
+  [X] Heritage Reclamation                               | {1}{G}          | Instant
+  [X] Highspire Bell-Ringer                              | {2}{U}          | Creature -- Djinn Monk
+  [X] Hollowmurk Siege                                   | {B}{G}          | Enchantment
 
 BATCH 21 (Cards 101-105):
 --------------------------------------------------------------------------------

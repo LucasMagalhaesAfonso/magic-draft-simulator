@@ -186,75 +186,75 @@ BATCH 21 (Cards 101-105):
 
 BATCH 22 (Cards 106-110):
 --------------------------------------------------------------------------------
-  [ ] Inspirited Vanguard                                | {4}{G}          | Creature -- Human Soldier
-  [ ] Iridescent Tiger                                   | {4}{R}          | Creature -- Cat
-  [ ] Island                                             | (No cost)       | Basic Land -- Island
-  [ ] Jade-Cast Sentinel                                 | {4}             | Artifact Creature -- Ape Snake
-  [ ] Jeskai Brushmaster                                 | {1}{U}{R}{W}    | Creature -- Orc Monk
+  [X] Inspirited Vanguard                                | {4}{G}          | Creature -- Human Soldier
+  [X] Iridescent Tiger                                   | {4}{R}          | Creature -- Cat
+  [X] Island                                             | (No cost)       | Basic Land -- Island
+  [X] Jade-Cast Sentinel                                 | {4}             | Artifact Creature -- Ape Snake
+  [X] Jeskai Brushmaster                                 | {1}{U}{R}{W}    | Creature -- Orc Monk
 
 BATCH 23 (Cards 111-115):
 --------------------------------------------------------------------------------
-  [ ] Jeskai Devotee                                     | {1}{R}          | Creature -- Orc Monk
-  [ ] Jeskai Monument                                    | {2}             | Artifact
-  [ ] Jeskai Revelation                                  | {4}{U}{R}{W}    | Instant
-  [ ] Jeskai Shrinekeeper                                | {2}{U}{R}{W}    | Creature -- Dragon
-  [ ] Jungle Hollow                                      | (No cost)       | Land
+  [X] Jeskai Devotee                                     | {1}{R}          | Creature -- Orc Monk
+  [X] Jeskai Monument                                    | {2}             | Artifact
+  [X] Jeskai Revelation                                  | {4}{U}{R}{W}    | Instant
+  [X] Jeskai Shrinekeeper                                | {2}{U}{R}{W}    | Creature -- Dragon
+  [X] Jungle Hollow                                      | (No cost)       | Land
 
 BATCH 24 (Cards 116-120):
 --------------------------------------------------------------------------------
-  [ ] Karakyk Guardian                                   | {3}{G}{U}{R}    | Creature -- Dragon
-  [ ] Kheru Goldkeeper                                   | {1}{B}{G}{U}    | Creature -- Dragon
-  [ ] Kin-Tree Nurturer                                  | {2}{B}          | Creature -- Human Druid
-  [ ] Kin-Tree Severance                                 | {2/W}{2/B}{2/G} | Instant
-  [ ] Kishla Skimmer                                     | {G}{U}          | Creature -- Bird Scout
+  [X] Karakyk Guardian                                   | {3}{G}{U}{R}    | Creature -- Dragon
+  [X] Kheru Goldkeeper                                   | {1}{B}{G}{U}    | Creature -- Dragon
+  [X] Kin-Tree Nurturer                                  | {2}{B}          | Creature -- Human Druid
+  [X] Kin-Tree Severance                                 | {2/W}{2/B}{2/G} | Instant
+  [X] Kishla Skimmer                                     | {G}{U}          | Creature -- Bird Scout
 
 BATCH 25 (Cards 121-125):
 --------------------------------------------------------------------------------
-  [ ] Kishla Trawlers                                    | {2}{U}          | Creature -- Human Citizen
-  [ ] Kishla Village                                     | (No cost)       | Land
-  [ ] Knockout Maneuver                                  | {2}{G}          | Sorcery
-  [ ] Kotis, the Fangkeeper                              | {1}{B}{G}{U}    | Legendary Creature -- Zombie Warrior
-  [ ] Krotiq Nestguard                                   | {2}{G}          | Creature -- Insect
+  [X] Kishla Trawlers                                    | {2}{U}          | Creature -- Human Citizen
+  [X] Kishla Village                                     | (No cost)       | Land
+  [X] Knockout Maneuver                                  | {2}{G}          | Sorcery
+  [X] Kotis, the Fangkeeper                              | {1}{B}{G}{U}    | Legendary Creature -- Zombie Warrior
+  [X] Krotiq Nestguard                                   | {2}{G}          | Creature -- Insect
 
 BATCH 26 (Cards 126-130):
 --------------------------------------------------------------------------------
-  [ ] Krumar Initiate                                    | {1}{B}          | Creature -- Human Cleric
-  [ ] Lasyd Prowler                                      | {2}{G}{G}       | Creature -- Snake Ranger
-  [ ] Lie in Wait                                        | {B}{G}{U}       | Sorcery
-  [ ] Lightfoot Technique                                | {1}{W}          | Instant
-  [ ] Lotuslight Dancers                                 | {2}{B}{G}{U}    | Creature -- Zombie Bard
+  [X] Krumar Initiate                                    | {1}{B}          | Creature -- Human Cleric
+  [X] Lasyd Prowler                                      | {2}{G}{G}       | Creature -- Snake Ranger
+  [X] Lie in Wait                                        | {B}{G}{U}       | Sorcery
+  [X] Lightfoot Technique                                | {1}{W}          | Instant
+  [X] Lotuslight Dancers                                 | {2}{B}{G}{U}    | Creature -- Zombie Bard
 
 BATCH 27 (Cards 131-135):
 --------------------------------------------------------------------------------
-  [ ] Loxodon Battle Priest                              | {4}{W}          | Creature -- Elephant Cleric
-  [ ] Maelstrom of the Spirit Dragon                     | (No cost)       | Land
-  [ ] Magmatic Hellkite                                  | {2}{R}{R}       | Creature -- Dragon
-  [ ] Mammoth Bellow                                     | {2}{G}{U}{R}    | Sorcery
-  [ ] Marang River Regent // Coil and Catch              | {4}{U}{U} // {3}{U} | Creature -- Dragon // Instant -- Omen
+  [X] Loxodon Battle Priest                              | {4}{W}          | Creature -- Elephant Cleric
+  [X] Maelstrom of the Spirit Dragon                     | (No cost)       | Land
+  [X] Magmatic Hellkite                                  | {2}{R}{R}       | Creature -- Dragon
+  [X] Mammoth Bellow                                     | {2}{G}{U}{R}    | Sorcery
+  [X] Marang River Regent // Coil and Catch              | {4}{U}{U} // {3}{U} | Creature -- Dragon // Instant -- Omen
 
 BATCH 28 (Cards 136-140):
 --------------------------------------------------------------------------------
-  [ ] Mardu Devotee                                      | {W}             | Creature -- Human Scout
-  [ ] Mardu Monument                                     | {2}             | Artifact
-  [ ] Mardu Siegebreaker                                 | {1}{R}{W}{B}    | Creature -- Human Warrior
-  [ ] Marshal of the Lost                                | {2}{W}{B}       | Creature -- Orc Warrior
-  [ ] Meticulous Artisan                                 | {3}{R}          | Creature -- Djinn Artificer
+  [X] Mardu Devotee                                      | {W}             | Creature -- Human Scout
+  [X] Mardu Monument                                     | {2}             | Artifact
+  [X] Mardu Siegebreaker                                 | {1}{R}{W}{B}    | Creature -- Human Warrior
+  [X] Marshal of the Lost                                | {2}{W}{B}       | Creature -- Orc Warrior
+  [X] Meticulous Artisan                                 | {3}{R}          | Creature -- Djinn Artificer
 
 BATCH 29 (Cards 141-145):
 --------------------------------------------------------------------------------
-  [ ] Mistrise Village                                   | (No cost)       | Land
-  [ ] Molten Exhale                                      | {1}{R}          | Sorcery
-  [ ] Monastery Messenger                                | {2/U}{2/R}{2/W} | Creature -- Bird Scout
-  [ ] Mountain                                           | (No cost)       | Basic Land -- Mountain
-  [ ] Mox Jasper                                         | {0}             | Legendary Artifact
+  [X] Mistrise Village                                   | (No cost)       | Land
+  [X] Molten Exhale                                      | {1}{R}          | Sorcery
+  [X] Monastery Messenger                                | {2/U}{2/R}{2/W} | Creature -- Bird Scout
+  [X] Mountain                                           | (No cost)       | Basic Land -- Mountain
+  [X] Mox Jasper                                         | {0}             | Legendary Artifact
 
 BATCH 30 (Cards 146-150):
 --------------------------------------------------------------------------------
-  [ ] Mystic Monastery                                   | (No cost)       | Land
-  [ ] Naga Fleshcrafter                                  | {3}{U}          | Creature -- Snake Shapeshifter
-  [ ] Narset, Jeskai Waymaster                           | {U}{R}{W}       | Legendary Creature -- Human Monk
-  [ ] Narset's Rebuke                                    | {4}{R}          | Instant
-  [ ] Nature's Rhythm                                    | {X}{G}{G}       | Sorcery
+  [X] Mystic Monastery                                   | (No cost)       | Land
+  [X] Naga Fleshcrafter                                  | {3}{U}          | Creature -- Snake Shapeshifter
+  [X] Narset, Jeskai Waymaster                           | {U}{R}{W}       | Legendary Creature -- Human Monk
+  [X] Narset's Rebuke                                    | {4}{R}          | Instant
+  [X] Nature's Rhythm                                    | {X}{G}{G}       | Sorcery
 
 BATCH 31 (Cards 151-155):
 --------------------------------------------------------------------------------

@@ -919,8 +919,8 @@ const CardEffectsDB = {
   },
 
   "kishla trawlers": {
-    etb: [{ type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true, optional: true }]
-    // "When you do" is part of ETB conditional, not separate trigger
+    etb: [{ type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true, optional: true }],
+    triggered: [{ event: "enters_or_attacks", effects: [] }]
   },
 
   "sibsig appraiser": {

@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 40/277 (14.4%)
+Current Progress: 45/277 (16.2%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -66,11 +66,11 @@ BATCH 6 (Cards 26-30):
 
 BATCH 7 (Cards 31-35):
 --------------------------------------------------------------------------------
-  [ ] Caustic Exhale                                     | {B}             | Instant
-  [ ] Champion of Dusan                                  | {2}{G}          | Creature -- Human Warrior
-  [ ] Channeled Dragonfire                               | {R}             | Sorcery
-  [ ] Clarion Conqueror                                  | {2}{W}          | Creature -- Dragon
-  [ ] Constrictor Sage                                   | {4}{U}          | Creature -- Snake Wizard
+  [X] Caustic Exhale                                     | {B}             | Instant
+  [X] Champion of Dusan                                  | {2}{G}          | Creature -- Human Warrior
+  [X] Channeled Dragonfire                               | {R}             | Sorcery
+  [X] Clarion Conqueror                                  | {2}{W}          | Creature -- Dragon
+  [X] Constrictor Sage                                   | {4}{U}          | Creature -- Snake Wizard
 
 BATCH 8 (Cards 36-40):
 --------------------------------------------------------------------------------

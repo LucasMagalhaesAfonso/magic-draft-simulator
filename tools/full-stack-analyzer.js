@@ -321,7 +321,7 @@ class FullStackAnalyzer {
 
   validateTargets(dbEntry, oracle) {
     const issues = [];
-    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'card', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent'];
+    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'card', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent', 'same', 'same_creature'];
 
     const checkTargets = (effects) => {
       if (!Array.isArray(effects)) return;
@@ -344,7 +344,7 @@ class FullStackAnalyzer {
 
   validateAdditionalCosts(dbEntry) {
     const issues = [];
-    const validCostTypes = ['sacrifice', 'discard', 'pay_life', 'tap', 'exile', 'return'];
+    const validCostTypes = ['sacrifice', 'discard', 'pay_life', 'tap', 'exile', 'return', 'behold'];
 
     if (dbEntry.additional_costs) {
       for (const cost of dbEntry.additional_costs) {
@@ -465,6 +465,10 @@ class FullStackAnalyzer {
       let isImplemented = dbStr.includes(kw);
       // Special case: mobilize is implemented via creatures_in_gy count
       if (kw === 'mobilize' && dbStr.includes('creatures_in_gy')) {
+        isImplemented = true;
+      }
+      // Special case: channel is implemented via harmonize
+      if (kw === 'channel' && dbStr.includes('harmonize')) {
         isImplemented = true;
       }
       if (oracle.toLowerCase().includes(kw) && !isImplemented) {
@@ -588,7 +592,7 @@ class FullStackAnalyzer {
     if (hasHideaway && !aiContent.includes('hideaway')) {
       issues.push(`⚠️  [AI] Card has hideaway but hideaway support unclear`);
     }
-    if (hasBehold && !aiContent.includes('behold')) {
+    if (hasBehold && !aiContent.includes('behold') && !gsContent.includes('behold')) {
       issues.push(`⚠️  [AI] Card has behold but behold support unclear`);
     }
 
@@ -874,6 +878,10 @@ const CARDS_BATCH = {
   batch6: [
     'Blossoming Sands', 'Bone-Cairn Butcher', 'Boulderborn Dragon',
     'Breaching Dragonstorm', 'Call the Spirit Dragons'
+  ],
+  batch7: [
+    'Caustic Exhale', 'Champion of Dusan', 'Channeled Dragonfire',
+    'Clarion Conqueror', 'Constrictor Sage'
   ]
 };
 

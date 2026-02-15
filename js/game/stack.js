@@ -1384,6 +1384,16 @@ const GameStack = {
           break;
         }
 
+        case 'stun_counter_self': {
+          // Put stun counters on the card itself (for ETB/triggered effects)
+          const stunAmt = effect.amount || 1;
+          if (card) {
+            card._stunCounters = (card._stunCounters || 0) + stunAmt;
+            log.push(`${card.name} recebe ${stunAmt} stun counter(s).`);
+          }
+          break;
+        }
+
         case 'threaten': {
           // Gain control of target creature until end of turn, untap it, give haste
           if (targets && targets.length > 0) {

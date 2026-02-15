@@ -469,7 +469,7 @@ const CardEffectsDB = {
 
   "clarion conqueror": {
     static: [
-      { type: "has_keyword", keyword: "flying" },
+      { type: "has_keyword", keywords: ["flying"] },
       { type: "prevent_activated_abilities", target: "artifacts_creatures_planeswalkers" }
     ]
   },
@@ -1510,11 +1510,11 @@ const CardEffectsDB = {
 
   "champion of dusan": {
     graveyard: [{ cost: { mana: "1G", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "grant", keyword: "Trample", target: "same", duration: "permanent" }] }],
-    static: [{ type: "has_keyword", keyword: "trample" }]
+    static: [{ type: "has_keyword", keywords: ["trample"] }]
   },
   "sagu pummeler": {
     graveyard: [{ cost: { mana: "4G", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 2, target: "creature" }, { type: "counter", counter: "reach", amount: 1, target: "same" }] }],
-    static: [{ type: "has_keyword", keyword: "reach" }]
+    static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
 
   // =================== TDM - TERSA & SONGCRAFTER ===================

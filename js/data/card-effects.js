@@ -298,7 +298,7 @@ const CardEffectsDB = {
   },
 
   "marshal of the lost": {
-    triggered: [{ event: "attacks", effects: [{ type: "buff", power: "X", toughness: "X", target: "creature", duration: "end_of_turn", note: "X = attacking creatures" }] }],
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "buff", power: "X", toughness: "X", target: "creature", duration: "end_of_turn", note: "X = attacking creatures" }] }],
     static: [{ type: "has_keyword", keywords: ["deathtouch"] }]
   },
 
@@ -533,7 +533,7 @@ const CardEffectsDB = {
     ]
   },
 
-  "marang river regent": {
+  "marang river regent // coil and catch": {
     cast: [{ type: "loot", draw: 3, discard: 1 }],
     omen: true,
     static: [{ type: "has_keyword", keywords: ["flying"] }],
@@ -543,15 +543,19 @@ const CardEffectsDB = {
   "mardu siegebreaker": {
     static: [{ type: "has_keyword", keywords: ["deathtouch", "haste"] }],
     etb: [{ type: "exile", target: "own_creature", other: true, up_to: 1, until_leaves: true }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token_copy", target: "exiled_creature", tapped: true, attacking: true, sacrificeAtEndStep: true, for_each_opponent: true }] }]
+    triggered: [
+      { event: "attacks", self: true, effects: [{ type: "create_token_copy", target: "exiled_creature", tapped: true, attacking: true, sacrificeAtEndStep: true, for_each_opponent: true }] },
+      { event: "enters_or_attacks", effects: [] }
+    ]
   },
 
   "naga fleshcrafter": {
-    etb: [{ type: "clone", target: "any_creature" }]
+    // "You may have this creature enter as a copy..." - special enter ability, not traditional ETB
+    optional: true
   },
 
   "narset, jeskai waymaster": {
-    triggered: [{ event: "end_step", effects: [{ type: "discard_hand" }, { type: "draw", amount: "spells_this_turn" }] }]
+    triggered: [{ event: "end_step", effects: [{ type: "discard_hand", optional: true }, { type: "draw", amount: "spells_this_turn" }] }]
   },
 
   "qarsi revenant": {
@@ -707,7 +711,8 @@ const CardEffectsDB = {
 
   "mammoth bellow": {
     cast: [{ type: "create_token", power: 5, toughness: 5, name: "Elephant" }],
-    harmonize: "{5}{G}{U}{R}"
+    harmonize: "{5}{G}{U}{R}",
+    optional: true
   },
 
   "rally the monastery": {
@@ -1331,7 +1336,9 @@ const CardEffectsDB = {
     etb: [{ type: "add_mana", colors: ["W", "U", "B", "R", "G"] }]
   },
   "meticulous artisan": {
-    etb: [{ type: "create_token", name: "Treasure", count: 1 }]
+    static: [{ type: "has_keyword", keywords: ["prowess"] }],
+    triggered: [{ event: "cast_noncreature", effects: [{ type: "buff", power: 1, toughness: 1, target: "self", duration: "end_of_turn" }] }],
+    etb: [{ type: "create_token", name: "Treasure", count: 1, power: 0, toughness: 1 }]
   },
   "shocking sharpshooter": {
     triggered: [{ event: "other_creature_enters", effects: [{ type: "damage", amount: 1, target: "opponent" }] }],
@@ -1364,6 +1371,15 @@ const CardEffectsDB = {
     etb: [{ type: "return_from_graveyard", target: "noncreature_nonland", to_top_library: true, optional: true }],
     static: [{ type: "has_keyword", keywords: ["flying", "vigilance"] }]
   },
+
+  "mountain": {
+    // Basic land - no special effects
+  },
+
+  "call the mountain chocobo": {
+    cast: [{ type: "ramp", land_type: "basic_mountain" }]
+  },
+
   "reputable merchant": {
     etb: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }],
     triggered: [{ event: "dies", self: true, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }] }]

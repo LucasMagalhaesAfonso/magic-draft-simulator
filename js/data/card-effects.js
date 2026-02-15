@@ -1606,10 +1606,14 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keywords: ["flying", "deathtouch"] }]
   },
 
+  "jeskai brushmaster": {
+    static: [{ type: "has_keyword", keywords: ["double strike", "prowess"] }]
+  },
+
   // =================== METADATA ===================
 
   _version: "2.2.0",
-  _lastUpdated: "2026-02-07",
+  _lastUpdated: "2026-02-15",
   _set: "tdm"
 
 };

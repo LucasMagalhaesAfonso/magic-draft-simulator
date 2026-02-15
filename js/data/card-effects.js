@@ -1049,7 +1049,7 @@ const CardEffectsDB = {
   },
   "cori mountain monastery": {
     static: [{ type: "enters_tapped_conditional" }],
-    activated: [{ cost: { mana: "3R", tap: true }, effects: [{ type: "exile_top_play", amount: 1 }] }]
+    activated: [{ cost: { mana: "3R", tap: true }, effects: [{ type: "exile_top_play", amount: 1, optional: true }] }]
   },
   "dalkovan encampment": {
     static: [{ type: "enters_tapped_conditional" }],

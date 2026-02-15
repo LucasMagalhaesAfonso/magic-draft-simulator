@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 45/277 (16.2%)
+Current Progress: 50/277 (18.1%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -74,11 +74,11 @@ BATCH 7 (Cards 31-35):
 
 BATCH 8 (Cards 36-40):
 --------------------------------------------------------------------------------
-  [ ] Coordinated Maneuver                               | {1}{W}          | Instant
-  [ ] Cori Mountain Monastery                            | (No cost)       | Land
-  [ ] Cori Mountain Stalwart                             | {1}{R}{W}       | Creature -- Human Monk
-  [ ] Cori-Steel Cutter                                  | {1}{R}          | Artifact -- Equipment
-  [ ] Corroding Dragonstorm                              | {1}{B}          | Enchantment
+  [X] Coordinated Maneuver                               | {1}{W}          | Instant
+  [X] Cori Mountain Monastery                            | (No cost)       | Land
+  [X] Cori Mountain Stalwart                             | {1}{R}{W}       | Creature -- Human Monk
+  [X] Cori-Steel Cutter                                  | {1}{R}          | Artifact -- Equipment
+  [X] Corroding Dragonstorm                              | {1}{B}          | Enchantment
 
 BATCH 9 (Cards 41-45):
 --------------------------------------------------------------------------------

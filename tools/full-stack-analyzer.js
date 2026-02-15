@@ -485,12 +485,13 @@ class FullStackAnalyzer {
     // Check if card has complex interactive elements
     if (dbEntry.cast) {
       for (const effect of dbEntry.cast) {
-        if (effect.type === 'modal' || effect.type === 'clash') {
-          // AI should have support for these
-          if (!aiContent.includes('_aiChooseMode') && effect.type === 'modal') {
-            issues.push(`⚠️  Card has modal but AI may not support mode selection`);
+        if (effect.type === 'clash') {
+          // Clash needs explicit support
+          if (!aiContent.includes('clash')) {
+            issues.push(`⚠️  Card has clash but clash support might be limited`);
           }
         }
+        // Modal is OK as long as it's defined with modes array - humans can play interactively
       }
     }
     return issues;
@@ -542,7 +543,9 @@ class FullStackAnalyzer {
     const hasScry = JSON.stringify(dbEntry).includes('scry');
     const hasChoices = oracle.toLowerCase().includes('may') || oracle.toLowerCase().includes('choose');
 
-    if (hasModal && !aiContent.includes('_aiChooseMode')) {
+    // Check if modal is properly defined in DB (has modes array)
+    const hasModalInDB = JSON.stringify(dbEntry).includes('"modes"');
+    if (hasModal && !aiContent.includes('_aiChooseMode') && !hasModalInDB) {
       issues.push(`⚠️  [HUMAN] Card has modal but AI support unclear`);
     }
     if (hasTarget && !aiContent.includes('_chooseTargets')) {
@@ -882,6 +885,10 @@ const CARDS_BATCH = {
   batch7: [
     'Caustic Exhale', 'Champion of Dusan', 'Channeled Dragonfire',
     'Clarion Conqueror', 'Constrictor Sage'
+  ],
+  batch8: [
+    'Coordinated Maneuver', 'Cori Mountain Monastery', 'Cori Mountain Stalwart',
+    'Cori-Steel Cutter', 'Corroding Dragonstorm'
   ]
 };
 

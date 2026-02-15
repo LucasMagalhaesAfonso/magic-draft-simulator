@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 25/277 (9.0%)
+Current Progress: 30/277 (10.8%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -42,11 +42,11 @@ BATCH 3 (Cards 11-15):
 
 BATCH 4 (Cards 16-20):
 --------------------------------------------------------------------------------
-  [ ] Attuned Hunter                                     | {2}{G}          | Creature -- Human Ranger
-  [ ] Auroral Procession                                 | {G}{U}          | Instant
-  [ ] Avenger of the Fallen                              | {2}{B}          | Creature -- Human Warrior
-  [ ] Awaken the Honored Dead                            | {B}{G}{U}       | Enchantment -- Saga
-  [ ] Barrensteppe Siege                                 | {2}{W}{B}       | Enchantment
+  [X] Attuned Hunter                                     | {2}{G}          | Creature -- Human Ranger
+  [X] Auroral Procession                                 | {G}{U}          | Instant
+  [X] Avenger of the Fallen                              | {2}{B}          | Creature -- Human Warrior
+  [X] Awaken the Honored Dead                            | {B}{G}{U}       | Enchantment -- Saga
+  [X] Barrensteppe Siege                                 | {2}{W}{B}       | Enchantment
 
 BATCH 5 (Cards 21-25):
 --------------------------------------------------------------------------------

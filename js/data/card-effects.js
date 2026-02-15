@@ -24,7 +24,7 @@ const CardEffectsDB = {
   },
 
   "auroral procession": {
-    cast: [{ type: "return_from_graveyard", target: "card" }]
+    cast: [{ type: "return_from_graveyard", target: "card", to_hand: true }]
   },
 
   "bewildering blizzard": {
@@ -205,7 +205,7 @@ const CardEffectsDB = {
 
   "attuned hunter": {
     triggered: [{ event: "cards_leave_graveyard", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }] }],
-    static: [{ type: "has_keyword", keyword: "trample" }]
+    static: [{ type: "has_keyword", keywords: ["trample"] }]
   },
 
   "bloomvine regent": {
@@ -380,8 +380,8 @@ const CardEffectsDB = {
   // =================== TARKIR DRAGONSTORM - MOBILIZE ===================
 
   "avenger of the fallen": {
-    static: [{ type: "has_keyword", keyword: "deathtouch" }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }]
+    static: [{ type: "has_keyword", keywords: ["deathtouch"] }],
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: "creatures_in_gy", attacking: true, sacrificeAtEndStep: true }] }]
   },
 
   "bone-cairn butcher": {

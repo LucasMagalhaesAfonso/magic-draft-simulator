@@ -262,7 +262,8 @@ class FullStackAnalyzer {
     const oracleTriggered = triggerMatches.filter(m => !m.toLowerCase().includes('enters')).length;
     const dbTriggered = dbEntry?.triggered?.length || 0;
 
-    if (oracleTriggered !== dbTriggered) {
+    // Skip trigger count check for Sagas (they use chapters, not triggered abilities)
+    if (oracleTriggered !== dbTriggered && !dbEntry?.saga && !dbEntry?.chapters) {
       issues.push(`⚠️  Triggered count mismatch: Oracle=${oracleTriggered}, DB=${dbTriggered}`);
     }
 
@@ -295,7 +296,7 @@ class FullStackAnalyzer {
 
   validateTargets(dbEntry, oracle) {
     const issues = [];
-    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent'];
+    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'card', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent'];
 
     const checkTargets = (effects) => {
       if (!Array.isArray(effects)) return;
@@ -422,14 +423,21 @@ class FullStackAnalyzer {
     const totalTriggersOracle = wheneverCount + whenCount;
     const totalTriggersDB = dbEntry.triggered?.length || 0;
 
-    if (totalTriggersOracle > totalTriggersDB) {
+    // Skip oracle completeness check for Sagas (they use chapters, not triggered abilities)
+    if (totalTriggersOracle > totalTriggersDB && !dbEntry?.saga && !dbEntry?.chapters) {
       issues.push(`⚠️  Oracle has ${totalTriggersOracle} ability descriptions but DB has only ${totalTriggersDB} - possible incomplete implementation`);
     }
 
     // Check for ability keywords that might be missing
     const complexKeywords = ['mobilize', 'channel', 'kicker', 'cycling', 'adventure', 'saga'];
     for (const kw of complexKeywords) {
-      if (oracle.toLowerCase().includes(kw) && !JSON.stringify(dbEntry).toLowerCase().includes(kw)) {
+      const dbStr = JSON.stringify(dbEntry).toLowerCase();
+      let isImplemented = dbStr.includes(kw);
+      // Special case: mobilize is implemented via creatures_in_gy count
+      if (kw === 'mobilize' && dbStr.includes('creatures_in_gy')) {
+        isImplemented = true;
+      }
+      if (oracle.toLowerCase().includes(kw) && !isImplemented) {
         issues.push(`⚠️  Oracle mentions "${kw}" but DB doesn't implement it`);
       }
     }
@@ -818,6 +826,10 @@ const CARDS_BATCH = {
   batch3: [
     'All-Out Assault', 'Ambling Stormshell', 'Anafenza, Unyielding Lineage',
     'Arashin Sunshield', 'Armament Dragon'
+  ],
+  batch4: [
+    'Attuned Hunter', 'Auroral Procession', 'Avenger of the Fallen',
+    'Awaken the Honored Dead', 'Barrensteppe Siege'
   ]
 };
 

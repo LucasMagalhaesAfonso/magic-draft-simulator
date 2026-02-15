@@ -634,6 +634,7 @@ const GameState = {
       if (amt === 'creature_count') return state.players[controllerId].zones.battlefield.cards.filter(c => CardEngine.isCreature(c)).length;
       if (amt === 'lands_count') return state.players[controllerId].zones.battlefield.cards.filter(c => CardEngine.isLand(c)).length;
       if (amt === 'lands_in_gy_count') return state.players[controllerId].zones.graveyard.getAll().filter(c => CardEngine.isLand(c)).length;
+      if (amt === 'creatures_in_gy') return state.players[controllerId].zones.graveyard.getAll().filter(c => CardEngine.isCreature(c)).length;
       if (amt === 'mana_value') return (data && data.card && data.card.cmc) || 0;
       if (amt === 'prevented') return state._lastPreventedDamage || 0;
       if (amt === 'greatest_toughness') {
@@ -1657,7 +1658,10 @@ const GameState = {
 
         // Filter graveyard cards based on target type
         let gyCards = [];
-        if (effect.target === 'creature_or_land') {
+        if (effect.target === 'card' || effect.target === 'any') {
+          // Any card from graveyard (e.g., Auroral Procession)
+          gyCards = gy.getAll();
+        } else if (effect.target === 'creature_or_land') {
           gyCards = gy.getAll().filter(c => CardEngine.isCreature(c) || CardEngine.isLand(c));
         } else if (effect.target === 'land') {
           gyCards = gy.getAll().filter(c => CardEngine.isLand(c));

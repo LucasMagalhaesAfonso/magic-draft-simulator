@@ -1,0 +1,480 @@
+================================================================================
+                    TDM (TARKIR DRAGONSTORM) - COMPLETE AUDIT
+================================================================================
+Set Code: TDM
+Total Cards: 277
+Batches (5 per batch): 56
+Current Progress: 10/277 (3.6%)
+
+STATUS LEGEND:
+[ ] TODO    - Card needs implementation/verification
+[~] PARTIAL - Card partially implemented, needs work
+[X] DONE    - Card fully implemented and tested
+[!] ISSUE   - Card has known bugs/issues
+[?] REVIEW  - Needs manual review
+
+================================================================================
+
+
+BATCH 1 (Cards 1-5):
+--------------------------------------------------------------------------------
+  [X] Abzan Devotee                                      | {1}{B}          | Creature -- Dog Cleric
+  [X] Abzan Monument                                     | {2}             | Artifact
+  [X] A-Cori-Steel Cutter                                | {1}{R}          | Artifact -- Equipment
+  [X] Adorned Crocodile                                  | {4}{B}          | Creature -- Crocodile
+  [X] Aegis Sculptor                                     | {3}{U}          | Creature -- Bird Wizard
+
+BATCH 2 (Cards 6-10):
+--------------------------------------------------------------------------------
+  [ ] Agent of Kotis                                     | {1}{U}          | Creature -- Human Rogue
+  [ ] Aggressive Negotiations                            | {2}{B}          | Sorcery
+  [ ] Ainok Wayfarer                                     | {1}{G}          | Creature -- Dog Scout
+  [ ] Alchemist's Assistant                              | {1}{B}          | Creature -- Monkey
+  [ ] Alesha's Legacy                                    | {1}{B}          | Instant
+
+BATCH 3 (Cards 11-15):
+--------------------------------------------------------------------------------
+  [ ] All-Out Assault                                    | {2}{R}{W}{B}    | Enchantment
+  [ ] Ambling Stormshell                                 | {3}{U}{U}       | Creature -- Turtle
+  [ ] Anafenza, Unyielding Lineage                       | {2}{W}          | Legendary Creature -- Spirit Soldier
+  [ ] Arashin Sunshield                                  | {3}{W}          | Creature -- Human Warrior
+  [ ] Armament Dragon                                    | {3}{W}{B}{G}    | Creature -- Dragon
+
+BATCH 4 (Cards 16-20):
+--------------------------------------------------------------------------------
+  [ ] Attuned Hunter                                     | {2}{G}          | Creature -- Human Ranger
+  [ ] Auroral Procession                                 | {G}{U}          | Instant
+  [ ] Avenger of the Fallen                              | {2}{B}          | Creature -- Human Warrior
+  [ ] Awaken the Honored Dead                            | {B}{G}{U}       | Enchantment -- Saga
+  [ ] Barrensteppe Siege                                 | {2}{W}{B}       | Enchantment
+
+BATCH 5 (Cards 21-25):
+--------------------------------------------------------------------------------
+  [ ] Bearer of Glory                                    | {1}{W}          | Creature -- Human Soldier
+  [ ] Betor, Kin to All                                  | {2}{W}{B}{G}    | Legendary Creature -- Spirit Dragon
+  [ ] Bewildering Blizzard                               | {4}{U}{U}       | Instant
+  [ ] Bloodfell Caves                                    | (No cost)       | Land
+  [ ] Bloomvine Regent // Claim Territory                | {3}{G}{G} // {2}{G} | Creature -- Dragon // Sorcery -- Omen
+
+BATCH 6 (Cards 26-30):
+--------------------------------------------------------------------------------
+  [ ] Blossoming Sands                                   | (No cost)       | Land
+  [ ] Bone-Cairn Butcher                                 | {1}{R}{W}{B}    | Creature -- Demon
+  [ ] Boulderborn Dragon                                 | {5}             | Artifact Creature -- Dragon
+  [ ] Breaching Dragonstorm                              | {4}{R}          | Enchantment
+  [ ] Call the Spirit Dragons                            | {W}{U}{B}{R}{G} | Enchantment
+
+BATCH 7 (Cards 31-35):
+--------------------------------------------------------------------------------
+  [ ] Caustic Exhale                                     | {B}             | Instant
+  [ ] Champion of Dusan                                  | {2}{G}          | Creature -- Human Warrior
+  [ ] Channeled Dragonfire                               | {R}             | Sorcery
+  [ ] Clarion Conqueror                                  | {2}{W}          | Creature -- Dragon
+  [ ] Constrictor Sage                                   | {4}{U}          | Creature -- Snake Wizard
+
+BATCH 8 (Cards 36-40):
+--------------------------------------------------------------------------------
+  [ ] Coordinated Maneuver                               | {1}{W}          | Instant
+  [ ] Cori Mountain Monastery                            | (No cost)       | Land
+  [ ] Cori Mountain Stalwart                             | {1}{R}{W}       | Creature -- Human Monk
+  [ ] Cori-Steel Cutter                                  | {1}{R}          | Artifact -- Equipment
+  [ ] Corroding Dragonstorm                              | {1}{B}          | Enchantment
+
+BATCH 9 (Cards 41-45):
+--------------------------------------------------------------------------------
+  [ ] Craterhoof Behemoth                                | {5}{G}{G}{G}    | Creature -- Beast
+  [ ] Cruel Truths                                       | {3}{B}          | Instant
+  [ ] Dalkovan Encampment                                | (No cost)       | Land
+  [ ] Dalkovan Packbeasts                                | {2}{W}          | Creature -- Ox
+  [ ] Death Begets Life                                  | {5}{B}{G}{U}    | Sorcery
+
+BATCH 10 (Cards 46-50):
+--------------------------------------------------------------------------------
+  [ ] Defibrillating Current                             | {2/R}{2/W}{2/B} | Sorcery
+  [ ] Delta Bloodflies                                   | {1}{B}          | Creature -- Insect
+  [ ] Descendant of Storms                               | {W}             | Creature -- Human Soldier
+  [ ] Desperate Measures                                 | {B}             | Instant
+  [ ] Devoted Duelist                                    | {1}{R}          | Creature -- Goblin Monk
+
+BATCH 11 (Cards 51-55):
+--------------------------------------------------------------------------------
+  [ ] Dirgur Island Dragon // Skimming Strike            | {5}{U} // {1}{U} | Creature -- Dragon // Instant -- Omen
+  [ ] Dismal Backwater                                   | (No cost)       | Land
+  [ ] Dispelling Exhale                                  | {1}{U}          | Instant
+  [ ] Disruptive Stormbrood // Petty Revenge             | {4}{G} // {1}{B} | Creature -- Dragon // Sorcery -- Omen
+  [ ] Dracogenesis                                       | {6}{R}{R}       | Enchantment
+
+BATCH 12 (Cards 56-60):
+--------------------------------------------------------------------------------
+  [ ] Dragonback Assault                                 | {3}{G}{U}{R}    | Enchantment
+  [ ] Dragonback Lancer                                  | {3}{W}          | Creature -- Human Soldier
+  [ ] Dragonbroods' Relic                                | {1}{G}          | Artifact
+  [ ] Dragonclaw Strike                                  | {2/G}{2/U}{2/R} | Sorcery
+  [ ] Dragonfire Blade                                   | {1}             | Artifact -- Equipment
+
+BATCH 13 (Cards 61-65):
+--------------------------------------------------------------------------------
+  [ ] Dragonologist                                      | {2}{U}          | Creature -- Human Wizard
+  [ ] Dragon Sniper                                      | {G}             | Creature -- Human Archer
+  [ ] Dragon's Prey                                      | {2}{B}          | Instant
+  [ ] Dragonstorm Forecaster                             | {U}             | Creature -- Human Scout
+  [ ] Dragonstorm Globe                                  | {3}             | Artifact
+
+BATCH 14 (Cards 66-70):
+--------------------------------------------------------------------------------
+  [ ] Dusyut Earthcarver                                 | {5}{G}          | Creature -- Elephant Druid
+  [ ] Duty Beyond Death                                  | {1}{W}          | Instant
+  [ ] Effortless Master                                  | {2}{U}{R}       | Creature -- Orc Monk
+  [ ] Elspeth, Storm Slayer                              | {3}{W}{W}       | Legendary Planeswalker -- Elspeth
+  [ ] Embermouth Sentinel                                | {2}             | Artifact Creature -- Chimera
+
+BATCH 15 (Cards 71-75):
+--------------------------------------------------------------------------------
+  [ ] Encroaching Dragonstorm                            | {3}{G}          | Enchantment
+  [ ] Equilibrium Adept                                  | {3}{R}          | Creature -- Dog Monk
+  [ ] Eshki Dragonclaw                                   | {1}{G}{U}{R}    | Legendary Creature -- Human Warrior
+  [ ] Essence Anchor                                     | {2}{U}          | Artifact
+  [ ] Evolving Wilds                                     | (No cost)       | Land
+
+BATCH 16 (Cards 76-80):
+--------------------------------------------------------------------------------
+  [ ] Fangkeeper's Familiar                              | {1}{B}{G}{U}    | Creature -- Snake
+  [ ] Felothar, Dawn of the Abzan                        | {W}{B}{G}       | Legendary Creature -- Human Warrior
+  [ ] Feral Deathgorger // Dusk Sight                    | {5}{B} // {1}{B} | Creature -- Dragon // Sorcery -- Omen
+  [ ] Fire-Rim Form                                      | {1}{R}          | Enchantment -- Aura
+  [ ] Flamehold Grappler                                 | {U}{R}{W}       | Creature -- Human Monk
+
+BATCH 17 (Cards 81-85):
+--------------------------------------------------------------------------------
+  [ ] Fleeting Effigy                                    | {R}             | Creature -- Elemental
+  [ ] Focus the Mind                                     | {4}{U}          | Instant
+  [ ] Forest                                             | (No cost)       | Basic Land -- Forest
+  [ ] Formation Breaker                                  | {1}{G}          | Creature -- Beast
+  [ ] Fortress Kin-Guard                                 | {1}{W}          | Creature -- Dog Soldier
+
+BATCH 18 (Cards 86-90):
+--------------------------------------------------------------------------------
+  [ ] Fresh Start                                        | {1}{U}          | Enchantment -- Aura
+  [ ] Frontier Bivouac                                   | (No cost)       | Land
+  [ ] Frontline Rush                                     | {R}{W}          | Instant
+  [ ] Frostcliff Siege                                   | {1}{U}{R}       | Enchantment
+  [ ] Furious Forebear                                   | {1}{W}          | Creature -- Spirit Warrior
+
+BATCH 19 (Cards 91-95):
+--------------------------------------------------------------------------------
+  [ ] Glacial Dragonhunt                                 | {U}{R}          | Sorcery
+  [ ] Glacierwood Siege                                  | {1}{G}{U}       | Enchantment
+  [ ] Great Arashin City                                 | (No cost)       | Land
+  [ ] Gurmag Nightwatch                                  | {2/B}{2/G}{2/U} | Creature -- Human Ranger
+  [ ] Gurmag Rakshasa                                    | {4}{B}{B}       | Creature -- Demon
+
+BATCH 20 (Cards 96-100):
+--------------------------------------------------------------------------------
+  [ ] Hardened Tactician                                 | {1}{W}{B}       | Creature -- Human Warrior
+  [ ] Herd Heirloom                                      | {1}{G}          | Artifact
+  [ ] Heritage Reclamation                               | {1}{G}          | Instant
+  [ ] Highspire Bell-Ringer                              | {2}{U}          | Creature -- Djinn Monk
+  [ ] Hollowmurk Siege                                   | {B}{G}          | Enchantment
+
+BATCH 21 (Cards 101-105):
+--------------------------------------------------------------------------------
+  [ ] Host of the Hereafter                              | {2}{B}{G}       | Creature -- Zombie Warlock
+  [ ] Humbling Elder                                     | {U}             | Creature -- Human Monk
+  [ ] Hundred-Battle Veteran                             | {3}{B}          | Creature -- Zombie Warrior
+  [ ] Iceridge Serpent                                   | {4}{U}          | Creature -- Serpent
+  [ ] Inevitable Defeat                                  | {1}{R}{W}{B}    | Instant
+
+BATCH 22 (Cards 106-110):
+--------------------------------------------------------------------------------
+  [ ] Inspirited Vanguard                                | {4}{G}          | Creature -- Human Soldier
+  [ ] Iridescent Tiger                                   | {4}{R}          | Creature -- Cat
+  [ ] Island                                             | (No cost)       | Basic Land -- Island
+  [ ] Jade-Cast Sentinel                                 | {4}             | Artifact Creature -- Ape Snake
+  [ ] Jeskai Brushmaster                                 | {1}{U}{R}{W}    | Creature -- Orc Monk
+
+BATCH 23 (Cards 111-115):
+--------------------------------------------------------------------------------
+  [ ] Jeskai Devotee                                     | {1}{R}          | Creature -- Orc Monk
+  [ ] Jeskai Monument                                    | {2}             | Artifact
+  [ ] Jeskai Revelation                                  | {4}{U}{R}{W}    | Instant
+  [ ] Jeskai Shrinekeeper                                | {2}{U}{R}{W}    | Creature -- Dragon
+  [ ] Jungle Hollow                                      | (No cost)       | Land
+
+BATCH 24 (Cards 116-120):
+--------------------------------------------------------------------------------
+  [ ] Karakyk Guardian                                   | {3}{G}{U}{R}    | Creature -- Dragon
+  [ ] Kheru Goldkeeper                                   | {1}{B}{G}{U}    | Creature -- Dragon
+  [ ] Kin-Tree Nurturer                                  | {2}{B}          | Creature -- Human Druid
+  [ ] Kin-Tree Severance                                 | {2/W}{2/B}{2/G} | Instant
+  [ ] Kishla Skimmer                                     | {G}{U}          | Creature -- Bird Scout
+
+BATCH 25 (Cards 121-125):
+--------------------------------------------------------------------------------
+  [ ] Kishla Trawlers                                    | {2}{U}          | Creature -- Human Citizen
+  [ ] Kishla Village                                     | (No cost)       | Land
+  [ ] Knockout Maneuver                                  | {2}{G}          | Sorcery
+  [ ] Kotis, the Fangkeeper                              | {1}{B}{G}{U}    | Legendary Creature -- Zombie Warrior
+  [ ] Krotiq Nestguard                                   | {2}{G}          | Creature -- Insect
+
+BATCH 26 (Cards 126-130):
+--------------------------------------------------------------------------------
+  [ ] Krumar Initiate                                    | {1}{B}          | Creature -- Human Cleric
+  [ ] Lasyd Prowler                                      | {2}{G}{G}       | Creature -- Snake Ranger
+  [ ] Lie in Wait                                        | {B}{G}{U}       | Sorcery
+  [ ] Lightfoot Technique                                | {1}{W}          | Instant
+  [ ] Lotuslight Dancers                                 | {2}{B}{G}{U}    | Creature -- Zombie Bard
+
+BATCH 27 (Cards 131-135):
+--------------------------------------------------------------------------------
+  [ ] Loxodon Battle Priest                              | {4}{W}          | Creature -- Elephant Cleric
+  [ ] Maelstrom of the Spirit Dragon                     | (No cost)       | Land
+  [ ] Magmatic Hellkite                                  | {2}{R}{R}       | Creature -- Dragon
+  [ ] Mammoth Bellow                                     | {2}{G}{U}{R}    | Sorcery
+  [ ] Marang River Regent // Coil and Catch              | {4}{U}{U} // {3}{U} | Creature -- Dragon // Instant -- Omen
+
+BATCH 28 (Cards 136-140):
+--------------------------------------------------------------------------------
+  [ ] Mardu Devotee                                      | {W}             | Creature -- Human Scout
+  [ ] Mardu Monument                                     | {2}             | Artifact
+  [ ] Mardu Siegebreaker                                 | {1}{R}{W}{B}    | Creature -- Human Warrior
+  [ ] Marshal of the Lost                                | {2}{W}{B}       | Creature -- Orc Warrior
+  [ ] Meticulous Artisan                                 | {3}{R}          | Creature -- Djinn Artificer
+
+BATCH 29 (Cards 141-145):
+--------------------------------------------------------------------------------
+  [ ] Mistrise Village                                   | (No cost)       | Land
+  [ ] Molten Exhale                                      | {1}{R}          | Sorcery
+  [ ] Monastery Messenger                                | {2/U}{2/R}{2/W} | Creature -- Bird Scout
+  [ ] Mountain                                           | (No cost)       | Basic Land -- Mountain
+  [ ] Mox Jasper                                         | {0}             | Legendary Artifact
+
+BATCH 30 (Cards 146-150):
+--------------------------------------------------------------------------------
+  [ ] Mystic Monastery                                   | (No cost)       | Land
+  [ ] Naga Fleshcrafter                                  | {3}{U}          | Creature -- Snake Shapeshifter
+  [ ] Narset, Jeskai Waymaster                           | {U}{R}{W}       | Legendary Creature -- Human Monk
+  [ ] Narset's Rebuke                                    | {4}{R}          | Instant
+  [ ] Nature's Rhythm                                    | {X}{G}{G}       | Sorcery
+
+BATCH 31 (Cards 151-155):
+--------------------------------------------------------------------------------
+  [ ] Neriv, Heart of the Storm                          | {1}{R}{W}{B}    | Legendary Creature -- Spirit Dragon
+  [ ] New Way Forward                                    | {2}{U}{R}{W}    | Instant
+  [ ] Nightblade Brigade                                 | {2}{B}          | Creature -- Goblin Soldier
+  [ ] Nomad Outpost                                      | (No cost)       | Land
+  [ ] Opulent Palace                                     | (No cost)       | Land
+
+BATCH 32 (Cards 156-160):
+--------------------------------------------------------------------------------
+  [ ] Osseous Exhale                                     | {1}{W}          | Instant
+  [ ] Overwhelming Surge                                 | {2}{R}          | Instant
+  [ ] Perennation                                        | {3}{W}{B}{G}    | Sorcery
+  [ ] Piercing Exhale                                    | {1}{G}          | Instant
+  [ ] Plains                                             | (No cost)       | Basic Land -- Plains
+
+BATCH 33 (Cards 161-165):
+--------------------------------------------------------------------------------
+  [ ] Poised Practitioner                                | {2}{W}          | Creature -- Human Monk
+  [ ] Purging Stormbrood // Absorb Essence               | {4}{B} // {1}{W} | Creature -- Dragon // Instant -- Omen
+  [ ] Qarsi Revenant                                     | {1}{B}{B}       | Creature -- Vampire
+  [ ] Rainveil Rejuvenator                               | {3}{G}          | Creature -- Elephant Druid
+  [ ] Rakshasa's Bargain                                 | {2/B}{2/G}{2/U} | Instant
+
+BATCH 34 (Cards 166-170):
+--------------------------------------------------------------------------------
+  [ ] Rally the Monastery                                | {3}{W}          | Instant
+  [ ] Rebellious Strike                                  | {1}{W}          | Instant
+  [ ] Rediscover the Way                                 | {U}{R}{W}       | Enchantment -- Saga
+  [ ] Reigning Victor                                    | {2/R}{2/W}{2/B} | Creature -- Orc Warrior
+  [ ] Reputable Merchant                                 | {2/W}{2/B}{2/G} | Creature -- Human Citizen
+
+BATCH 35 (Cards 171-175):
+--------------------------------------------------------------------------------
+  [ ] Rescue Leopard                                     | {2}{R}          | Creature -- Cat
+  [ ] Reverberating Summons                              | {1}{R}          | Enchantment
+  [ ] Revival of the Ancestors                           | {1}{W}{B}{G}    | Enchantment -- Saga
+  [ ] Riling Dawnbreaker // Signaling Roar               | {4}{W} // {1}{W} | Creature -- Dragon // Sorcery -- Omen
+  [ ] Ringing Strike Mastery                             | {U}             | Enchantment -- Aura
+
+BATCH 36 (Cards 176-180):
+--------------------------------------------------------------------------------
+  [ ] Rite of Renewal                                    | {3}{G}          | Sorcery
+  [ ] Riverwalk Technique                                | {3}{U}          | Instant
+  [ ] Riverwheel Sweep                                   | {2/U}{2/R}{2/W} | Sorcery
+  [ ] Roamer's Routine                                   | {2}{G}          | Sorcery
+  [ ] Roar of Endless Song                               | {2}{G}{U}{R}    | Enchantment -- Saga
+
+BATCH 37 (Cards 181-185):
+--------------------------------------------------------------------------------
+  [ ] Roiling Dragonstorm                                | {1}{U}          | Enchantment
+  [ ] Rot-Curse Rakshasa                                 | {1}{B}          | Creature -- Demon
+  [ ] Rugged Highlands                                   | (No cost)       | Land
+  [ ] Runescale Stormbrood // Chilling Screech           | {3}{R} // {1}{U} | Creature -- Dragon // Instant -- Omen
+  [ ] Sage of the Fang                                   | {2}{G}          | Creature -- Human Druid
+
+BATCH 38 (Cards 186-190):
+--------------------------------------------------------------------------------
+  [ ] Sage of the Skies                                  | {2}{W}          | Creature -- Human Monk
+  [ ] Sagu Pummeler                                      | {3}{G}          | Creature -- Beast
+  [ ] Sagu Wildling // Roost Seek                        | {4}{G} // {G}   | Creature -- Dragon // Sorcery -- Omen
+  [ ] Salt Road Packbeast                                | {5}{W}          | Creature -- Beast
+  [ ] Salt Road Skirmish                                 | {3}{B}          | Sorcery
+
+BATCH 39 (Cards 191-195):
+--------------------------------------------------------------------------------
+  [ ] Sandskitter Outrider                               | {3}{B}          | Creature -- Goblin Soldier
+  [ ] Sandsteppe Citadel                                 | (No cost)       | Land
+  [ ] Sarkhan, Dragon Ascendant                          | {1}{R}          | Legendary Creature -- Human Druid
+  [ ] Sarkhan's Resolve                                  | {1}{G}          | Instant
+  [ ] Scavenger Regent // Exude Toxin                    | {3}{B} // {X}{B}{B} | Creature -- Dragon // Sorcery -- Omen
+
+BATCH 40 (Cards 196-200):
+--------------------------------------------------------------------------------
+  [ ] Scoured Barrens                                    | (No cost)       | Land
+  [ ] Seize Opportunity                                  | {2}{R}          | Instant
+  [ ] Severance Priest                                   | {W}{B}{G}       | Creature -- Djinn Cleric
+  [ ] Shiko, Paragon of the Way                          | {2}{U}{R}{W}    | Legendary Creature -- Spirit Dragon
+  [ ] Shock Brigade                                      | {1}{R}          | Creature -- Goblin Soldier
+
+BATCH 41 (Cards 201-205):
+--------------------------------------------------------------------------------
+  [ ] Shocking Sharpshooter                              | {1}{R}          | Creature -- Human Archer
+  [ ] Sibsig Appraiser                                   | {2}{U}          | Creature -- Zombie Advisor
+  [ ] Sidisi, Regent of the Mire                         | {1}{B}          | Legendary Creature -- Zombie Snake Warlock
+  [ ] Sinkhole Surveyor                                  | {1}{B}          | Creature -- Bird Scout
+  [ ] Skirmish Rhino                                     | {W}{B}{G}       | Creature -- Rhino
+
+BATCH 42 (Cards 206-210):
+--------------------------------------------------------------------------------
+  [ ] Smile at Death                                     | {3}{W}{W}       | Enchantment
+  [ ] Snakeskin Veil                                     | {G}             | Instant
+  [ ] Snowmelt Stag                                      | {3}{U}          | Creature -- Elemental Elk
+  [ ] Songcrafter Mage                                   | {G}{U}{R}       | Creature -- Human Bard
+  [ ] Sonic Shrieker                                     | {2}{R}{W}{B}    | Creature -- Dragon
+
+BATCH 43 (Cards 211-215):
+--------------------------------------------------------------------------------
+  [ ] Spectral Denial                                    | {X}{U}          | Instant
+  [ ] Stadium Headliner                                  | {R}             | Creature -- Goblin Warrior
+  [ ] Stalwart Successor                                 | {1}{B}{G}       | Creature -- Human Warrior
+  [ ] Starry-Eyed Skyrider                               | {2}{W}          | Creature -- Human Scout
+  [ ] Static Snare                                       | {4}{W}          | Enchantment
+
+BATCH 44 (Cards 216-220):
+--------------------------------------------------------------------------------
+  [ ] Stillness in Motion                                | {1}{U}          | Enchantment
+  [ ] Stormbeacon Blade                                  | {1}{W}          | Artifact -- Equipment
+  [ ] Stormplain Detainment                              | {2}{W}          | Enchantment
+  [ ] Stormscale Scion                                   | {4}{R}{R}       | Creature -- Dragon
+  [ ] Stormshriek Feral // Flush Out                     | {4}{R} // {1}{R} | Creature -- Dragon // Sorcery -- Omen
+
+BATCH 45 (Cards 221-225):
+--------------------------------------------------------------------------------
+  [ ] Strategic Betrayal                                 | {1}{B}          | Sorcery
+  [ ] Sultai Devotee                                     | {1}{G}          | Creature -- Zombie Snake Druid
+  [ ] Sultai Monument                                    | {2}             | Artifact
+  [ ] Summit Intimidator                                 | {3}{R}          | Creature -- Yeti
+  [ ] Sunpearl Kirin                                     | {1}{W}          | Creature -- Kirin
+
+BATCH 46 (Cards 226-230):
+--------------------------------------------------------------------------------
+  [ ] Sunset Strikemaster                                | {1}{R}          | Creature -- Human Monk
+  [ ] Surrak, Elusive Hunter                             | {2}{G}          | Legendary Creature -- Human Warrior
+  [ ] Swamp                                              | (No cost)       | Basic Land -- Swamp
+  [ ] Swiftwater Cliffs                                  | (No cost)       | Land
+  [ ] Synchronized Charge                                | {1}{G}          | Sorcery
+
+BATCH 47 (Cards 231-235):
+--------------------------------------------------------------------------------
+  [ ] Taigam, Master Opportunist                         | {1}{U}          | Legendary Creature -- Human Monk
+  [ ] Teeming Dragonstorm                                | {3}{W}          | Enchantment
+  [ ] Tempest Hawk                                       | {2}{W}          | Creature -- Bird
+  [ ] Temur Battlecrier                                  | {G}{U}{R}       | Creature -- Orc Ranger
+  [ ] Temur Devotee                                      | {1}{U}          | Creature -- Human Druid
+
+BATCH 48 (Cards 236-240):
+--------------------------------------------------------------------------------
+  [ ] Temur Monument                                     | {2}             | Artifact
+  [ ] Temur Tawnyback                                    | {2/G}{2/U}{2/R} | Creature -- Beast
+  [ ] Tersa Lightshatter                                 | {2}{R}          | Legendary Creature -- Orc Wizard
+  [ ] Teval, Arbiter of Virtue                           | {2}{B}{G}{U}    | Legendary Creature -- Spirit Dragon
+  [ ] The Sibsig Ceremony                                | {B}{B}{B}       | Legendary Enchantment
+
+BATCH 49 (Cards 241-245):
+--------------------------------------------------------------------------------
+  [ ] Thornwood Falls                                    | (No cost)       | Land
+  [ ] Thunder of Unity                                   | {R}{W}{B}       | Enchantment -- Saga
+  [ ] Trade Route Envoy                                  | {3}{G}          | Creature -- Dog Soldier
+  [ ] Tranquil Cove                                      | (No cost)       | Land
+  [ ] Traveling Botanist                                 | {1}{G}          | Creature -- Dog Scout
+
+BATCH 50 (Cards 246-250):
+--------------------------------------------------------------------------------
+  [ ] Twin Bolt                                          | {1}{R}          | Instant
+  [ ] Twinmaw Stormbrood // Charring Bite                | {5}{W} // {1}{R} | Creature -- Dragon // Sorcery -- Omen
+  [ ] Ugin, Eye of the Storms                            | {7}             | Legendary Planeswalker -- Ugin
+  [ ] Unburied Earthcarver                               | {1}{B}          | Creature -- Human Warrior
+  [ ] Underfoot Underdogs                                | {2}{R}          | Creature -- Goblin Warrior
+
+BATCH 51 (Cards 251-255):
+--------------------------------------------------------------------------------
+  [ ] Undergrowth Leopard                                | {1}{G}          | Creature -- Cat
+  [ ] Unending Whisper                                   | {U}             | Sorcery
+  [ ] United Battlefront                                 | {3}{W}          | Sorcery
+  [ ] Unrooted Ancestor                                  | {2}{B}          | Creature -- Spirit Cleric
+  [ ] Unsparing Boltcaster                               | {2}{R}          | Creature -- Ogre Wizard
+
+BATCH 52 (Cards 256-260):
+--------------------------------------------------------------------------------
+  [ ] Ureni's Rebuff                                     | {1}{U}          | Sorcery
+  [ ] Ureni, the Song Unending                           | {5}{G}{U}{R}    | Legendary Creature -- Spirit Dragon
+  [ ] Venerated Stormsinger                              | {3}{B}          | Creature -- Orc Cleric
+  [ ] Veteran Ice Climber                                | {1}{U}          | Creature -- Human Scout
+  [ ] Voice of Victory                                   | {1}{W}          | Creature -- Human Bard
+
+BATCH 53 (Cards 261-265):
+--------------------------------------------------------------------------------
+  [ ] Wail of War                                        | {2}{B}          | Instant
+  [ ] Warden of the Grove                                | {2}{G}          | Creature -- Hydra
+  [ ] War Effort                                         | {3}{R}          | Enchantment
+  [ ] Watcher of the Wayside                             | {3}             | Artifact Creature -- Golem
+  [ ] Wayspeaker Bodyguard                               | {3}{W}          | Creature -- Orc Monk
+
+BATCH 54 (Cards 266-270):
+--------------------------------------------------------------------------------
+  [ ] Whirlwing Stormbrood // Dynamic Soar               | {4}{U} // {2}{G} | Creature -- Dragon // Sorcery -- Omen
+  [ ] Wild Ride                                          | {R}             | Sorcery
+  [ ] Windcrag Siege                                     | {1}{R}{W}       | Enchantment
+  [ ] Wind-Scarred Crag                                  | (No cost)       | Land
+  [ ] Wingblade Disciple                                 | {2}{U}          | Creature -- Human Monk
+
+BATCH 55 (Cards 271-275):
+--------------------------------------------------------------------------------
+  [ ] Wingspan Stride                                    | {U}             | Enchantment -- Aura
+  [ ] Winternight Stories                                | {2}{U}          | Sorcery
+  [ ] Worthy Cost                                        | {B}             | Sorcery
+  [ ] Yathan Roadwatcher                                 | {1}{W}{B}{G}    | Creature -- Human Scout
+  [ ] Yathan Tombguard                                   | {2}{B}          | Creature -- Human Warrior
+
+BATCH 56 (Cards 276-277):
+--------------------------------------------------------------------------------
+  [ ] Zurgo's Vanguard                                   | {2}{R}          | Creature -- Dog Soldier
+  [ ] Zurgo, Thunder's Decree                            | {R}{W}{B}       | Legendary Creature -- Orc Warrior
+
+================================================================================
+PROGRESS SUMMARY:
+================================================================================
+Total Cards Tracked: 277
+Total Batches: 56
+Cards per Batch: 5
+Current Status: 0/277 (0%)
+
+NEXT STEPS:
+1. Review each card's status
+2. Update [ ] to [X] as cards are implemented
+3. Mark [!] for cards with known issues
+4. Mark [~] for partially implemented cards
+5. Update progress count as work progresses
+
+Last Updated: 2026-02-15 02:28:44
+================================================================================

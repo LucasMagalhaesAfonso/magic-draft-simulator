@@ -120,7 +120,7 @@ const CardEffectsDB = {
   // =================== TARKIR DRAGONSTORM - CREATURES WITH ETB ===================
 
   "abzan monument": {
-    etb: [{ type: "ramp", land_type: "basic", specific: ["Plains", "Swamp", "Forest"], tapped: false, to_hand: true }],
+    etb: [{ type: "ramp", landType: "basic", to_hand: true }],
     activated: [{ cost: { mana: "1WBG", tap: true, sacrifice: true }, sorcerySpeed: true, effects: [{ type: "create_token", power: "greatest_toughness", toughness: "greatest_toughness", name: "Spirit" }] }]
   },
 
@@ -185,7 +185,7 @@ const CardEffectsDB = {
 
   "equilibrium adept": {
     etb: [{ type: "exile_top_play", amount: 1, duration: "next_end_step" }],
-    triggered: [{ event: "second_spell", self: true, effects: [{ type: "grant", keyword: "double_strike", target: "self", duration: "end_of_turn" }] }]
+    triggered: [{ event: "second_spell", self: true, condition: "cast_with_another_spell", effects: [{ type: "grant", keyword: "double_strike", target: "self", duration: "end_of_turn" }] }]
   },
 
   // =================== TARKIR DRAGONSTORM - CREATURES WITH TRIGGERS ===================
@@ -288,7 +288,7 @@ const CardEffectsDB = {
   },
 
   "marshal of the lost": {
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "buff", power: "X", toughness: "X", target: "creature", duration: "end_of_turn", note: "X = attacking creatures" }] }],
+    triggered: [{ event: "attacks", effects: [{ type: "buff", power: "X", toughness: "X", target: "creature", duration: "end_of_turn", note: "X = attacking creatures" }] }],
     static: [{ type: "has_keyword", keyword: "deathtouch" }]
   },
 
@@ -307,7 +307,7 @@ const CardEffectsDB = {
 
   "a-cori-steel cutter": {
     static: [{ type: "grant", keyword: "haste", target: "equipped" }],
-    triggered: [{ event: "second_spell", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Monk", keywords: ["prowess"] }, { type: "attach", target: "token" }] }]
+    triggered: [{ event: "second_spell", self: false, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Monk", keywords: ["prowess"] }, { type: "attach", target: "token", optional: true }] }]
   },
 
   "bearer of glory": {
@@ -316,7 +316,7 @@ const CardEffectsDB = {
   },
 
   "alchemist's assistant": {
-    static: [{ type: "has_keyword", keyword: "lifelink" }],
+    static: [{ type: "has_keyword", keywords: ["lifelink"] }],
     activated: [{ cost: { mana: "1B", zone: "graveyard", exile: true }, effects: [{ type: "grant_counter", counter: "lifelink", target: "creature" }] }]
   },
 
@@ -366,8 +366,8 @@ const CardEffectsDB = {
   // =================== TARKIR DRAGONSTORM - RENEW CARDS ===================
 
   "adorned crocodile": {
-    triggered: [{ event: "dies", effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid" }] }],
-    activated: [{ cost: { mana: "B", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }], sorcerySpeed: true }]
+    triggered: [{ event: "dies", self: true, effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid" }] }],
+    activated: [{ cost: { mana: "B", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature", optional: true }], sorcerySpeed: true }]
   },
 
   "agent of kotis": {
@@ -445,7 +445,7 @@ const CardEffectsDB = {
 
   "aegis sculptor": {
     static: [{ type: "has_keyword", keywords: ["flying", "ward"] }],
-    triggered: [{ event: "upkeep", effects: [{ type: "exile_graveyard", amount: 2, optional: true }, { type: "counter_self", counter: "+1/+1", amount: 1, condition: "if_exiled" }] }]
+    triggered: [{ event: "upkeep", self: true, effects: [{ type: "exile_graveyard", amount: 2, optional: true }, { type: "counter_self", counter: "+1/+1", amount: 1, condition: "if_exiled" }] }]
   },
 
   "betor, kin to all": {

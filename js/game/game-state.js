@@ -300,8 +300,14 @@ const GameState = {
         shouldFire = true;
       }
       // Flurry - second spell triggers
-      if (trigger.event === 'second_spell' && data.playerId === trigger.controllerId) {
-        shouldFire = true;
+      if (trigger.event === 'second_spell') {
+        if (trigger.self && data.cardUid === trigger.cardUid) {
+          // Self trigger: only this card triggers when it's cast as second spell
+          shouldFire = true;
+        } else if (!trigger.self && data.playerId === trigger.controllerId) {
+          // Non-self: artifact/enchantment triggers on any second spell cast
+          shouldFire = true;
+        }
       }
       // Attack triggers
       if (trigger.event === 'attacks') {

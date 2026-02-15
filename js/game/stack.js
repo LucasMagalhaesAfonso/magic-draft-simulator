@@ -1926,6 +1926,15 @@ const GameStack = {
           const egGy = gameState.players[egPid].zones.graveyard;
           const egExile = gameState.players[egPid].zones.exile;
           const egCards = egGy.getAll().slice(0, egAmt);
+
+          // If optional and human player, ask for confirmation
+          if (effect.optional && gameState.players[controller].isHuman && egPid === controller) {
+            gameState.waitingForInput = { type: 'confirm_optional', playerId: controller, message: `Exile ${egAmt} cards from your graveyard?` };
+            gameState._pendingExileGraveyard = { cards: egCards, egGy, egExile };
+            return; // Pause for human choice
+          }
+
+          // For AI or non-optional: always exile
           egCards.forEach(c => {
             egGy.remove(c._uid);
             egExile.add(c);

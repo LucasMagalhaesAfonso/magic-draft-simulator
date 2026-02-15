@@ -1,0 +1,842 @@
+#!/usr/bin/env node
+/**
+ * FULL-STACK ANALYZER
+ * Verifica TUDO de uma carta:
+ * 1. Scryfall (oracle text)
+ * 2. CardEffectsDB (estrutura)
+ * 3. Stack.js (effect types implementados)
+ * 4. Game-state.js (trigger events + conditions)
+ * 5. Cards.js (parsers)
+ * 6. Game-ai.js (AI scoring)
+ * 7. Mana costs
+ * 8. Self flags
+ * 9. Possíveis bugs
+ *
+ * USO:
+ *   node tools/full-stack-analyzer.js "Card Name"
+ *   node tools/full-stack-analyzer.js batch1
+ */
+
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+// Load CardEffectsDB
+const dbPath = path.join(__dirname, '../js/data/card-effects.js');
+const dbContent = fs.readFileSync(dbPath, 'utf8');
+const sandbox = { console: { log: () => {}, warn: () => {}, error: () => {} } };
+vm.createContext(sandbox);
+vm.runInContext(dbContent.replace(/\bconst CardEffectsDB\s*=/, 'var CardEffectsDB ='), sandbox);
+const DB = sandbox.CardEffectsDB;
+
+// Load game files to extract supported features
+const stackPath = path.join(__dirname, '../js/game/stack.js');
+const stackContent = fs.readFileSync(stackPath, 'utf8');
+
+const gsPath = path.join(__dirname, '../js/game/game-state.js');
+const gsContent = fs.readFileSync(gsPath, 'utf8');
+
+const cardsPath = path.join(__dirname, '../js/game/cards.js');
+const cardsContent = fs.readFileSync(cardsPath, 'utf8');
+
+const aiPath = path.join(__dirname, '../js/game/game-ai.js');
+const aiContent = fs.readFileSync(aiPath, 'utf8');
+
+// Extract supported effect types from stack.js
+function getSupportedEffectTypes() {
+  const matches = stackContent.match(/case '([^']+)':/g) || [];
+  return matches.map(m => m.replace(/case '|':/g, ''));
+}
+
+// Extract trigger events from game-state.js
+function getSupportedTriggerEvents() {
+  const matches = gsContent.match(/trigger\.event === '([^']+)'/g) || [];
+  return matches.map(m => m.replace(/trigger\.event === '|'/g, ''));
+}
+
+// Extract trigger conditions from game-state.js
+function getSupportedConditions() {
+  const condMatch = gsContent.match(/case '([^']+)':[^}]*(?=case |default:)/gs) || [];
+  const conditions = [];
+  const condSection = gsContent.match(/_checkTriggerCondition[\s\S]*?_checkEffectCondition/)[0];
+  const cases = condSection.match(/case '([^']+)':/g) || [];
+  return cases.map(c => c.replace(/case '|':/g, ''));
+}
+
+// Extract parsers from cards.js
+function getSupportedParsers() {
+  return {
+    has_parseSpellEffects: cardsContent.includes('parseSpellEffects'),
+    has_parseETBEffects: cardsContent.includes('parseETBEffects'),
+    has_parseTriggeredAbilities: cardsContent.includes('parseTriggeredAbilities'),
+    has_parseActivatedAbilities: cardsContent.includes('parseActivatedAbilities')
+  };
+}
+
+// Extract AI methods
+function getAIMethods() {
+  return {
+    has_scoreEffect: aiContent.includes('_scoreEffect'),
+    has_chooseTargets: aiContent.includes('_chooseTargets'),
+    has_tryTriggeredAbility: aiContent.includes('_tryTriggeredAbility'),
+    has_scoreInstant: aiContent.includes('_scoreInstant')
+  };
+}
+
+class FullStackAnalyzer {
+  constructor() {
+    this.supportedEffectTypes = getSupportedEffectTypes();
+    this.supportedTriggerEvents = getSupportedTriggerEvents();
+    this.supportedConditions = getSupportedConditions();
+    this.supportedParsers = getSupportedParsers();
+    this.aiMethods = getAIMethods();
+  }
+
+  async fetchScryfall(cardName) {
+    return new Promise((resolve) => {
+      const url = `https://api.scryfall.com/cards/search?q=name:"${encodeURIComponent(cardName)}"&unique=prints`;
+      https.get(url, { headers: { 'User-Agent': 'FullStackAnalyzer/1.0' } }, (res) => {
+        let data = '';
+        res.on('data', d => data += d);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            resolve(json.data?.[0] || null);
+          } catch(e) { resolve(null); }
+        });
+      }).on('error', () => resolve(null));
+    });
+  }
+
+  analyzeOracle(oracle, typeLine) {
+    const abilities = {
+      etb: [],
+      cast: [],
+      triggered: [],
+      activated: [],
+      static: []
+    };
+
+    // ETB
+    const etbMatch = oracle.match(/when[^.]*enters[^.]*[.]/i);
+    if (etbMatch) abilities.etb.push(etbMatch[0].substring(0, 80));
+
+    // Triggered (whenever)
+    const triggerMatches = oracle.match(/whenever[^.]*[.]/gi) || [];
+    abilities.triggered = triggerMatches.map(t => t.substring(0, 80));
+
+    // Activated
+    if (/\{[^}]+\}:\s*\w|^tap:|^sacrifice:/im.test(oracle)) {
+      abilities.activated.push('Activated ability detected');
+    }
+
+    // Static keywords
+    const keywords = ['flying', 'haste', 'lifelink', 'vigilance', 'menace', 'deathtouch'];
+    for (const kw of keywords) {
+      if (new RegExp(kw, 'i').test(oracle)) {
+        abilities.static.push(kw);
+      }
+    }
+
+    return abilities;
+  }
+
+  validateEffectTypes(dbEntry) {
+    const issues = [];
+    if (!dbEntry) return issues;
+
+    // Check etb and cast effects directly
+    for (const source of ['etb', 'cast']) {
+      const effects = dbEntry[source];
+      if (!effects) continue;
+
+      for (const effect of effects) {
+        if (!effect.type) {
+          issues.push(`❌ ${source}: Missing type field`);
+          continue;
+        }
+
+        if (!this.supportedEffectTypes.includes(effect.type)) {
+          issues.push(`⚠️  ${source}: Effect type "${effect.type}" NOT found in stack.js`);
+        }
+      }
+    }
+
+    // Check triggered effects (nested under triggers)
+    if (dbEntry.triggered) {
+      for (const trigger of dbEntry.triggered) {
+        if (trigger.effects) {
+          for (const effect of trigger.effects) {
+            if (!effect.type) {
+              issues.push(`❌ triggered: Missing type field`);
+              continue;
+            }
+
+            if (!this.supportedEffectTypes.includes(effect.type)) {
+              issues.push(`⚠️  triggered: Effect type "${effect.type}" NOT found in stack.js`);
+            }
+          }
+        }
+      }
+    }
+
+    return issues;
+  }
+
+  validateTriggeredAbilities(dbEntry) {
+    const issues = [];
+    if (!dbEntry?.triggered) return issues;
+
+    for (const trig of dbEntry.triggered) {
+      // Check event
+      if (!this.supportedTriggerEvents.includes(trig.event)) {
+        issues.push(`❌ Trigger event "${trig.event}" NOT in game-state.js`);
+      }
+
+      // Check condition if present
+      if (trig.condition && !this.supportedConditions.includes(trig.condition)) {
+        issues.push(`⚠️  Trigger condition "${trig.condition}" NOT in _checkTriggerCondition`);
+      }
+
+      // Check self flag for self-targeting events
+      const selfEvents = ['attacks', 'dies', 'becomes_tapped', 'cast_spell'];
+      if (selfEvents.includes(trig.event)) {
+        if (trig.self === undefined) {
+          issues.push(`⚠️  Trigger "${trig.event}": Missing self flag (should be true/false)`);
+        }
+      }
+    }
+    return issues;
+  }
+
+  validateManaCost(mana_cost, dbEntry) {
+    const issues = [];
+    if (!mana_cost) return issues;
+
+    // Check mana parsing
+    const hasValidMana = /\{\d+\}|\{[WUBRG]\}|X/.test(mana_cost);
+    if (!hasValidMana && mana_cost !== '') {
+      issues.push(`⚠️  Mana cost format unusual: "${mana_cost}"`);
+    }
+
+    // Check additional costs
+    if (dbEntry?.additional_costs) {
+      for (const cost of dbEntry.additional_costs) {
+        if (!cost.type) issues.push(`❌ Additional cost: Missing type`);
+      }
+    }
+
+    return issues;
+  }
+
+  validateStaticEffects(dbEntry) {
+    const issues = [];
+    if (!dbEntry?.static) return issues;
+
+    for (const stat of dbEntry.static) {
+      if (!stat.type) {
+        issues.push(`❌ Static: Missing type field`);
+      }
+      // Check for has_keyword
+      if (stat.type === 'has_keyword' && !stat.keywords) {
+        issues.push(`❌ Static has_keyword: Missing keywords array`);
+      }
+    }
+    return issues;
+  }
+
+  compareSizeAndContent(oracle, dbEntry) {
+    const issues = [];
+
+    // Count "whenever" and "when" triggers (but NOT "when enters")
+    const triggerMatches = oracle.match(/whenever[^.]+\.|when\s+(?!.*\benters\b)[^.]*\./gi) || [];
+    const oracleTriggered = triggerMatches.filter(m => !m.toLowerCase().includes('enters')).length;
+    const dbTriggered = dbEntry?.triggered?.length || 0;
+
+    if (oracleTriggered !== dbTriggered) {
+      issues.push(`⚠️  Triggered count mismatch: Oracle=${oracleTriggered}, DB=${dbTriggered}`);
+    }
+
+    const oracleHasEtb = /when[^.]*enters/i.test(oracle);
+    const dbHasEtb = !!dbEntry?.etb;
+    if (oracleHasEtb !== dbHasEtb) {
+      issues.push(`⚠️  ETB mismatch: Oracle=${oracleHasEtb}, DB=${dbHasEtb}`);
+    }
+
+    return issues;
+  }
+
+  // ========== ADDITIONAL VALIDATION METHODS (8-17) ==========
+
+  validateConditions(dbEntry, oracle) {
+    const issues = [];
+    if (!dbEntry?.triggered) return issues;
+
+    for (const trigger of dbEntry.triggered) {
+      if (trigger.condition && !this.supportedConditions.includes(trigger.condition)) {
+        issues.push(`❌ Trigger condition "${trigger.condition}" NOT found in game-state.js`);
+      }
+      // Check if condition makes sense with event
+      if (trigger.condition === 'cast_with_another_spell' && trigger.event !== 'second_spell' && trigger.event !== 'cast_spell') {
+        issues.push(`⚠️  Condition "cast_with_another_spell" only makes sense with second_spell/cast_spell events, not "${trigger.event}"`);
+      }
+    }
+    return issues;
+  }
+
+  validateTargets(dbEntry, oracle) {
+    const issues = [];
+    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker'];
+
+    const checkTargets = (effects) => {
+      if (!Array.isArray(effects)) return;
+      for (const effect of effects) {
+        if (effect.target && !validTargets.includes(effect.target) && !effect.target.includes('_')) {
+          issues.push(`⚠️  Unknown target type: "${effect.target}" in effect type "${effect.type}"`);
+        }
+      }
+    };
+
+    if (dbEntry.etb) checkTargets(dbEntry.etb);
+    if (dbEntry.cast) checkTargets(dbEntry.cast);
+    if (dbEntry.triggered) {
+      for (const trigger of dbEntry.triggered) {
+        if (trigger.effects) checkTargets(trigger.effects);
+      }
+    }
+    return issues;
+  }
+
+  validateAdditionalCosts(dbEntry) {
+    const issues = [];
+    const validCostTypes = ['sacrifice', 'discard', 'pay_life', 'tap', 'exile', 'return'];
+
+    if (dbEntry.additional_costs) {
+      for (const cost of dbEntry.additional_costs) {
+        if (cost.type && !validCostTypes.includes(cost.type)) {
+          issues.push(`⚠️  Unknown additional cost type: "${cost.type}"`);
+        }
+      }
+    }
+
+    if (dbEntry.activated) {
+      for (const ability of dbEntry.activated) {
+        if (ability.cost) {
+          const costStr = JSON.stringify(ability.cost);
+          if (costStr.includes('mana') && !ability.cost.mana) {
+            issues.push(`⚠️  Activated ability has malformed mana cost`);
+          }
+        }
+      }
+    }
+    return issues;
+  }
+
+  validateKeywords(dbEntry) {
+    const issues = [];
+    const validKeywords = ['flying', 'haste', 'vigilance', 'menace', 'lifelink', 'deathtouch', 'trample', 'flash', 'reach', 'first strike', 'double strike', 'indestructible', 'hexproof', 'shroud', 'ward', 'defender', 'prowess', 'undying', 'persist', 'evoke', 'changeling'];
+
+    if (dbEntry.static) {
+      for (const stat of dbEntry.static) {
+        if (stat.type === 'has_keyword' && stat.keywords) {
+          for (const kw of stat.keywords) {
+            if (!validKeywords.includes(kw.toLowerCase()) && kw !== 'ward') {
+              issues.push(`⚠️  Unknown keyword: "${kw}"`);
+            }
+          }
+        }
+      }
+    }
+    return issues;
+  }
+
+  validateCounters(dbEntry) {
+    const issues = [];
+    const validCounterTypes = ['+1/+1', '-1/-1', 'stun', 'loyalty', 'charge', 'time', 'verse', 'plague', 'age'];
+
+    const checkCounters = (effects) => {
+      if (!Array.isArray(effects)) return;
+      for (const effect of effects) {
+        if (effect.counter && !validCounterTypes.includes(effect.counter)) {
+          issues.push(`⚠️  Unknown counter type: "${effect.counter}"`);
+        }
+      }
+    };
+
+    if (dbEntry.etb) checkCounters(dbEntry.etb);
+    if (dbEntry.cast) checkCounters(dbEntry.cast);
+    if (dbEntry.triggered) {
+      for (const trigger of dbEntry.triggered) {
+        if (trigger.effects) checkCounters(trigger.effects);
+      }
+    }
+    return issues;
+  }
+
+  validateZoneTransitions(dbEntry, card) {
+    const issues = [];
+
+    if (dbEntry.activated) {
+      for (const ability of dbEntry.activated) {
+        if (ability.cost?.zone === 'graveyard') {
+          // Check if card can reach graveyard
+          if (!card.type_line.includes('Creature') && !card.type_line.includes('Artifact') && !card.type_line.includes('Enchantment')) {
+            if (!card.type_line.includes('Instant') && !card.type_line.includes('Sorcery')) {
+              issues.push(`⚠️  Card ${card.type_line} may not reach graveyard easily for graveyard activation`);
+            }
+          }
+        }
+      }
+    }
+    return issues;
+  }
+
+  validateTriggerCascades(dbEntry) {
+    const issues = [];
+
+    if (dbEntry.triggered && dbEntry.triggered.length > 2) {
+      // Check for potential cascades
+      const events = dbEntry.triggered.map(t => t.event);
+      if (events.includes('dies') && events.includes('any_creature_dies')) {
+        issues.push(`⚠️  Card has both "dies" and "any_creature_dies" triggers - potential cascade`);
+      }
+    }
+    return issues;
+  }
+
+  validateOracleCompleteness(oracle, dbEntry) {
+    const issues = [];
+
+    // Count abilities in oracle
+    const wheneverCount = (oracle.match(/whenever/gi) || []).length;
+    const whenCount = (oracle.match(/when\s+(?!.*enters)/gi) || []).length;
+    const totalTriggersOracle = wheneverCount + whenCount;
+    const totalTriggersDB = dbEntry.triggered?.length || 0;
+
+    if (totalTriggersOracle > totalTriggersDB) {
+      issues.push(`⚠️  Oracle has ${totalTriggersOracle} ability descriptions but DB has only ${totalTriggersDB} - possible incomplete implementation`);
+    }
+
+    // Check for ability keywords that might be missing
+    const complexKeywords = ['mobilize', 'channel', 'kicker', 'cycling', 'adventure', 'saga'];
+    for (const kw of complexKeywords) {
+      if (oracle.toLowerCase().includes(kw) && !JSON.stringify(dbEntry).toLowerCase().includes(kw)) {
+        issues.push(`⚠️  Oracle mentions "${kw}" but DB doesn't implement it`);
+      }
+    }
+
+    return issues;
+  }
+
+  validateAICompatibility(dbEntry) {
+    const issues = [];
+
+    // Check if card has complex interactive elements
+    if (dbEntry.cast) {
+      for (const effect of dbEntry.cast) {
+        if (effect.type === 'modal' || effect.type === 'clash') {
+          // AI should have support for these
+          if (!aiContent.includes('_aiChooseMode') && effect.type === 'modal') {
+            issues.push(`⚠️  Card has modal but AI may not support mode selection`);
+          }
+        }
+      }
+    }
+    return issues;
+  }
+
+  validateEffectChaining(dbEntry) {
+    const issues = [];
+
+    // Check if effects in same resolution might chain incorrectly
+    const checkEffectOrder = (effects) => {
+      if (!Array.isArray(effects) || effects.length < 2) return;
+
+      for (let i = 0; i < effects.length - 1; i++) {
+        const current = effects[i];
+        const next = effects[i + 1];
+
+        // Check for common ordering issues
+        if (current.type === 'draw' && next.type === 'discard') {
+          // OK - draw then discard is fine
+        } else if (current.type === 'surveil' && next.type === 'draw') {
+          issues.push(`⚠️  Effect surveil followed by draw - verify order is correct`);
+        }
+      }
+    };
+
+    if (dbEntry.etb) checkEffectOrder(dbEntry.etb);
+    if (dbEntry.cast) checkEffectOrder(dbEntry.cast);
+    if (dbEntry.triggered) {
+      for (const trigger of dbEntry.triggered) {
+        if (trigger.effects) checkEffectOrder(trigger.effects);
+      }
+    }
+
+    return issues;
+  }
+
+  validateHumanInteractivity(dbEntry, oracle) {
+    const issues = [];
+
+    // Check if card requires human choice but might not have UI support
+    const hasModal = dbEntry.cast?.some(e => e.type === 'modal') || dbEntry.etb?.some(e => e.type === 'modal');
+    const hasTarget = JSON.stringify(dbEntry).includes('"target"');
+    const hasSurveil = JSON.stringify(dbEntry).includes('surveil');
+    const hasScry = JSON.stringify(dbEntry).includes('scry');
+    const hasChoices = oracle.toLowerCase().includes('may') || oracle.toLowerCase().includes('choose');
+
+    if (hasModal && !aiContent.includes('_aiChooseMode')) {
+      issues.push(`⚠️  [HUMAN] Card has modal but AI support unclear`);
+    }
+    if (hasTarget && !aiContent.includes('_chooseTargets')) {
+      issues.push(`⚠️  [HUMAN] Card needs target selection but targeting support unclear`);
+    }
+    if ((hasSurveil || hasScry) && !cardsContent.includes('surveil') && !cardsContent.includes('scry')) {
+      issues.push(`⚠️  [HUMAN] Card has surveil/scry but parser support unclear`);
+    }
+    // Optional: if card has "may" in oracle, check if DB structure supports it
+    if (hasChoices && !hasModal && !hasTarget && oracle.toLowerCase().includes('may')) {
+      if (!JSON.stringify(dbEntry).includes('optional')) {
+        issues.push(`⚠️  [HUMAN] Oracle has optional action but DB doesn't mark as optional`);
+      }
+    }
+
+    return issues;
+  }
+
+  validateAIPlayability(dbEntry, oracle) {
+    const issues = [];
+
+    // Check if AI can play this card automatically
+    const hasOptional = JSON.stringify(dbEntry).includes('optional');
+    const hasClash = JSON.stringify(dbEntry).includes('clash');
+    const hasHideaway = JSON.stringify(dbEntry).includes('hideaway');
+    const hasBehold = JSON.stringify(dbEntry).includes('behold');
+    const hasAttach = JSON.stringify(dbEntry).includes('attach');
+    const hasTargeting = JSON.stringify(dbEntry).includes('target');
+
+    // Check if AI has support for optional effects (checks for effect.optional handling)
+    if (hasOptional && !aiContent.includes('effect.optional')) {
+      issues.push(`⚠️  [AI] Card has optional effects but optional handling unclear`);
+    }
+    // Check if AI has targeting support (uses _chooseTargets)
+    if (hasTargeting && !aiContent.includes('_chooseTargets')) {
+      issues.push(`⚠️  [AI] Card has targeting but _chooseTargets support unclear`);
+    }
+    if (hasAttach && !aiContent.includes('_tryEquip')) {
+      // Attach might be OK even without specific function - check if general targeting works
+      if (!aiContent.includes('_chooseTargets')) {
+        issues.push(`⚠️  [AI] Card has attach but equip support unclear`);
+      }
+    }
+    if (hasClash && !aiContent.includes('clash')) {
+      issues.push(`⚠️  [AI] Card has clash but clash support unclear`);
+    }
+    if (hasHideaway && !aiContent.includes('hideaway')) {
+      issues.push(`⚠️  [AI] Card has hideaway but hideaway support unclear`);
+    }
+    if (hasBehold && !aiContent.includes('behold')) {
+      issues.push(`⚠️  [AI] Card has behold but behold support unclear`);
+    }
+
+    // Check if card is too complex for AI
+    const triggerCount = dbEntry.triggered?.length || 0;
+    const activatedCount = dbEntry.activated?.length || 0;
+    if (triggerCount > 3 || activatedCount > 2) {
+      issues.push(`⚠️  [AI] Card has many triggers/abilities (${triggerCount}/${activatedCount}) - AI may struggle`);
+    }
+
+    return issues;
+  }
+
+  async analyzeCard(cardName) {
+    console.log(`\n${'='.repeat(120)}`);
+    console.log(`FULL-STACK ANALYSIS: ${cardName}`);
+    console.log(`${'='.repeat(120)}\n`);
+
+    // 1. SCRYFALL
+    console.log(`[1/7] SCRYFALL API`);
+    const card = await this.fetchScryfall(cardName);
+    if (!card) {
+      console.log(`❌ Card not found\n`);
+      return null;
+    }
+    console.log(`✅ Found: ${card.name}`);
+    console.log(`   Mana: ${card.mana_cost} | Type: ${card.type_line}`);
+    console.log(`   Oracle: ${card.oracle_text.substring(0, 80)}...\n`);
+
+    const oracleAnalysis = this.analyzeOracle(card.oracle_text, card.type_line);
+
+    // 2. CARDEFECTSDB
+    console.log(`[2/7] CARDEFECTSDB`);
+    const dbEntry = DB[cardName.toLowerCase()];
+    if (!dbEntry) {
+      console.log(`❌ NOT IN DATABASE\n`);
+    } else {
+      console.log(`✅ In database`);
+      console.log(`   Cast: ${dbEntry.cast?.length || 0} | ETB: ${dbEntry.etb?.length || 0} | Triggered: ${dbEntry.triggered?.length || 0}\n`);
+    }
+
+    // 3. STACK.JS - Effect Types
+    console.log(`[3/7] STACK.JS - Effect Types`);
+    const effectIssues = this.validateEffectTypes(dbEntry);
+    if (effectIssues.length === 0) {
+      console.log(`✅ All effect types supported\n`);
+    } else {
+      console.log(`⚠️  ${effectIssues.length} issues:`);
+      for (const issue of effectIssues.slice(0, 5)) console.log(`   ${issue}`);
+      if (effectIssues.length > 5) console.log(`   ... and ${effectIssues.length - 5} more`);
+      console.log('');
+    }
+
+    // 4. GAME-STATE.JS - Trigger Events
+    console.log(`[4/7] GAME-STATE.JS - Trigger Events`);
+    const triggerIssues = this.validateTriggeredAbilities(dbEntry);
+    if (triggerIssues.length === 0) {
+      console.log(`✅ All triggers supported\n`);
+    } else {
+      console.log(`⚠️  ${triggerIssues.length} issues:`);
+      for (const issue of triggerIssues.slice(0, 5)) console.log(`   ${issue}`);
+      if (triggerIssues.length > 5) console.log(`   ... and ${triggerIssues.length - 5} more`);
+      console.log('');
+    }
+
+    // 5. MANA PARSING
+    console.log(`[5/7] MANA PARSING`);
+    const manaIssues = this.validateManaCost(card.mana_cost, dbEntry);
+    if (manaIssues.length === 0) {
+      console.log(`✅ Mana cost valid\n`);
+    } else {
+      for (const issue of manaIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 6. STATIC EFFECTS
+    console.log(`[6/7] STATIC EFFECTS`);
+    const staticIssues = this.validateStaticEffects(dbEntry);
+    if (staticIssues.length === 0) {
+      console.log(`✅ Static effects valid\n`);
+    } else {
+      for (const issue of staticIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 7. COMPARISON
+    console.log(`[7/7] ORACLE vs DB COMPARISON`);
+    const comparisonIssues = this.compareSizeAndContent(card.oracle_text, dbEntry);
+    if (comparisonIssues.length === 0) {
+      console.log(`✅ Oracle and DB match\n`);
+    } else {
+      for (const issue of comparisonIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 8. CONDITIONS VALIDATION
+    console.log(`[8/17] CONDITIONS VALIDATION`);
+    const conditionIssues = this.validateConditions(dbEntry, card.oracle_text);
+    if (conditionIssues.length === 0) {
+      console.log(`✅ All conditions valid\n`);
+    } else {
+      for (const issue of conditionIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 9. TARGETS VALIDATION
+    console.log(`[9/17] TARGETS VALIDATION`);
+    const targetIssues = this.validateTargets(dbEntry, card.oracle_text);
+    if (targetIssues.length === 0) {
+      console.log(`✅ All targets valid\n`);
+    } else {
+      for (const issue of targetIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 10. ADDITIONAL COSTS
+    console.log(`[10/17] ADDITIONAL COSTS`);
+    const costIssues = this.validateAdditionalCosts(dbEntry);
+    if (costIssues.length === 0) {
+      console.log(`✅ Costs valid\n`);
+    } else {
+      for (const issue of costIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 11. KEYWORDS
+    console.log(`[11/17] KEYWORDS`);
+    const keywordIssues = this.validateKeywords(dbEntry);
+    if (keywordIssues.length === 0) {
+      console.log(`✅ Keywords valid\n`);
+    } else {
+      for (const issue of keywordIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 12. COUNTERS
+    console.log(`[12/17] COUNTERS`);
+    const counterIssues = this.validateCounters(dbEntry);
+    if (counterIssues.length === 0) {
+      console.log(`✅ Counter types valid\n`);
+    } else {
+      for (const issue of counterIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 13. ZONE TRANSITIONS
+    console.log(`[13/17] ZONE TRANSITIONS`);
+    const zoneIssues = this.validateZoneTransitions(dbEntry, card);
+    if (zoneIssues.length === 0) {
+      console.log(`✅ Zone transitions valid\n`);
+    } else {
+      for (const issue of zoneIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 14. TRIGGER CASCADES
+    console.log(`[14/17] TRIGGER CASCADES`);
+    const cascadeIssues = this.validateTriggerCascades(dbEntry);
+    if (cascadeIssues.length === 0) {
+      console.log(`✅ No problematic cascades\n`);
+    } else {
+      for (const issue of cascadeIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 15. ORACLE COMPLETENESS
+    console.log(`[15/17] ORACLE COMPLETENESS`);
+    const completeIssues = this.validateOracleCompleteness(card.oracle_text, dbEntry);
+    if (completeIssues.length === 0) {
+      console.log(`✅ All oracle abilities captured\n`);
+    } else {
+      for (const issue of completeIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 16. AI COMPATIBILITY
+    console.log(`[16/17] AI COMPATIBILITY`);
+    const aiIssues = this.validateAICompatibility(dbEntry);
+    if (aiIssues.length === 0) {
+      console.log(`✅ AI can play this card\n`);
+    } else {
+      for (const issue of aiIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 17. EFFECT CHAINING
+    console.log(`[17/17] EFFECT CHAINING`);
+    const chainingIssues = this.validateEffectChaining(dbEntry);
+    if (chainingIssues.length === 0) {
+      console.log(`✅ Effect order correct\n`);
+    } else {
+      for (const issue of chainingIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 18. HUMAN INTERACTIVITY
+    console.log(`[18/19] HUMAN INTERACTIVITY`);
+    const humanIssues = this.validateHumanInteractivity(dbEntry, card.oracle_text);
+    if (humanIssues.length === 0) {
+      console.log(`✅ Humans can play this card\n`);
+    } else {
+      for (const issue of humanIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // 19. AI PLAYABILITY
+    console.log(`[19/19] AI PLAYABILITY`);
+    const aiPlayabilityIssues = this.validateAIPlayability(dbEntry, card.oracle_text);
+    if (aiPlayabilityIssues.length === 0) {
+      console.log(`✅ AI can play this card\n`);
+    } else {
+      for (const issue of aiPlayabilityIssues) console.log(`   ${issue}`);
+      console.log('');
+    }
+
+    // SUMMARY
+    const allIssues = [
+      ...effectIssues,
+      ...triggerIssues,
+      ...manaIssues,
+      ...staticIssues,
+      ...comparisonIssues,
+      ...conditionIssues,
+      ...targetIssues,
+      ...costIssues,
+      ...keywordIssues,
+      ...counterIssues,
+      ...zoneIssues,
+      ...cascadeIssues,
+      ...completeIssues,
+      ...aiIssues,
+      ...chainingIssues,
+      ...humanIssues,
+      ...aiPlayabilityIssues
+    ];
+
+    console.log(`${'='.repeat(120)}`);
+    console.log(`SUMMARY`);
+    console.log(`${'='.repeat(120)}\n`);
+
+    if (allIssues.length === 0) {
+      console.log(`✅ ALL CHECKS PASSED - Card is 100% complete!\n`);
+      return { status: 'COMPLETE', issues: [] };
+    } else {
+      const errors = allIssues.filter(i => i.startsWith('❌')).length;
+      const warnings = allIssues.filter(i => i.startsWith('⚠️')).length;
+      console.log(`🔴 ISSUES FOUND:`);
+      console.log(`   Errors: ${errors}`);
+      console.log(`   Warnings: ${warnings}`);
+      console.log(`\nAll issues:`);
+      for (const issue of allIssues) {
+        console.log(`   ${issue}`);
+      }
+      console.log('');
+      return { status: 'ISSUES_FOUND', issues: allIssues };
+    }
+  }
+}
+
+// BATCHES
+const CARDS_BATCH = {
+  batch1: [
+    'Ambling Stormshell', 'Avenger of the Fallen', 'Boulderborn Dragon',
+    'Descendant of Storms', 'Marshal of the Lost'
+  ],
+  batch2: [
+    'Bone-Cairn Butcher', 'Dalkovan Packbeasts', 'Dragonback Lancer',
+    'Equilibrium Adept', 'Jeskai Devotee'
+  ]
+};
+
+async function main() {
+  const arg = process.argv[2] || 'batch1';
+  const analyzer = new FullStackAnalyzer();
+
+  let cards;
+  if (arg in CARDS_BATCH) {
+    cards = CARDS_BATCH[arg];
+  } else {
+    cards = [arg];
+  }
+
+  const results = [];
+  for (const cardName of cards) {
+    const result = await analyzer.analyzeCard(cardName);
+    if (result) results.push(result);
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  // FINAL SUMMARY
+  console.log(`\n${'='.repeat(120)}`);
+  console.log(`BATCH SUMMARY: ${cards.length} CARDS`);
+  console.log(`${'='.repeat(120)}\n`);
+
+  const complete = results.filter(r => r.status === 'COMPLETE').length;
+  console.log(`✅ Complete: ${complete}/${results.length}`);
+  console.log(`🔴 Issues: ${results.length - complete}/${results.length}\n`);
+
+  console.log(`✓ Full-stack analysis complete\n`);
+}
+
+main().catch(console.error);

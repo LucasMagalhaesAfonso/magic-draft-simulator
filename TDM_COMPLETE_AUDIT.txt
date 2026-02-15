@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 10/277 (3.6%)
+Current Progress: 20/277 (7.2%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -26,11 +26,11 @@ BATCH 1 (Cards 1-5):
 
 BATCH 2 (Cards 6-10):
 --------------------------------------------------------------------------------
-  [ ] Agent of Kotis                                     | {1}{U}          | Creature -- Human Rogue
-  [ ] Aggressive Negotiations                            | {2}{B}          | Sorcery
-  [ ] Ainok Wayfarer                                     | {1}{G}          | Creature -- Dog Scout
-  [ ] Alchemist's Assistant                              | {1}{B}          | Creature -- Monkey
-  [ ] Alesha's Legacy                                    | {1}{B}          | Instant
+  [X] Agent of Kotis                                     | {1}{U}          | Creature -- Human Rogue
+  [X] Aggressive Negotiations                            | {2}{B}          | Sorcery
+  [X] Ainok Wayfarer                                     | {1}{G}          | Creature -- Dog Scout
+  [X] Alchemist's Assistant                              | {1}{B}          | Creature -- Monkey
+  [X] Alesha's Legacy                                    | {1}{B}          | Instant
 
 BATCH 3 (Cards 11-15):
 --------------------------------------------------------------------------------

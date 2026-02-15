@@ -287,7 +287,7 @@ class FullStackAnalyzer {
 
   validateTargets(dbEntry, oracle) {
     const issues = [];
-    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker'];
+    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent'];
 
     const checkTargets = (effects) => {
       if (!Array.isArray(effects)) return;

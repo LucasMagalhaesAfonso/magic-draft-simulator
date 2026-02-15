@@ -183,7 +183,7 @@ const CardEffectsDB = {
   },
 
   "dragonologist": {
-    etb: [{ type: "look_top", amount: 6, reveal: "instant_sorcery_or_dragon" }]
+    etb: [{ type: "look_top", amount: 6, reveal: "instant_sorcery_or_dragon", optional: true }]
   },
 
   "dusyut earthcarver": {

@@ -966,6 +966,10 @@ const CARDS_BATCH = {
   batch12: [
     'Dragonback Assault', 'Dragonback Lancer', 'Dragonbroods\' Relic',
     'Dragonclaw Strike', 'Dragonfire Blade'
+  ],
+  batch13: [
+    'Dragonologist', 'Dragon Sniper', 'Dragon\'s Prey',
+    'Dragonstorm Forecaster', 'Dragonstorm Globe'
   ]
 };
 

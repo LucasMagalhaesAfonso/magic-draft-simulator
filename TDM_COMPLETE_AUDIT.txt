@@ -4,7 +4,7 @@
 Set Code: TDM
 Total Cards: 277
 Batches (5 per batch): 56
-Current Progress: 70/277 (25.3%)
+Current Progress: 75/277 (27.1%)
 
 STATUS LEGEND:
 [ ] TODO    - Card needs implementation/verification
@@ -114,11 +114,11 @@ BATCH 12 (Cards 56-60):
 
 BATCH 13 (Cards 61-65):
 --------------------------------------------------------------------------------
-  [ ] Dragonologist                                      | {2}{U}          | Creature -- Human Wizard
-  [ ] Dragon Sniper                                      | {G}             | Creature -- Human Archer
-  [ ] Dragon's Prey                                      | {2}{B}          | Instant
-  [ ] Dragonstorm Forecaster                             | {U}             | Creature -- Human Scout
-  [ ] Dragonstorm Globe                                  | {3}             | Artifact
+  [X] Dragonologist                                      | {2}{U}          | Creature -- Human Wizard
+  [X] Dragon Sniper                                      | {G}             | Creature -- Human Archer
+  [X] Dragon's Prey                                      | {2}{B}          | Instant
+  [X] Dragonstorm Forecaster                             | {U}             | Creature -- Human Scout
+  [X] Dragonstorm Globe                                  | {3}             | Artifact
 
 BATCH 14 (Cards 66-70):
 --------------------------------------------------------------------------------

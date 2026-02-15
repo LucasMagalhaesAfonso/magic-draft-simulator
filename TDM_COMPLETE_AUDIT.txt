@@ -162,11 +162,11 @@ BATCH 18 (Cards 86-90):
 
 BATCH 19 (Cards 91-95):
 --------------------------------------------------------------------------------
-  [ ] Glacial Dragonhunt                                 | {U}{R}          | Sorcery
-  [ ] Glacierwood Siege                                  | {1}{G}{U}       | Enchantment
-  [ ] Great Arashin City                                 | (No cost)       | Land
-  [ ] Gurmag Nightwatch                                  | {2/B}{2/G}{2/U} | Creature -- Human Ranger
-  [ ] Gurmag Rakshasa                                    | {4}{B}{B}       | Creature -- Demon
+  [X] Glacial Dragonhunt                                 | {U}{R}          | Sorcery
+  [X] Glacierwood Siege                                  | {1}{G}{U}       | Enchantment
+  [X] Great Arashin City                                 | (No cost)       | Land
+  [X] Gurmag Nightwatch                                  | {2/B}{2/G}{2/U} | Creature -- Human Ranger
+  [X] Gurmag Rakshasa                                    | {4}{B}{B}       | Creature -- Demon
 
 BATCH 20 (Cards 96-100):
 --------------------------------------------------------------------------------

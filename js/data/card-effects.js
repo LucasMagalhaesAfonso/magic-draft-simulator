@@ -112,6 +112,7 @@ const CardEffectsDB = {
       { type: "optional_discard", amount: 1 },
       { type: "damage", amount: 3, target: "creature", condition: "if_discarded_nonland" }
     ],
+    triggered: [],  // Damage is part of cast conditional, not a separate triggered
     harmonize: "{4}{U}{R}"
   },
 
@@ -1356,7 +1357,7 @@ const CardEffectsDB = {
     etb: [{ type: "trade_route_envoy_ability" }]
   },
   "gurmag nightwatch": {
-    etb: [{ type: "look_top", amount: 3, pick: 1, rest_to: "graveyard" }]
+    etb: [{ type: "look_top", amount: 3, pick: 1, rest_to: "graveyard", optional: true }]
   },
   "monastery messenger": {
     etb: [{ type: "return_from_graveyard", target: "noncreature_nonland", to_top_library: true, optional: true }],

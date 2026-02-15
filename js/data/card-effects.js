@@ -503,8 +503,8 @@ const CardEffectsDB = {
   },
 
   "flamehold grappler": {
-    static: [{ type: "has_keyword", keywords: ["first_strike", "first strike"] }],
-    etb: [{ type: "copy_next_spell" }]
+    static: [{ type: "has_keyword", keywords: ["first strike"] }],
+    etb: [{ type: "copy_next_spell", optional: true }]
   },
 
   "lasyd prowler": {

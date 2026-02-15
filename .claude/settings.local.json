@@ -101,7 +101,8 @@
       "Bash(for card in \"All-Out Assault\" \"Ambling Stormshell\" \"Anafenza, Unyielding Lineage\" \"Arashin Sunshield\" \"Armament Dragon\")",
       "Bash(for card in \"Blossoming Sands\" \"Bone-Cairn Butcher\" \"Boulderborn Dragon\" \"Breaching Dragonstorm\" \"Call the Spirit Dragons\")",
       "Bash(for batch in batch1 batch2 batch3 batch4 batch5 batch6 batch7 batch8 batch9 batch10 batch11 batch12)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "Bash(for i in 25 26 27 28 29 30)"
     ]
   }
 }

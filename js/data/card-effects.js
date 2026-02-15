@@ -294,7 +294,7 @@ const CardEffectsDB = {
 
   "kotis, the fangkeeper": {
     static: [{ type: "has_keyword", keywords: ["indestructible"] }],
-    triggered: [{ event: "combat_damage_player", self: true, effects: [{ type: "exile_top_opponent", amount: "X", note: "X = damage dealt" }] }]
+    triggered: [{ event: "combat_damage_player", self: true, effects: [{ type: "exile_top_opponent", amount: "X", note: "X = damage dealt", optional: true }] }]
   },
 
   "marshal of the lost": {
@@ -919,7 +919,8 @@ const CardEffectsDB = {
   },
 
   "kishla trawlers": {
-    etb: [{ type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true }]
+    etb: [{ type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true, optional: true }]
+    // "When you do" is part of ETB conditional, not separate trigger
   },
 
   "sibsig appraiser": {

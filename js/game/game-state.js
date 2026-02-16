@@ -4166,6 +4166,7 @@ const GameState = {
   },
 
   castSpell(state, playerId, cardUid, targets, castingAdventure, castingEvoke) {
+    console.log(`[CAST_SPELL] Called for player ${playerId}, card: ${cardUid}`);
     const hand = state.players[playerId].zones.hand;
     let card = hand.get(cardUid);
     let fromExile = false;
@@ -4173,7 +4174,11 @@ const GameState = {
       card = state._exiledPlayable[cardUid].card;
       fromExile = true;
     }
-    if (!card) return { success: false, msg: 'Carta nao encontrada.' };
+    if (!card) {
+      console.log(`[CAST_SPELL] Card not found: ${cardUid}`);
+      return { success: false, msg: 'Carta nao encontrada.' };
+    }
+    console.log(`[CAST_SPELL] Card found: ${card.name}`);
 
     // Detect evoke casting from card flag or parameter
     const isEvoke = castingEvoke || card._castingEvoke;

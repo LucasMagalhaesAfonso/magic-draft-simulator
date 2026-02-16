@@ -203,7 +203,14 @@ const CombatSystem = {
             const prevented = Math.min(dmg, gameState._damageShield[defendingPlayer.id]);
             dmg -= prevented;
             gameState._damageShield[defendingPlayer.id] -= prevented;
-            if (prevented > 0) log.push(`${prevented} dano prevenido.`);
+            if (prevented > 0) {
+              log.push(`${prevented} dano prevenido.`);
+              // Store prevented damage and fire prevent_damage trigger
+              gameState._lastPreventedDamage = prevented;
+              if (typeof fireTrigger === 'function') {
+                fireTrigger(gameState, 'prevent_damage', defendingPlayer.id, { prevented, source: attacker });
+              }
+            }
           }
 
           if (dmg > 0) {

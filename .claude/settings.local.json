@@ -102,7 +102,16 @@
       "Bash(for card in \"Blossoming Sands\" \"Bone-Cairn Butcher\" \"Boulderborn Dragon\" \"Breaching Dragonstorm\" \"Call the Spirit Dragons\")",
       "Bash(for batch in batch1 batch2 batch3 batch4 batch5 batch6 batch7 batch8 batch9 batch10 batch11 batch12)",
       "Bash(tee:*)",
-      "Bash(for i in 25 26 27 28 29 30)"
+      "Bash(for i in 25 26 27 28 29 30)",
+      "Bash(for card in \"Neriv, Heart of the Storm\" \"New Way Forward\" \"Nightblade Brigade\" \"Nomad Outpost\" \"Opulent Palace\")",
+      "Bash(for card in \"Roiling Dragonstorm\" \"Rot-Curse Rakshasa\" \"Rugged Highlands\" \"Runescale Stormbrood\" \"Sage of the Fang\")",
+      "Bash(for card in \"Sage of the Skies\" \"Sagu Pummeler\" \"Sagu Wildling\" \"Salt Road Packbeast\" \"Salt Road Skirmish\")",
+      "Bash(for card in \"Scoured Barrens\" \"Seize Opportunity\" \"Severance Priest\" \"Shiko, Paragon of the Way\" \"Shock Brigade\")",
+      "Bash(for card in \"Shocking Sharpshooter\" \"Sibsig Appraiser\" \"Sidisi, Regent of the Mire\" \"Sinkhole Surveyor\" \"Skirmish Rhino\")",
+      "Bash(for card in \"Stillness in Motion\" \"Stormbeacon Blade\" \"Stormplain Detainment\" \"Stormscale Scion\" \"Stormshriek Feral\")",
+      "Bash(for card in \"Taigam, Master Opportunist\" \"Teeming Dragonstorm\" \"Tempest Hawk\" \"Temur Battlecrier\" \"Temur Devotee\")",
+      "Bash(for card in \"thornwood falls\" \"thunder of unity\" \"trade route envoy\" \"tranquil cove\" \"traveling botanist\")",
+      "Bash(for card in \"Whirlwing Stormbrood\" \"Wild Ride\" \"Windcrag Siege\" \"Wind-Scarred Crag\" \"Wingblade Disciple\")"
     ]
   }
 }

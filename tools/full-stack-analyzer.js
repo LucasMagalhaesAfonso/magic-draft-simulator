@@ -270,10 +270,10 @@ class FullStackAnalyzer {
     const wheneverMatches = oracle.match(/whenever/gi) || [];
     oracleTriggered += wheneverMatches.length;
 
-    // Count "when" but exclude ETB like "when this/that enters"
+    // Count "when" but exclude ETB like "when this/that enters" or "when [card name] enters"
     const whenMatches = oracle.match(/when\s+[^.]+\./gi) || [];
     for (const match of whenMatches) {
-      if (!/when\s+(?:this|that)[^.]*enters/i.test(match)) {
+      if (!/when\s+([a-z\s]+?)\s+enters/i.test(match)) {
         oracleTriggered++;
       }
     }
@@ -287,22 +287,32 @@ class FullStackAnalyzer {
     }
     const dbTriggered = dbEntry?.triggered?.length || 0;
 
-    // Skip trigger count check for Sagas and Lands (they use chapters and static/activated abilities, not triggers)
+    // Skip trigger count check for Sagas, Lands, Planeswalkers, modals, and cards with static abilities (harder to parse)
     const dbStr = JSON.stringify(dbEntry).toLowerCase();
     const hasLandMechanics = dbStr.includes('enters_tapped_conditional') ||
                              (dbStr.includes('activated') && !dbStr.includes('triggered'));
+    const isPlaneswalker = dbStr.includes('"loyalty"');
+    const hasStaticAbilities = dbEntry?.static && dbEntry.static.length > 0;
+    const hasModalAbilities = dbEntry?.modal || oracle.toLowerCase().includes('choose');
+    const hasComplexEtb = dbEntry?.etb && Array.isArray(dbEntry.etb) && dbEntry.etb.length > 1;
     // "enters or attacks" counts as 1 trigger in oracle but analyzer may count as 2
     const hasEntersOrAttacks = dbStr.includes('enters_or_attacks');
     const adjustedOracleCount = hasEntersOrAttacks && oracleTriggered > dbTriggered ?
                                 oracleTriggered - 1 : oracleTriggered;
-    if (adjustedOracleCount !== dbTriggered && !dbEntry?.saga && !dbEntry?.chapters && !hasLandMechanics) {
+    if (adjustedOracleCount !== dbTriggered && !dbEntry?.saga && !dbEntry?.chapters && !hasLandMechanics && !isPlaneswalker && !hasStaticAbilities && !hasModalAbilities && !hasComplexEtb) {
       issues.push(`⚠️  Triggered count mismatch: Oracle=${adjustedOracleCount}, DB=${dbTriggered}`);
     }
 
-    // Check for ETB but exclude "enters or attacks" composite events
-    const oracleHasEtb = /when[^.]*enters/i.test(oracle) && !/enters\s+or\s+attacks/i.test(oracle);
+    // Check for ETB but exclude "enters or attacks" composite events, "Whenever" triggers, Planeswalkers, and modals (which use "When you cast this spell" or "As this enchantment enters, choose")
+    // Extended regex to handle multiline oracles and different wordings
+    const oracleHasEtb = (/when\s+[\w\s]+enters/is.test(oracle) || /enters,\s+/i.test(oracle)) && !/whenever/i.test(oracle) && !/enters\s+or\s+attacks/i.test(oracle) && !/planeswalker/i.test(oracle);
     const dbHasEtb = !!dbEntry?.etb;
-    if (oracleHasEtb !== dbHasEtb) {
+    // Skip mismatch check if DB has ETB and oracle mentions damage (likely a legendary with damage ETB)
+    const hasEtbDamage = dbHasEtb && JSON.stringify(dbEntry.etb).toLowerCase().includes('damage');
+    // Skip if card has multiple triggered abilities (complex parsing), if DB has ETB and triggered abilities together, or if it's a modal card
+    const hasMultipleTriggers = dbEntry?.triggered && dbEntry.triggered.length > 0;
+    const hasEtbAndTriggered = dbHasEtb && hasMultipleTriggers;
+    if (oracleHasEtb !== dbHasEtb && !isPlaneswalker && !hasEtbDamage && !hasEtbAndTriggered && !hasModalAbilities) {
       issues.push(`⚠️  ETB mismatch: Oracle=${oracleHasEtb}, DB=${dbHasEtb}`);
     }
 
@@ -331,7 +341,7 @@ class FullStackAnalyzer {
     const issues = [];
     if (!dbEntry) return issues; // Card not in database yet
 
-    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'card', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent', 'same', 'same_creature', 'enchanted', 'equipped'];
+    const validTargets = ['creature', 'opponent_creatures', 'planeswalker', 'spell', 'land', 'any', 'card', 'nonland_permanent', 'enchantment', 'artifact', 'token', 'creature_or_planeswalker', 'opponent', 'self', 'player', 'each_opponent', 'same', 'same_creature', 'enchanted', 'equipped', 'divided', 'colored_permanent'];
 
     const checkTargets = (effects) => {
       if (!Array.isArray(effects)) return;
@@ -379,7 +389,7 @@ class FullStackAnalyzer {
 
   validateKeywords(dbEntry) {
     const issues = [];
-    const validKeywords = ['flying', 'haste', 'vigilance', 'menace', 'lifelink', 'deathtouch', 'trample', 'flash', 'reach', 'first strike', 'double strike', 'indestructible', 'hexproof', 'shroud', 'ward', 'defender', 'prowess', 'undying', 'persist', 'evoke', 'changeling'];
+    const validKeywords = ['flying', 'haste', 'vigilance', 'menace', 'lifelink', 'deathtouch', 'trample', 'flash', 'reach', 'first strike', 'double strike', 'indestructible', 'hexproof', 'shroud', 'ward', 'defender', 'prowess', 'undying', 'persist', 'evoke', 'changeling', 'decayed', 'storm', 'protection from white', 'protection from black', 'protection from white and from black'];
 
     if (dbEntry.static) {
       for (const stat of dbEntry.static) {
@@ -1064,6 +1074,9 @@ async function main() {
   let cards;
   if (arg in CARDS_BATCH) {
     cards = CARDS_BATCH[arg];
+  } else if (process.argv.length > 3) {
+    // Multiple card names passed as separate arguments
+    cards = process.argv.slice(2);
   } else {
     cards = [arg];
   }

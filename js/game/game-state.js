@@ -406,6 +406,14 @@ const GameState = {
       if (trigger.event === 'target_dies' && data.ownerId === trigger.controllerId) {
         shouldFire = true;
       }
+      // Prevent damage trigger
+      if (trigger.event === 'prevent_damage' && data.playerId === trigger.controllerId) {
+        shouldFire = true;
+      }
+      // Enters or dies trigger
+      if (trigger.event === 'enters_or_dies' && data.cardUid === trigger.cardUid) {
+        shouldFire = true;
+      }
 
       // Check condition before firing
       if (shouldFire && trigger.condition) {

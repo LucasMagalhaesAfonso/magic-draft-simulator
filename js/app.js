@@ -1,3 +1,5 @@
+const GAME_VERSION = '2026-02-15-224001';
+
 const App = {
   currentScreen: null,
   setCards: null,
@@ -7,9 +9,21 @@ const App = {
   screens: ['screen-home', 'screen-loading', 'screen-draft', 'screen-deckbuilder', 'screen-game'],
 
   init() {
+    this._initializeCache();
     this._applyTheme();
     this.showScreen('screen-home');
     this.loadSets();
+  },
+
+  _initializeCache() {
+    const savedVersion = localStorage.getItem('GAME_VERSION');
+    if (savedVersion !== GAME_VERSION) {
+      if (savedVersion) {
+        console.log(`🔄 Cache invalidated: ${savedVersion} → ${GAME_VERSION}`);
+      }
+      localStorage.clear();
+      localStorage.setItem('GAME_VERSION', GAME_VERSION);
+    }
   },
 
   _applyTheme() {

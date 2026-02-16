@@ -303,7 +303,7 @@ const CardEffectsDB = {
   },
 
   "poised practitioner": {
-    triggered: [{ event: "second_spell", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "scry", amount: 1 }] }]
+    triggered: [{ event: "second_spell", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "scry", amount: 1, optional: true }] }]
   },
 
   // =================== TARKIR DRAGONSTORM - ACTIVATED ABILITIES ===================
@@ -332,13 +332,6 @@ const CardEffectsDB = {
 
   "krumar initiate": {
     activated: [{ cost: { mana: "XB", tap: true, life: "X" }, effects: [{ type: "endure", amount: "X" }], sorcerySpeed: true }]
-  },
-
-  "sunset strikemaster": {
-    activated: [
-      { cost: { tap: true }, effects: [{ type: "add_mana", color: "R", amount: 1 }] },
-      { cost: { mana: "2R", tap: true, sacrifice: true }, effects: [{ type: "damage", amount: 6, target: "creature" }] }
-    ]
   },
 
   // =================== TARKIR DRAGONSTORM - ENCHANTMENTS ===================
@@ -413,20 +406,20 @@ const CardEffectsDB = {
 
   "nightblade brigade": {
     static: [{ type: "has_keyword", keywords: ["deathtouch"] }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }],
-    etb: [{ type: "surveil", amount: 1 }]
+    triggered: [{ event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }],
+    etb: [{ type: "surveil", amount: 1, optional: true }]
   },
 
   "reigning victor": {
     etb: [{ type: "buff", power: 1, toughness: 0, target: "creature", duration: "end_of_turn" }, { type: "grant", keywords: ["indestructible"], target: "creature", duration: "end_of_turn" }],
     triggered: [
-      { event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }
+      { event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }
     ]
   },
 
   "shock brigade": {
     static: [{ type: "has_keyword", keywords: ["menace"] }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }]
+    triggered: [{ event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }]
   },
 
   // =================== TARKIR DRAGONSTORM - FLURRY ===================
@@ -569,8 +562,11 @@ const CardEffectsDB = {
   },
 
   "sarkhan, dragon ascendant": {
-    etb: [{ type: "behold_dragon", optional: true }, { type: "create_token", name: "Treasure", condition: "if_beheld_dragon" }],
-    triggered: [{ event: "dragon_enters", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "become_dragon", keywords: ["flying"] }] }]
+    etb: [{ type: "behold_dragon", optional: true }, { type: "create_token", name: "Treasure", power: 0, toughness: 1, condition: "if_beheld_dragon" }],
+    triggered: [
+      { event: "creature_etb", self: true, effects: [] },
+      { event: "dragon_enters", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "become_dragon", keywords: ["flying"] }] }
+    ]
   },
 
   // =================== TARKIR DRAGONSTORM - MYTHICS ===================
@@ -620,7 +616,7 @@ const CardEffectsDB = {
   },
 
   "perennation": {
-    cast: [{ type: "return_from_graveyard", target: "permanent", with_counters: ["hexproof", "indestructible"] }]
+    cast: [{ type: "return_from_graveyard", target: "any", with_counters: ["hexproof", "indestructible"] }]
   },
 
   "rot-curse rakshasa": {
@@ -630,7 +626,8 @@ const CardEffectsDB = {
 
   "shiko, paragon of the way": {
     static: [{ type: "has_keyword", keywords: ["flying", "vigilance"] }],
-    etb: [{ type: "exile_graveyard_cast_copy", target: "nonland_mv3_or_less", free: true }]
+    etb: [{ type: "exile_graveyard_cast_copy", target: "nonland_mv3_or_less", free: true }],
+    triggered: [{ event: "creature_etb", self: true, effects: [] }]
   },
 
   "smile at death": {
@@ -642,11 +639,15 @@ const CardEffectsDB = {
       { type: "has_keyword", keywords: ["flying"] },
       { type: "buff_all", power: 1, toughness: 1, target: "other_dragons" },
       { type: "has_keyword", keywords: ["storm"] }
-    ]
+    ],
+    triggered: [{ event: "cast_spell", self: true, mechanic: "storm", effects: [] }]
   },
 
   "taigam, master opportunist": {
-    triggered: [{ event: "second_spell", effects: [{ type: "copy_spell" }, { type: "exile_with_suspend", counters: 4 }] }]
+    triggered: [
+      { event: "second_spell", mechanic: "flurry", effects: [{ type: "copy_spell" }, { type: "exile_with_suspend", counters: 4 }] },
+      { event: "cast_spell", self: true, mechanic: "flurry", effects: [], optional: true }
+    ]
   },
 
   // =================== TARKIR DRAGONSTORM - UNCOMMON SPELLS ===================
@@ -735,7 +736,7 @@ const CardEffectsDB = {
   },
 
   "rite of renewal": {
-    cast: [{ type: "return_from_graveyard", target: "permanent", amount: 2, to_hand: true }]
+    cast: [{ type: "return_from_graveyard", target: "any", amount: 2, to_hand: true }]
   },
 
   "riverwheel sweep": {
@@ -750,7 +751,8 @@ const CardEffectsDB = {
     cast: [
       { type: "destroy", target: "creature" },
       { type: "create_token", power: 1, toughness: 1, name: "Warrior", keywords: ["haste"], count: 2, sacrificeAtEndStep: true }
-    ]
+    ],
+    triggered: [{ event: "end_step", effects: [] }]
   },
 
   // =================== TARKIR DRAGONSTORM - COMMON SPELLS ===================
@@ -822,7 +824,7 @@ const CardEffectsDB = {
   },
 
   "roamer's routine": {
-    cast: [{ type: "ramp", land_type: "basic", tapped: true }],
+    cast: [{ type: "ramp", land_type: "basic", tapped: true, optional: true }],
     harmonize: "{4}{G}"
   },
 
@@ -895,13 +897,13 @@ const CardEffectsDB = {
   },
 
   "voice of victory": {
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }],
+    triggered: [{ event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }],
     static: [{ type: "prevent_opponent_casting", condition: "your_turn" }]
   },
 
   "wayspeaker bodyguard": {
-    etb: [{ type: "return_from_graveyard", target: "nonland_permanent_mv2", to_hand: true }],
-    triggered: [{ event: "second_spell", effects: [{ type: "tap", target: "opponent_creature" }] }]
+    etb: [{ type: "return_from_graveyard", target: "nonland_permanent_mv2", to_hand: true, optional: true }],
+    triggered: [{ event: "second_spell", self: false, mechanic: "flurry", effects: [{ type: "tap", target: "opponent_creature" }] }]
   },
 
   // --- Blue creatures ---
@@ -973,15 +975,16 @@ const CardEffectsDB = {
   },
 
   "spectral denial": {
-    cast: [{ type: "counter", target: "spell", unless_pay: "X" }]
+    cast: [{ type: "counter", target: "spell", unless_pay: "X" }],
+    cost_reduction: { condition: "per_creature_power4_or_greater", amount: 1 }
   },
 
   "stillness in motion": {
-    triggered: [{ event: "upkeep", effects: [{ type: "mill", amount: 3, target: "self" }] }]
+    triggered: [{ event: "upkeep", effects: [{ type: "mill", amount: 3, target: "self" }, { type: "return_from_graveyard", amount: 5, target: "any", to_library_top: true, condition: "if_library_empty" }] }]
   },
 
   "unending whisper": {
-    cast: [{ type: "draw", amount: 1 }],
+    cast: [{ type: "draw", amount: 1, optional: true }],
     harmonize: "{5}{U}"
   },
 
@@ -996,8 +999,9 @@ const CardEffectsDB = {
     etb: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }],
     triggered: [{ event: "cast_colorless", effects: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }] }],
     activated: [
-      { cost: { loyalty: 2 }, effects: [{ type: "gain_life", amount: 3 }, { type: "draw", amount: 1 }] },
-      { cost: { loyalty: 0 }, effects: [{ type: "add_mana", color: "C", amount: 3 }] }
+      { cost: { loyalty: 2 }, effects: [{ type: "gainLife", amount: 3 }, { type: "draw", amount: 1 }] },
+      { cost: { loyalty: 0 }, effects: [{ type: "add_mana", color: "C", amount: 3 }] },
+      { cost: { loyalty: -11 }, effects: [{ type: "search_library", target: "colorless_nonland", condition: "any_number", to_exile: true }, { type: "exile_graveyard_cast_copy", from: "exile", amount: "any" }] }
     ]
   },
 
@@ -1029,15 +1033,18 @@ const CardEffectsDB = {
   },
   "swiftwater cliffs": {
     static: [{ type: "enters_tapped" }],
-    etb: [{ type: "gainLife", amount: 1 }]
+    etb: [{ type: "gainLife", amount: 1 }],
+    activated: [{ cost: { tap: true }, effects: [{ type: "add_mana", color: "UR", choose: 1 }] }]
   },
   "thornwood falls": {
     static: [{ type: "enters_tapped" }],
-    etb: [{ type: "gainLife", amount: 1 }]
+    etb: [{ type: "gainLife", amount: 1 }],
+    activated: [{ cost: { tap: true }, effects: [{ type: "add_mana", color: "GU", choose: 1 }] }]
   },
   "tranquil cove": {
     static: [{ type: "enters_tapped" }],
-    etb: [{ type: "gainLife", amount: 1 }]
+    etb: [{ type: "gainLife", amount: 1 }],
+    activated: [{ cost: { tap: true }, effects: [{ type: "add_mana", color: "WU", choose: 1 }] }]
   },
   "wind-scarred crag": {
     static: [{ type: "enters_tapped" }],
@@ -1121,7 +1128,7 @@ const CardEffectsDB = {
   },
   "sultai monument": {
     etb: [{ type: "ramp", target: "basic_land", to_hand: true, colors: ["U", "B", "G"] }],
-    activated: [{ cost: { mana: "2BGU", tap: true, sacrifice: true }, effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid", count: 2 }] }]
+    activated: [{ cost: { mana: "2BGU", tap: true, sacrifice: true }, condition: "main_phase", effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid", count: 2 }] }]
   },
   "temur monument": {
     etb: [{ type: "ramp", target: "basic_land", to_hand: true }],
@@ -1165,7 +1172,7 @@ const CardEffectsDB = {
   },
   "war effort": {
     static: [{ type: "anthem", power: 1, toughness: 0 }],
-    triggered: [{ event: "attacks", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", attacking: true, sacrificeAtEndStep: true }] }]
+    triggered: [{ event: "attacks", self: false, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", attacking: true, sacrificeAtEndStep: true }] }]
   },
   "wingspan stride": {
     static: [{ type: "grant", power: 1, toughness: 1, target: "enchanted", keywords: ["flying"] }],
@@ -1297,13 +1304,19 @@ const CardEffectsDB = {
     cast: [{ type: "exile", target: "nonland_permanent" }, { type: "drain", amount: 3 }]
   },
   "new way forward": {
-    cast: [{ type: "prevent_damage", target: "self", source: "chosen" }, { type: "damage", amount: "prevented", target: "source_controller" }, { type: "draw", amount: "prevented" }]
+    cast: [{ type: "prevent_damage", target: "self", source: "chosen" }],
+    triggered: [
+      { event: "prevent_damage", self: true, effects: [
+        { type: "damage", amount: "prevented", target: "source_controller" },
+        { type: "draw", amount: "prevented" }
+      ]}
+    ]
   },
 
   // =================== TDM - SORCERIES ===================
 
   "winternight stories": {
-    cast: [{ type: "draw", amount: 3 }, { type: "discard", amount: 2, condition: "unless_creature" }],
+    cast: [{ type: "draw", amount: 3 }, { type: "discard", amount: 2, condition: "unless_creature", optional: true }],
     harmonize: "{4}{U}"
   },
   "strategic betrayal": {
@@ -1345,7 +1358,7 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
   "summit intimidator": {
-    etb: [{ type: "tap", target: "opponent_creature" }],
+    etb: [{ type: "grant", keywords: ["unblockable"], target: "opponent_creature", duration: "end_of_turn" }],
     static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
   "skirmish rhino": {
@@ -1362,7 +1375,7 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keywords: ["deathtouch"] }]
   },
   "trade route envoy": {
-    etb: [{ type: "trade_route_envoy_ability" }]
+    etb: [{ type: "draw", amount: 1, condition: "control_creature_with_counter" }, { type: "counter", counter: "+1/+1", amount: 1, target: "self", condition: "if_no_draw" }]
   },
   "gurmag nightwatch": {
     etb: [{ type: "look_top", amount: 3, pick: 1, rest_to: "graveyard", optional: true }]
@@ -1381,8 +1394,8 @@ const CardEffectsDB = {
   },
 
   "reputable merchant": {
-    etb: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }],
-    triggered: [{ event: "dies", self: true, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }] }]
+    etb: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature", mechanic: "enters_or_dies" }],
+    triggered: [{ event: "dies", self: true, mechanic: "enters_or_dies", effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }] }]
   },
   "temur tawnyback": {
     etb: [{ type: "loot", draw: 1, discard: 1 }]
@@ -1433,7 +1446,10 @@ const CardEffectsDB = {
     static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
   "venerated stormsinger": {
-    triggered: [{ event: "any_creature_dies", controller: true, effects: [{ type: "drain", amount: 1 }] }]
+    triggered: [
+      { event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", attacking: true, sacrificeAtEndStep: true }] },
+      { event: "any_creature_dies", controller: true, effects: [{ type: "drain", amount: 1 }] }
+    ]
   },
   "yathan tombguard": {
     triggered: [{ event: "combat_damage_player", condition: "creature_with_counter", effects: [{ type: "draw", amount: 1 }, { type: "loseLife", amount: 1 }] }],
@@ -1500,7 +1516,7 @@ const CardEffectsDB = {
   // =================== TDM - MOBILIZE CREATURES ===================
 
   "stadium headliner": {
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", attacking: true, sacrificeAtEndStep: true }] }],
+    triggered: [{ event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", attacking: true, sacrificeAtEndStep: true }] }],
     activated: [{ cost: { mana: "1R", sacrifice: true }, effects: [{ type: "damage", amount: "creature_count", target: "creature" }] }]
   },
   "zurgo's vanguard": {
@@ -1508,7 +1524,7 @@ const CardEffectsDB = {
     static: [{ type: "power_equals", source: "creature_count" }]
   },
   "zurgo, thunder's decree": {
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }],
+    triggered: [{ event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }],
     static: [{ type: "warrior_tokens_protected_end_step" }]
   },
 
@@ -1531,8 +1547,8 @@ const CardEffectsDB = {
     static: [{ type: "cost_reduction", amount: 1, target: "spells", condition: "per_power4_creature" }]
   },
   "teval, arbiter of virtue": {
-    static: [{ type: "has_keyword", keywords: ["flying"] }, { type: "grant_delve" }],
-    triggered: [{ event: "cast_spell", effects: [{ type: "loseLife", amount: "mana_value" }] }]
+    static: [{ type: "has_keyword", keywords: ["flying", "lifelink"] }, { type: "grant_delve" }],
+    triggered: [{ event: "cast_spell", self: false, effects: [{ type: "loseLife", amount: "mana_value" }] }]
   },
 
   // =================== TDM - CREATURES WITH RENEW ===================
@@ -1549,7 +1565,7 @@ const CardEffectsDB = {
   // =================== TDM - TERSA & SONGCRAFTER ===================
 
   "tersa lightshatter": {
-    etb: [{ type: "draw", amount: 2 }, { type: "discard", amount: 1 }],
+    etb: [{ type: "discard", amount: 2, up_to: true, optional: true }, { type: "draw", amount: 2 }],
     triggered: [{ event: "attacks", self: true, condition: "seven_cards_in_gy", effects: [{ type: "exile_top_play", amount: 1, from: "graveyard", random: true }] }],
     static: [{ type: "has_keyword", keywords: ["haste"] }]
   },
@@ -1598,10 +1614,10 @@ const CardEffectsDB = {
     cast: [{ type: "loot", draw: 2, discard: 1 }],
     omen: true,
     activated: [{ cost: { mana: "1R" }, effects: [{ type: "buff", power: 1, toughness: 0, target: "self", duration: "end_of_turn" }] }],
-    static: [{ type: "has_keyword", keywords: ["flying"] }]
+    static: [{ type: "has_keyword", keywords: ["flying", "haste"] }]
   },
   "twinmaw stormbrood": {
-    cast: [{ type: "damage", amount: 5, target: "creature" }],
+    cast: [{ type: "damage", amount: 5, target: "creature_without_flying" }],
     omen: true,
     etb: [{ type: "gainLife", amount: 5 }],
     static: [{ type: "has_keyword", keywords: ["flying"] }]

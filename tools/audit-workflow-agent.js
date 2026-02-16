@@ -111,84 +111,108 @@ class AuditWorkflow {
 
     const cardNames = nextCards.map(c => c.name);
 
-    console.log(`\n${'='.repeat(80)}`);
-    console.log(`🔍 AUDITING NEXT ${nextCards.length} CARDS`);
-    console.log(`${'='.repeat(80)}\n`);
+    console.log(`\n${'='.repeat(100)}`);
+    console.log(`🔍 BATCH AUDIT: Cards ${nextCards[0].number}-${nextCards[nextCards.length-1].number}`);
+    console.log(`${'='.repeat(100)}\n`);
 
     console.log(`Cards to audit:`);
     nextCards.forEach((c, i) => {
       console.log(`  ${i + 1}. ${c.name} (#${c.number})`);
     });
-    console.log('');
+    console.log('\n');
 
     return new Promise((resolve) => {
-      const auditorScript = path.join(__dirname, 'card-completeness-auditor.js');
-      const args = cardNames.map(name => `"${name}"`).join(' ');
+      const auditorScript = path.join(__dirname, 'full-stack-analyzer.js');
 
-      console.log(`Running: node card-completeness-auditor.js ${args.substring(0, 80)}...\n`);
-
+      // Run auditor and capture output
       exec(`node "${auditorScript}" ${cardNames.map(n => `"${n}"`).join(' ')}`,
         { maxBuffer: 10 * 1024 * 1024 },
         (error, stdout, stderr) => {
-          console.log(stdout);
+          // Parse output to count issues
+          const completeCount = (stdout.match(/✅ ALL CHECKS PASSED/g) || []).length;
+          const issueCount = (stdout.match(/❌|⚠️/g) || []).length;
+
+          // Show summary
+          console.log(`${'='.repeat(100)}`);
+          console.log(`📊 BATCH SUMMARY`);
+          console.log(`${'='.repeat(100)}\n`);
+
+          console.log(`✅ Complete cards: ${completeCount}/${nextCards.length}`);
+          if (issueCount > 0) {
+            console.log(`⚠️  Total issues found: ${issueCount}`);
+            console.log('\n--- ISSUES FOUND ---\n');
+            // Extract and show issues
+            const lines = stdout.split('\n');
+            let inIssueSection = false;
+            for (const line of lines) {
+              if (line.includes('❌') || line.includes('⚠️')) {
+                console.log(line);
+                inIssueSection = true;
+              } else if (inIssueSection && line.trim() === '') {
+                inIssueSection = false;
+              } else if (inIssueSection) {
+                console.log(line);
+              }
+            }
+          }
+
+          console.log(`\n${'='.repeat(100)}`);
+
           if (error && !error.message.includes('exit code 0')) {
             console.error(stderr);
           }
 
           // Ask for next action
-          this.promptNextAction(nextCards).then(resolve);
+          this.promptBatchAction(nextCards, completeCount === nextCards.length).then(resolve);
         }
       );
     });
   }
 
-  promptNextAction(cards) {
+  promptBatchAction(cards, allPassed) {
     return new Promise((resolve) => {
       const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout
       });
 
-      console.log(`\n${'='.repeat(80)}`);
-      console.log('NEXT ACTIONS:');
-      console.log(`  1. Fix issues (code changes)            → type: fix`);
-      console.log(`  2. Mark as verified (no issues)         → type: verify <card-index>`);
-      console.log(`  3. Mark as problematic (needs manual)   → type: problem <card-index>`);
-      console.log(`  4. Audit next batch                     → type: next`);
-      console.log(`  5. Exit                                 → type: exit`);
-      console.log(`${'='.repeat(80)}\n`);
+      console.log(`\nNEXT ACTION:`);
+      if (allPassed) {
+        console.log(`  All cards passed! → type: verify (to mark all as OK)`);
+      } else {
+        console.log(`  Issues found → type: fix (then re-run this batch)`);
+      }
+      console.log(`  → type: next (skip to next batch)`);
+      console.log(`  → type: exit\n`);
 
       rl.question('What do you want to do? ', (answer) => {
         rl.close();
 
-        const cmd = answer.trim().split(' ')[0].toLowerCase();
-        const arg = answer.trim().split(' ')[1];
+        const cmd = answer.trim().toLowerCase();
 
-        if (cmd === 'fix') {
-          console.log('\n📝 Make your code fixes now. When done, run the audit again.\n');
-          resolve();
-        } else if (cmd === 'verify') {
-          const idx = parseInt(arg) - 1;
-          if (idx >= 0 && idx < cards.length) {
-            this.updateCardStatus(cards[idx].name, 'VERIFIED');
-            console.log(`✅ Marked as VERIFIED: ${cards[idx].name}\n`);
+        if (cmd === 'verify') {
+          // Mark all cards in batch as VERIFIED
+          for (const card of cards) {
+            this.updateCardStatus(card.name, 'VERIFIED');
           }
-          resolve();
-        } else if (cmd === 'problem') {
-          const idx = parseInt(arg) - 1;
-          if (idx >= 0 && idx < cards.length) {
-            this.updateCardStatus(cards[idx].name, 'PROBLEMS');
-            console.log(`⚠️  Marked as PROBLEMS: ${cards[idx].name}\n`);
-          }
+          console.log(`\n✅ Batch verified! Moving to next batch...\n`);
+          this.auditNext5().then(resolve);
+        } else if (cmd === 'fix') {
+          console.log('\n📝 Make your code fixes now. When done, re-run the workflow:\n');
+          console.log('   node tools/audit-workflow-agent.js next5\n');
           resolve();
         } else if (cmd === 'next') {
+          console.log('\n⏭️  Skipping batch...\n');
+          for (const card of cards) {
+            this.updateCardStatus(card.name, 'PROBLEMS');
+          }
           this.auditNext5().then(resolve);
         } else if (cmd === 'exit') {
           console.log('\nGoodbye!\n');
           process.exit(0);
         } else {
           console.log('Invalid command. Try again.\n');
-          this.promptNextAction(cards).then(resolve);
+          this.promptBatchAction(cards, allPassed).then(resolve);
         }
       });
     });

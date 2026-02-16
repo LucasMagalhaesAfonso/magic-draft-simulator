@@ -4961,7 +4961,8 @@ const UIGame = {
       const effects = CardEngine.getSpellEffects(card);
       const targets = [targetSpell.card]; // Target the spell to counter
 
-      GameState.castSpell(gs, 0, card, targets, effects);
+      console.log(`[COUNTER DEBUG] Calling castSpell with cardUid=${cardUid}, targets=`, targets);
+      GameState.castSpell(gs, 0, cardUid, targets, effects);
 
       console.log(`✅ ${card.name} castado contra ${targetSpell.card.name}!`);
 

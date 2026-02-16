@@ -6044,7 +6044,8 @@ const GameState = {
     }
     const allPlayableSource = [...handCards, ...exiledPlayable];
 
-    return allPlayableSource.filter(card => {
+    console.log(`[DEBUG] getPlayableCards called for player ${playerId}, checking ${allPlayableSource.length} cards`);
+    const result = allPlayableSource.filter(card => {
       if (CardEngine.isLand(card)) {
         return isMainPhase && !state.landPlayedThisTurn;
       }
@@ -6219,7 +6220,10 @@ const GameState = {
         return false;
       }
 
-      if (CardEngine.isInstant(card) || CardEngine.hasFlash(card)) return true;
+      if (CardEngine.isInstant(card) || CardEngine.hasFlash(card)) {
+        console.log(`✅ [PLAYABLE] ${card.name} is instant/flash`);
+        return true;
+      }
       // conditional_flash: behold Dragon, etc.
       const hasConditionalFlash = CardEngine.canCastWithConditionalFlash(card, state, playerId);
       if (hasConditionalFlash) return true;
@@ -6235,6 +6239,8 @@ const GameState = {
       }
       return isMainPhase;
     });
+    console.log(`[DEBUG] Result: ${result.length} playable cards - ${result.map(c => c.name).join(', ')}`);
+    return result;
   },
 
   // Check if player has any affordable activated abilities on battlefield

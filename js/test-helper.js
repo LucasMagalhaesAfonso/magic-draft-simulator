@@ -77,19 +77,19 @@ async function testCard(cardName, copies = 3, companions = []) {
       clearHand: true
     };
 
-    console.log(`\n${'═'.repeat(50)}`);
+    console.log(`\n${'═'.repeat(60)}`);
     console.log(`📋 TESTE CONFIGURADO`);
-    console.log(`${'═'.repeat(50)}`);
-    console.log(`Carta: ${mainCard.name} (${copies}x)`);
+    console.log(`${'═'.repeat(60)}`);
+    console.log(`Carta Principal: ${mainCard.name} (${copies}x)`);
     console.log(`Acompanhantes: ${companionList.length > 0 ? companionList.map(c => c.name).join(', ') : 'Nenhum'}`);
     console.log(`Terras: ${landCount}x ${['W','U','B','R','G'].includes(primaryColor) ? {W:'Plains',U:'Island',B:'Swamp',R:'Mountain',G:'Forest'}[primaryColor] : 'Coluna'}`);
     console.log(`Mana: ${manaCost || '0'}`);
-    console.log(`${'═'.repeat(50)}\n`);
-
-    console.log('✅ PRONTO! Agora:');
-    console.log('   1. Draft a mão até o final');
-    console.log('   2. Ao entrar no jogo, terá as cartas de teste');
-    console.log('   3. Use Esc para pular o mulligan\n');
+    console.log(`${'═'.repeat(60)}`);
+    console.log(`\n⚠️  IMPORTANTE:`);
+    console.log(`   1. Draft até o final`);
+    console.log(`   2. Na tela de Mulligan: CLIQUE EM "KEEP HAND" (não faça mulligan!)`);
+    console.log(`   3. Espere opponent atacar/castear`);
+    console.log(`   4. Responda com a carta de teste!\n`);
 
   } catch (err) {
     console.error(`❌ Erro: ${err.message}`);

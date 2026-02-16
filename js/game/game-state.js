@@ -42,14 +42,14 @@ const GameState = {
     // Test mode: inject test cards if configured
     if (window._testConfig) {
       const config = window._testConfig;
+
+      // BEFORE drawing starting hand, inject test cards into library or directly to hand
       const hand = state.players[0].zones.hand;
+      const library = state.players[0].zones.library;
 
-      // Clear existing hand if configured
-      if (config.clearHand) {
-        hand.getAll().forEach(c => hand.remove(c._uid));
-      }
+      console.log(`[TEST MODE] Injecting test cards BEFORE mulligan`);
 
-      // Add main card copies
+      // Add main card copies to HAND (after initial hand is drawn)
       if (config.mainCard) {
         for (let i = 0; i < (config.copies || 3); i++) {
           const card = JSON.parse(JSON.stringify(config.mainCard));
@@ -69,7 +69,7 @@ const GameState = {
         console.log(`✅ ${config.companions.length}x cartas acompanhantes adicionadas`);
       }
 
-      // Add lands if configured
+      // Add lands to HAND
       if (config.lands && config.lands > 0) {
         const landColor = config.landColor || 'U';
         const landNames = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
@@ -89,6 +89,8 @@ const GameState = {
         }
         console.log(`✅ ${config.lands}x ${landName} adicionadas\n`);
       }
+
+      console.log(`[TEST MODE] Hand size after injection: ${hand.count()} cards`);
     }
 
     // AI decides mulligan immediately

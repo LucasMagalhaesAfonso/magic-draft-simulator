@@ -1936,12 +1936,15 @@ const UIGame = {
           : null;
         const lastSpellName = lastSpell ? lastSpell.card.name : 'Magia';
 
-        const counterCardsHtml = playableCounters.map(c => `
-          <div class="counter-card" onclick="UIGame.castCardAsCounter('${c._uid}', '${lastSpell?.card._uid || 'null'}')">
+        const counterCardsHtml = playableCounters.map((c, idx) => {
+          const safeUid = btoa(c._uid); // Base64 encode to avoid quote issues
+          return `
+          <div class="counter-card" data-card-uid="${safeUid}" onclick="UIGame._handleCounterClick(this)">
             <div class="counter-card-name">${c.name}</div>
             <div class="counter-card-cost">${c.mana_cost || '0'}</div>
           </div>
-        `).join('');
+        `;
+        }).join('');
 
         return `
           <div style="display: flex; flex-direction: column; gap: 12px;">
@@ -4914,13 +4917,24 @@ const UIGame = {
     this._continueIfAI();
   },
 
-  castCardAsCounter(cardUid, targetSpellUid) {
+  _handleCounterClick(element) {
+    try {
+      const encodedUid = element.getAttribute('data-card-uid');
+      const cardUid = atob(encodedUid); // Decode from base64
+      this.castCardAsCounter(cardUid);
+    } catch (err) {
+      console.error('Error in counter click handler:', err);
+    }
+  },
+
+  castCardAsCounter(cardUid) {
     const gs = this.gameState;
     const hand = gs.players[0].zones.hand;
     const card = hand.get(cardUid);
 
     if (!card) {
       console.error('Card not found:', cardUid);
+      this.showToast('Carta não encontrada', 'error');
       return;
     }
 
@@ -4931,10 +4945,13 @@ const UIGame = {
 
     if (!targetSpell) {
       console.error('No spell on stack to counter');
+      this.showToast('Nenhum spell na stack para contrar', 'error');
       return;
     }
 
     try {
+      console.log(`🎯 Castando ${card.name} para contrar ${targetSpell.card.name}`);
+
       // Auto-tap for mana
       const cost = card.mana_cost || '';
       const cmc = card.cmc || 0;
@@ -4955,7 +4972,7 @@ const UIGame = {
 
     } catch (err) {
       console.error('Error casting counter:', err);
-      this.showToast(`Erro ao castear ${card.name}`, 'error');
+      this.showToast(`Erro ao castear ${card.name}: ${err.message}`, 'error');
     }
   },
 

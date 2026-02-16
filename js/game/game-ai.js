@@ -1,5 +1,8 @@
 const GameAI = {
   playMainPhase(state, playerId) {
+    console.log(`\n${'▓'.repeat(60)}`);
+    console.log(`[🎮 AI MAIN PHASE] Player ${playerId} starting main phase`);
+    console.log(`${'▓'.repeat(60)}\n`);
     const player = state.players[playerId];
     const hand = player.zones.hand;
     const bf = player.zones.battlefield;
@@ -32,7 +35,11 @@ const GameAI = {
       const playable = GameState.getPlayableCards(state, playerId)
         .filter(c => !CardEngine.isLand(c));
 
-      if (playable.length === 0) break;
+      console.log(`[AI SPELL CASTING] Player ${playerId}: ${playable.length} playable spells`);
+      if (playable.length === 0) {
+        console.log(`[AI SPELL CASTING] No more playable spells, ending main phase`);
+        break;
+      }
 
       const landCount = bf.cards.filter(c => CardEngine.isLand(c)).length;
       const opponentCreatures = state.players[opponentId].zones.battlefield.cards

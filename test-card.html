@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Card Generator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+    }
+    h1 {
+      color: #333;
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    .subtitle {
+      color: #666;
+      text-align: center;
+      margin-bottom: 30px;
+      font-size: 14px;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      color: #333;
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e0e0e0;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.3s;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    .status {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 6px;
+      text-align: center;
+      font-weight: 600;
+      display: none;
+    }
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      display: block;
+    }
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      display: block;
+    }
+    .status.info {
+      background: #d1ecf1;
+      color: #0c5460;
+      display: block;
+    }
+    .companions-input {
+      font-size: 12px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧪 Test Card Generator</h1>
+    <p class="subtitle">Gera script de teste com cartas na mão</p>
+
+    <div class="form-group">
+      <label for="cardName">Nome da Carta:</label>
+      <input type="text" id="cardName" placeholder="Ex: Dispelling Exhale" value="Dispelling Exhale">
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="copies">Cópias:</label>
+        <input type="number" id="copies" value="3" min="1" max="10">
+      </div>
+      <div class="form-group">
+        <label for="landColor">Cor da Terra:</label>
+        <select id="landColor">
+          <option value="W">Branca (Plains)</option>
+          <option value="U" selected>Azul (Island)</option>
+          <option value="B">Preta (Swamp)</option>
+          <option value="R">Vermelha (Mountain)</option>
+          <option value="G">Verde (Forest)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="companions">Cartas Acompanhantes (separe por vírgula):</label>
+      <input type="text" id="companions" placeholder="Ex: Lightning Bolt, Counterspell" class="companions-input">
+    </div>
+
+    <button onclick="generateTest()">⚡ Gerar Script de Teste</button>
+
+    <div id="status" class="status"></div>
+  </div>
+
+  <script>
+    async function generateTest() {
+      const cardName = document.getElementById('cardName').value.trim();
+      const copies = parseInt(document.getElementById('copies').value) || 3;
+      const landColor = document.getElementById('landColor').value;
+      const companionsText = document.getElementById('companions').value;
+      const companions = companionsText ? companionsText.split(',').map(c => c.trim()).filter(c => c) : [];
+
+      const status = document.getElementById('status');
+
+      if (!cardName) {
+        showStatus('❌ Digite o nome da carta', 'error');
+        return;
+      }
+
+      showStatus('🔄 Buscando cartas...', 'info');
+
+      try {
+        // Fetch main card
+        const mainRes = await fetch(`https://api.scryfall.com/cards/search?q=name:"${cardName}"&unique=prints`);
+        const mainData = await mainRes.json();
+        if (!mainData.data || mainData.data.length === 0) {
+          showStatus(`❌ Carta não encontrada: ${cardName}`, 'error');
+          return;
+        }
+        const mainCard = mainData.data[0];
+
+        // Fetch companions
+        const companionList = [];
+        for (const compName of companions) {
+          const compRes = await fetch(`https://api.scryfall.com/cards/search?q=name:"${compName}"&unique=prints`);
+          const compData = await compRes.json();
+          if (compData.data && compData.data.length > 0) {
+            companionList.push(compData.data[0]);
+          }
+        }
+
+        // Parse mana
+        const manaCost = mainCard.mana_cost || '';
+        let generic = 0;
+        const colors = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+        (manaCost.match(/\{([^}]+)\}/g) || []).forEach(m => {
+          const inner = m.slice(1, -1);
+          if (/^\d+$/.test(inner)) generic += parseInt(inner);
+          else if (colors[inner]) colors[inner]++;
+        });
+
+        // Calculate lands
+        let landCount = generic + Object.values(colors).reduce((a, b) => a + b, 0);
+        landCount = Math.max(landCount, 3);
+        landCount = Math.min(landCount, 25);
+
+        const landNames = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
+        const landName = landNames[landColor];
+
+        // Generate script
+        const companionFetches = companions.map(n => `fetch('https://api.scryfall.com/cards/search?q=name:"${n}"&unique=prints').then(r => r.json())`).join(',\n  ');
+        const companionProcessing = companionList.length > 0
+          ? `companions.forEach((c,i) => { c._uid = 'comp-'+i; state.players[0].zones.hand.add(c); });\n    console.log('✅ ${companionList.length}x Cartas acompanhantes adicionadas');`
+          : '';
+
+        const script = `fetch('https://api.scryfall.com/cards/search?q=name:"${mainCard.name}"&unique=prints').then(r => r.json()).then(res => {
+  const mainCard = res.data[0];
+  ${companionFetches ? `Promise.all([${companionFetches}]).then(comps => setupTest(mainCard, comps.map(c => c.data[0]))).catch(e => console.error('Erro:', e));` : 'setupTest(mainCard, []);'}
+});
+
+function setupTest(mainCard, companions) {
+  const origCreate = GameState.create;
+  GameState.create = function(deck1, deck2) {
+    const state = origCreate.call(this, deck1, deck2);
+    const hand = state.players[0].zones.hand.getAll();
+    hand.forEach(c => state.players[0].zones.hand.remove(c._uid));
+
+    for (let i = 0; i < ${copies}; i++) {
+      const card = JSON.parse(JSON.stringify(mainCard));
+      card._uid = 'main-' + i;
+      state.players[0].zones.hand.add(card);
+    }
+    console.log('✅ ${copies}x ${mainCard.name} added');
+    ${companionProcessing}
+
+    for (let i = 0; i < ${landCount}; i++) {
+      state.players[0].zones.hand.add({
+        id: 'land-' + i, name: '${landName}',
+        type_line: 'Basic Land — ${landName}', mana_cost: '', cmc: 0,
+        colors: ['${landColor}'], oracle_text: '{T}: Add {${landColor}}.',
+        _uid: 'land-' + i
+      });
+    }
+    console.log('✅ ${landCount}x ${landName} added\\n');
+    return state;
+  };
+}`;
+
+        // Copy to clipboard
+        await navigator.clipboard.writeText(script);
+
+        let msg = `✅ Script copiado! (${copies}x ${mainCard.name}`;
+        if (companionList.length > 0) msg += ` + ${companionList.length} acompanhantes`;
+        msg += `)\n\n📋 Cole no console (F12) e aperte ENTER\n\n🎮 Draft → Skip to Game → Keep Hand`;
+
+        showStatus(msg, 'success');
+      } catch (err) {
+        showStatus(`❌ Erro: ${err.message}`, 'error');
+      }
+    }
+
+    function showStatus(msg, type) {
+      const status = document.getElementById('status');
+      status.textContent = msg;
+      status.className = `status ${type}`;
+    }
+
+    // Enter key to generate
+    document.getElementById('cardName').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') generateTest();
+    });
+  </script>
+</body>
+</html>

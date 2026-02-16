@@ -39,6 +39,58 @@ const GameState = {
       }
     });
 
+    // Test mode: inject test cards if configured
+    if (window._testConfig) {
+      const config = window._testConfig;
+      const hand = state.players[0].zones.hand;
+
+      // Clear existing hand if configured
+      if (config.clearHand) {
+        hand.getAll().forEach(c => hand.remove(c._uid));
+      }
+
+      // Add main card copies
+      if (config.mainCard) {
+        for (let i = 0; i < (config.copies || 3); i++) {
+          const card = JSON.parse(JSON.stringify(config.mainCard));
+          card._uid = 'test-main-' + i;
+          hand.add(card);
+        }
+        console.log(`✅ ${config.copies || 3}x ${config.mainCard.name} adicionados`);
+      }
+
+      // Add companion cards
+      if (config.companions && config.companions.length > 0) {
+        config.companions.forEach((comp, i) => {
+          const card = JSON.parse(JSON.stringify(comp));
+          card._uid = 'test-comp-' + i;
+          hand.add(card);
+        });
+        console.log(`✅ ${config.companions.length}x cartas acompanhantes adicionadas`);
+      }
+
+      // Add lands if configured
+      if (config.lands && config.lands > 0) {
+        const landColor = config.landColor || 'U';
+        const landNames = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
+        const landName = landNames[landColor];
+
+        for (let i = 0; i < config.lands; i++) {
+          hand.add({
+            id: 'test-land-' + i,
+            name: landName,
+            type_line: 'Basic Land — ' + landName,
+            mana_cost: '',
+            cmc: 0,
+            colors: [landColor],
+            oracle_text: '{T}: Add {' + landColor + '}.',
+            _uid: 'test-land-' + i
+          });
+        }
+        console.log(`✅ ${config.lands}x ${landName} adicionadas\n`);
+      }
+    }
+
     // AI decides mulligan immediately
     this._aiMulliganDecision(state, 1);
 

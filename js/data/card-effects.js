@@ -62,7 +62,7 @@ const CardEffectsDB = {
 
   "dispelling exhale": {
     additional_costs: [{ type: "behold", subtype: "Dragon", optional: true }],
-    cast: [{ type: "counter", target: "spell", unless_pay: 2, unless_pay_with_behold: 4 }]
+    cast: [{ type: "counter_spell", target: "spell", unless_pay: 2, unless_pay_with_behold: 4 }]
   },
 
   // =================== TARKIR DRAGONSTORM - SORCERIES ===================

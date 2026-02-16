@@ -370,6 +370,48 @@
   color: var(--gold);
   font-weight: 600;
   font-style: normal;
+}
+
+.counter-card {
+  background: linear-gradient(135deg, rgba(100,150,255,0.3) 0%, rgba(50,100,200,0.2) 100%);
+  border: 2px solid rgba(100,150,255,0.6);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+  min-height: 60px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+}
+
+.counter-card:hover {
+  background: linear-gradient(135deg, rgba(100,150,255,0.5) 0%, rgba(50,100,200,0.4) 100%);
+  border-color: rgba(150,200,255,1);
+  box-shadow: 0 0 15px rgba(100,150,255,0.4);
+  transform: translateY(-2px);
+}
+
+.counter-card:active {
+  transform: translateY(0);
+  box-shadow: 0 0 8px rgba(100,150,255,0.2);
+}
+
+.counter-card-name {
+  font-weight: 600;
+  color: #fff;
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.counter-card-cost {
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.7);
+  font-family: 'Courier New', monospace;
+}
   animation: pulse 0.8s ease infinite;
 }
 

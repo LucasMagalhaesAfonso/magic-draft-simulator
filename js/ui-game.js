@@ -1924,15 +1924,39 @@ const UIGame = {
       }
       case 'stack_priority': {
         const stackSize = gs.stack ? gs.stack.length : 0;
-        const playableCounters = GameState.getPlayableCards(gs, 0).filter(c => {
+        const playableCards = GameState.getPlayableCards(gs, 0);
+        const playableCounters = playableCards.filter(c => {
           const effects = CardEngine.getSpellEffects(c);
           return effects.some(e => e.type === 'counter' || e.type === 'counter_spell');
         });
+
+        // Get last spell on stack (the one being responded to)
+        const lastSpell = gs.stack && gs.stack.items && gs.stack.items.length > 0
+          ? gs.stack.items[gs.stack.items.length - 1]
+          : null;
+        const lastSpellName = lastSpell ? lastSpell.card.name : 'Magia';
+
+        const counterCardsHtml = playableCounters.map(c => `
+          <div class="counter-card" onclick="UIGame.castCardAsCounter('${c._uid}', '${lastSpell?.card._uid || 'null'}')">
+            <div class="counter-card-name">${c.name}</div>
+            <div class="counter-card-cost">${c.mana_cost || '0'}</div>
+          </div>
+        `).join('');
+
         return `
-          <button class="btn btn-primary btn-sm" onclick="UIGame.passStackPriority()">
-            Passar <kbd>Espaco</kbd>
-          </button>
-          <span class="hint-text hint-stack">⚡ Magia no stack! Contramagicas: ${playableCounters.length}</span>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <div style="background: rgba(255,100,100,0.2); padding: 10px; border-radius: 4px; text-align: center;">
+              ⚡ <strong>${lastSpellName}</strong> no stack! Responda com magia ou passe.
+            </div>
+            ${playableCounters.length > 0 ? `
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px;">
+                ${counterCardsHtml}
+              </div>
+            ` : `<span class="hint-text">Nenhuma contramagia disponível</span>`}
+            <button class="btn btn-secondary btn-sm" onclick="UIGame.passStackPriority()">
+              Passar <kbd>Espaco</kbd>
+            </button>
+          </div>
         `;
       }
       case 'buff_choice': {
@@ -4888,6 +4912,51 @@ const UIGame = {
 
     this.render();
     this._continueIfAI();
+  },
+
+  castCardAsCounter(cardUid, targetSpellUid) {
+    const gs = this.gameState;
+    const hand = gs.players[0].zones.hand;
+    const card = hand.get(cardUid);
+
+    if (!card) {
+      console.error('Card not found:', cardUid);
+      return;
+    }
+
+    // Get the target spell (last on stack)
+    const targetSpell = gs.stack && gs.stack.items && gs.stack.items.length > 0
+      ? gs.stack.items[gs.stack.items.length - 1]
+      : null;
+
+    if (!targetSpell) {
+      console.error('No spell on stack to counter');
+      return;
+    }
+
+    try {
+      // Auto-tap for mana
+      const cost = card.mana_cost || '';
+      const cmc = card.cmc || 0;
+      ManaSystem.autoTapForSpell(gs, 0, cost, cmc, card);
+
+      // Cast the counter spell with the spell on stack as target
+      const effects = CardEngine.getSpellEffects(card);
+      const targets = [targetSpell.card]; // Target the spell to counter
+
+      GameState.castSpell(gs, 0, card, targets, effects);
+
+      console.log(`✅ ${card.name} castado contra ${targetSpell.card.name}!`);
+
+      // Clear waiting for input and continue
+      gs.waitingForInput = null;
+      this.render();
+      this._continueIfAI();
+
+    } catch (err) {
+      console.error('Error casting counter:', err);
+      this.showToast(`Erro ao castear ${card.name}`, 'error');
+    }
   },
 
   // =================== Scry/Surveil ===================

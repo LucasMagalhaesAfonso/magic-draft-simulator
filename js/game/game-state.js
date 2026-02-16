@@ -4609,11 +4609,17 @@ const GameState = {
 
       // CRITICAL FIX: Give opponent priority to respond before resolving
       const opponentId = playerId === 0 ? 1 : 0;
-      if (state.players[opponentId].isHuman && this.getPlayableCards(state, opponentId).length > 0) {
+      const isOpponentHuman = state.players[opponentId].isHuman;
+      const playableCardsCount = this.getPlayableCards(state, opponentId).length;
+      console.log(`[STACK_PRIORITY CHECK] Opponent: ${opponentId}, isHuman: ${isOpponentHuman}, playableCards: ${playableCardsCount}`);
+
+      if (isOpponentHuman && playableCardsCount > 0) {
         state.waitingForInput = { type: 'stack_priority', playerId: opponentId, spellCaster: playerId };
+        console.log(`✅ [STACK_PRIORITY CREATED] Player ${opponentId} can respond with ${playableCardsCount} cards`);
         state.log.push(`${card.name} no stack. Oponente pode responder.`);
       } else {
         // Opponent is AI or has no responses - resolve immediately
+        console.log(`❌ [NO STACK_PRIORITY] isHuman=${isOpponentHuman}, playableCards=${playableCardsCount}`);
         const stackLog = GameStack.resolve(state.stack, state);
         state.log.push(...stackLog);
       }

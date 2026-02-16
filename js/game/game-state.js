@@ -4168,7 +4168,10 @@ const GameState = {
   },
 
   castSpell(state, playerId, cardUid, targets, castingAdventure, castingEvoke) {
-    console.log(`[CAST_SPELL] Called for player ${playerId}, card: ${cardUid}`);
+    console.log(`\n${'█'.repeat(60)}`);
+    console.log(`[🎯 CAST_SPELL] Called for PLAYER ${playerId}, cardUid: ${cardUid}`);
+    console.log(`[🎯 CAST_SPELL] isHuman: ${state.players[playerId]?.isHuman}`);
+    console.log(`${'█'.repeat(60)}\n`);
     const hand = state.players[playerId].zones.hand;
     let card = hand.get(cardUid);
     let fromExile = false;

@@ -1188,7 +1188,7 @@ export function _resolveItem(item, state) {
           if (effect.attacking && gameState.combat && gameState.combat.phase !== 'none') {
             token._attacking = true;
             token._tapped = true;
-            token._summoningSickness = false;
+            token._summoningSick = false;
             gameState.combat.attackers.push({ uid: token._uid, card: token });
           }
           bf.add(token);

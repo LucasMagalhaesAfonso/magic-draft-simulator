@@ -12,6 +12,17 @@ import * as GameAI from './game-ai';
 import { CardEffectsDB } from './card-effects';
 import { Zone, PlayerZones } from './zones';
 
+// ─── Initialize effects cache from CardEffectsDB ───
+// The migration introduced an effectsCache layer in cards.ts but never populated it.
+// This bridges CardEffectsDB → effectsCache so getPreprocessedEffects() works.
+(function _initEffectsCache() {
+  const cacheMap = new Map();
+  for (const [name, entry] of Object.entries(CardEffectsDB)) {
+    cacheMap.set(name, entry);
+  }
+  Cards.setEffectsCache(cacheMap);
+})();
+
 // Legacy name aliases (used throughout ported code)
 const CombatSystem = Combat;
 const GameStack = Stack;
@@ -849,6 +860,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           if (effect.attacking && state.combat && state.combat.phase !== 'none') {
             token._attacking = true;
             token._tapped = true;
+            token._summoningSick = false; // Mobilize tokens enter already attacking - bypass sickness
             state.combat.attackers.push({ uid: token._uid, card: token });
           }
           // Mobilize: sacrifice at end step
@@ -856,6 +868,9 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             token._sacrificeAtEndStep = true;
           }
         }
+        // Update dynamic power (e.g., Zurgo's Vanguard power = creature count)
+        _updateDynamicPower(state, controllerId);
+
         const extraInfo = effect.attacking ? ' atacando' : '';
         return `Cria ${count} token(s) ${tokenPower}/${tokenToughness} ${effect.name || 'Token'}${extraInfo}.`;
       }
@@ -1264,6 +1279,11 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
 
             return `${attackingCard.name} recebe ${effect.amount || 1} ${effect.counter} counter(s).`;
           }
+        }
+
+        // Self-targeting: counter goes on the card that triggered this effect
+        if (counterTarget === 'self' && data.cardUid) {
+          targetCreature = state.players[controllerId].zones.battlefield.get(data.cardUid);
         }
 
         // Standard counter targeting
@@ -3683,6 +3703,14 @@ export function advancePhase(state) {
         const ap = state.activePlayer;
         if (state.players[ap]?.isHuman) {
           state.waitingForInput = { type: 'main_phase', playerId: ap };
+        } else {
+          // AI errored — advance to human's turn to prevent stuck game
+          state.activePlayer = state.activePlayer === 0 ? 1 : 0;
+          state.turn++;
+          state.phaseIndex = 0;
+          state.phase = PHASES[0];
+          state.waitingForInput = null;
+          state._continueProcessing = true;
         }
       }
     } finally {
@@ -6629,7 +6657,7 @@ export function getPlayableCards(state, playerId) {
       // Convoke: if can't afford normally but card has convoke, add creature mana
       if (!canAfford && CardEngine.hasConvoke(card) && convokeCount > 0) {
         const totalWithConvoke = totalAvailable + convokeCount;
-        if (totalWithConvoke >= requiredTotal) {
+        if (totalWithConvoke >= maxCmc) {
           // Build augmented pool with convoke contributions
           const augmented = { ...availableMana };
           // Add convoke as generic (each creature = 1 generic or 1 colored)
@@ -6892,6 +6920,11 @@ export function submitExileChoice(state, playerId, chosenCardUids) {
 
   // CRITICAL FIX: Check if card requiring targets has valid targets available
 export function _hasValidTargetsForCard(state, playerId, card) {
+    // Creatures NEVER need targets at cast time. Their oracle_text may mention "target"
+    // only in ETB triggers or activated abilities, which are resolved AFTER the card
+    // enters the battlefield (not at cast time). Always allow creatures to be played.
+    if (CardEngine.isCreature(card)) return true;
+
     // Parse oracle text to detect target requirements
     const oracleText = (card.oracle_text || '').toLowerCase();
 
@@ -6901,9 +6934,11 @@ export function _hasValidTargetsForCard(state, playerId, card) {
     }
 
     // Get spell effects to determine target requirements
+    // NOTE: ETB effects are NOT included here - ETB targeting is resolved when the
+    // creature enters the battlefield, not at cast time. Creatures can always be
+    // cast even if their ETB has no valid targets (ETB trigger simply fizzles).
     const effects = CardEngine.getSpellEffects(card);
-    const etbEffects = CardEngine.parseETBEffects(card);
-    const allEffects = [...effects, ...etbEffects];
+    const allEffects = [...effects];
 
     // Check if any effect requires mandatory targets
     for (const effect of allEffects) {
@@ -7265,6 +7300,55 @@ export function resolveSearchLibrary(state: any, cardUid: string | null): void {
         bf.add(bfCard);
         lib.shuffle();
         state.log.push(`Busca ${picked.name} da biblioteca.`);
+      }
+    }
+    _afterResolve(state);
+    return;
+  }
+
+  // Handle search_library from stack (_pendingSearch set by handleSearchLibrary in stack-part2)
+  if (state._pendingSearch) {
+    const pending = state._pendingSearch;
+    state._pendingSearch = null;
+    state.waitingForInput = null;
+
+    if (!cardUid) {
+      // Player declined (optional search)
+      state.log.push('Busca cancelada.');
+      _afterResolve(state);
+      return;
+    }
+
+    const lib = state.players[pending.controller].zones.library;
+    const bf = state.players[pending.controller].zones.battlefield;
+    let picked = pending.candidates.find((c: any) => c._uid === cardUid);
+    if (!picked) {
+      picked = pending.candidates.find((c: any) => c.name === cardUid) || pending.candidates[0];
+    }
+    if (picked) {
+      let idx = lib.cards.findIndex((c: any) => c._uid === picked._uid);
+      if (idx === -1) idx = lib.cards.findIndex((c: any) => c.name === picked.name);
+      if (idx !== -1) lib.cards.splice(idx, 1);
+
+      if (pending.toTop) {
+        lib.cards.unshift(picked);
+        state.log.push(`Busca ${picked.name} e coloca no topo.`);
+      } else if (pending.toHand) {
+        state.players[pending.controller].zones.hand.add(picked);
+        lib.shuffle();
+        state.log.push(`Busca ${picked.name} para a mao.`);
+      } else if (pending.toBattlefield) {
+        const bfCard = CardEngine.prepareForBattlefield(picked);
+        bfCard._ownerId = pending.controller;
+        if (pending.tapped) bfCard._tapped = true;
+        bf.add(bfCard);
+        lib.shuffle();
+        state.log.push(`Busca ${picked.name} e coloca no campo${pending.tapped ? ' virado' : ''}.`);
+      } else {
+        // Default: put in hand
+        state.players[pending.controller].zones.hand.add(picked);
+        lib.shuffle();
+        state.log.push(`Busca ${picked.name} para a mao.`);
       }
     }
     _afterResolve(state);

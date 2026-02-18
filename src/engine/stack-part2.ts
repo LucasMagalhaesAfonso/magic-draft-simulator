@@ -1402,7 +1402,7 @@ export function handleSearchLibrary(
     } else if (toBattlefield) {
       const bfCard = CardEngine.prepareForBattlefield(picked);
       bfCard._tapped = tappedDest;
-      bfCard._summoningSickness = false;
+      bfCard._summoningSick = false;
       bfCard._ownerId = controller;
       bf.add(bfCard);
       GameState._registerCardTriggers(state, bfCard, controller);
@@ -1484,7 +1484,7 @@ export function handleCreateTokenCopy(
     if (effect.attacking && state.combat && state.combat.phase !== 'none') {
       token._attacking = true;
       token._tapped = true;
-      token._summoningSickness = false;
+      token._summoningSick = false;
       state.combat.attackers.push({ uid: token._uid, card: token });
     }
     state.players[controller].zones.battlefield.add(token);

@@ -333,7 +333,13 @@ export function GameScreen() {
   // false positives for creatures with targeted activated abilities.
   function spellNeedsTargeting(card: any): boolean {
     if (!card) return false;
-    const isPermSpell = (card.type_line || '').match(/Creature|Artifact|Enchantment|Planeswalker|Land/);
+    const typeLineLower = (card.type_line || '').toLowerCase();
+    // Creatures never need targets at cast time. ETB triggered abilities that target
+    // are resolved when the creature enters, not when it's cast. Casting always succeeds
+    // even with no valid ETB targets (the trigger simply fizzles).
+    // Exception: Aura enchantments with "Enchant X" that need a target on cast.
+    if (typeLineLower.includes('creature') && !typeLineLower.includes('aura')) return false;
+    const isPermSpell = (card.type_line || '').match(/Artifact|Enchantment|Planeswalker|Land/);
     let text = (card.oracle_text || '').toLowerCase();
     if (isPermSpell) {
       // Remove activated ability lines: lines starting with a mana-cost pattern like {1}, {T}:

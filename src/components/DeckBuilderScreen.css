@@ -1,0 +1,367 @@
+/* ============================================
+   Deck Builder Screen - Visual Card Stacks
+   ============================================ */
+
+.db-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+/* Toolbar */
+.db-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  gap: 8px;
+}
+.db-toolbar-left, .db-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.db-toolbar-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  flex: 1;
+  text-align: center;
+}
+.db-deck-size { font-weight: 700; font-size: 16px; }
+.db-deck-lands { font-size: 13px; color: var(--text-muted); }
+
+/* Body */
+.db-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Left: Visual area ─────────────────────────────────── */
+.db-visual-area {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: auto;
+  padding: 12px 8px;
+  position: relative;
+  transition: background 0.15s;
+}
+.db-visual-area.drag-over {
+  background: rgba(108, 92, 231, 0.08);
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+.db-drop-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(108,92,231,0.7);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 50;
+}
+
+.db-cmc-columns {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  min-width: max-content;
+}
+.db-cmc-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100px;
+  flex-shrink: 0;
+}
+.db-cmc-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  height: 24px;
+}
+.db-cmc-num { font-size: 14px; font-weight: 700; color: var(--gold); }
+.db-cmc-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(255,255,255,0.1);
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+.db-card-stack {
+  display: flex;
+  flex-direction: column;
+  width: 100px;
+  position: relative;
+}
+.db-stack-card {
+  width: 100px;
+  height: 140px;
+  position: relative;
+  margin-top: -100px;
+  cursor: pointer;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: transform 0.12s ease, z-index 0s;
+  border: 1px solid rgba(255,255,255,0.15);
+  flex-shrink: 0;
+}
+.db-stack-card:first-child { margin-top: 0; }
+.db-stack-card:hover {
+  transform: translateY(-12px) scale(1.04);
+  z-index: 100 !important;
+  border-color: var(--gold);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+}
+.db-stack-card[draggable]:active {
+  opacity: 0.5;
+}
+.db-stack-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+.db-stack-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0,0,0,0.82);
+  color: white;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 3px 4px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.db-stack-card:hover .db-stack-label { opacity: 1; }
+.db-cmc-empty { width: 100px; height: 30px; }
+
+/* ── Right panel ────────────────────────────────────────── */
+.db-right-panel {
+  width: 270px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-left: 1px solid var(--glass-border);
+  overflow: hidden; /* children scroll independently */
+}
+
+/* Mini curve chart */
+.db-mini-curve { border-radius: 8px; padding: 8px; flex-shrink: 0; }
+.db-mini-curve-bars { display: flex; align-items: flex-end; gap: 4px; height: 64px; }
+.db-mini-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.db-mini-count { font-size: 10px; color: var(--text-secondary); min-height: 14px; }
+.db-mini-bar-wrap { flex: 1; display: flex; align-items: flex-end; width: 100%; }
+.db-mini-bar {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: height 0.3s ease;
+}
+.db-mini-cmc { font-size: 9px; color: var(--text-muted); }
+.db-color-row { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.db-color-pip { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-secondary); }
+.db-pip-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+/* Land controls */
+.db-lands-mini { border-radius: 8px; padding: 8px; flex-shrink: 0; }
+.db-lands-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px; }
+.db-land-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+.db-land-img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.db-land-name { flex: 1; font-size: 11px; color: var(--text-primary); }
+.db-land-controls { display: flex; align-items: center; gap: 4px; }
+.db-land-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255,255,255,0.08);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+}
+.db-land-btn:hover { background: rgba(255,255,255,0.16); border-color: var(--gold); }
+.db-land-count { font-size: 12px; font-weight: 700; color: var(--text-primary); min-width: 18px; text-align: center; }
+
+/* ── Sideboard / Pool ───────────────────────────────────── */
+.db-side-panel {
+  border-radius: 8px;
+  padding: 8px;
+  flex: 1;          /* takes remaining height */
+  min-height: 0;    /* allows shrinking */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: background 0.15s;
+}
+.db-side-panel.drag-over {
+  background: rgba(39,174,96,0.1);
+  outline: 2px dashed var(--success);
+  outline-offset: -4px;
+}
+.db-drop-hint-side {
+  text-align: center;
+  font-size: 11px;
+  color: var(--success);
+  padding: 4px 0;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.db-view-tabs { display: flex; gap: 4px; margin-bottom: 6px; flex-shrink: 0; }
+.db-tab {
+  flex: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.db-tab.active {
+  background: rgba(108,92,231,0.25);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* ── Sideboard / Pool image grid ────────────────────────── */
+.db-side-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px;
+  padding: 4px 2px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--glass-border) transparent;
+}
+
+.db-side-thumb {
+  width: 62px;
+  height: 86px;
+  border-radius: 5px;
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+  border: 1.5px solid rgba(255,255,255,0.12);
+  flex-shrink: 0;
+  transition: transform 0.1s, border-color 0.1s, opacity 0.1s;
+}
+.db-side-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+.db-side-thumb:hover {
+  transform: scale(1.08);
+  border-color: var(--gold);
+  z-index: 10;
+}
+.db-side-thumb.in-main {
+  opacity: 0.35;
+  border-color: var(--success);
+}
+.db-side-thumb.in-main:hover {
+  opacity: 0.7;
+  border-color: var(--danger);
+}
+.db-side-check {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: var(--success);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.db-side-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0,0,0,0.82);
+  color: white;
+  font-size: 8px;
+  font-weight: 600;
+  padding: 2px 3px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.db-side-thumb:hover .db-side-name { opacity: 1; }
+
+/* ── Right-click Zoom Overlay ───────────────────────────── */
+.db-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.1s ease;
+}
+.db-zoom-img {
+  width: 340px;
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.9);
+  cursor: default;
+  animation: zoomIn 0.12s ease;
+}
+
+@keyframes zoomIn {
+  from { transform: scale(0.85); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

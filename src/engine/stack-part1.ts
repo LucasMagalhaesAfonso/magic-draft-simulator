@@ -1,0 +1,1804 @@
+// @ts-nocheck
+// stack-part1.ts — First half of stack module (legacy stack.js lines 1-1700)
+
+import * as Cards from './cards';
+import * as Mana from './mana';
+import * as CardUtils from './card-utils';
+import * as GameState from './game-state';
+import * as GameAI from './game-ai';
+import * as StackPart2 from './stack-part2';
+
+// Legacy name aliases
+const CardEngine = { ...Cards, ...CardUtils };
+const ManaSystem = Mana;
+// StackEngine alias for legacy _processNextEffect calls
+const StackEngine = { _processNextEffect: (s: any) => StackPart2.processNextEffect(s) };
+
+// ---------------------------------------------------------------------------
+// Stack data structure helpers
+// ---------------------------------------------------------------------------
+
+export function create() {
+  return {
+    items: [] // [{card, controller, targets, effects}]
+  };
+}
+
+export function push(stack, item) {
+  stack.items.push(item);
+}
+
+export function resolve(stack, state) {
+  const log = [];
+
+  while (stack.items.length > 0) {
+    const item = stack.items.pop();
+    const results = _resolveItem(item, state);
+    // Ensure results is always an array
+    if (Array.isArray(results)) {
+      log.push(...results);
+    } else {
+      console.warn('[STACK] _resolveItem returned non-array:', results);
+    }
+  }
+
+  return log;
+}
+
+// Convenience: push + resolve in one call (used by adventure spells)
+export function resolveEffects(state, controller, card, effects, targets) {
+  push(state.stack, { card, controller, targets: targets || [], effects });
+  const log = resolve(state.stack, state);
+  state.log.push(...log);
+}
+
+// ---------------------------------------------------------------------------
+// Internal: resolve a single stack item
+// ---------------------------------------------------------------------------
+
+export function _resolveItem(item, state) {
+  // Alias for compatibility with code that passes `gameState`
+  const gameState = state;
+  const { card, controller, targets, effects } = item;
+  const log = [];
+  const opponent = controller === 0 ? 1 : 0;
+
+  // Check if spell was countered
+  if (card._countered) {
+    log.push(`${card.name} foi anulado e nao resolve.`);
+    return log;
+  }
+
+  log.push(`${card.name} resolve.`);
+
+  // Helper: resolve dynamic amounts to numbers
+  const resolveAmount = (amt) => {
+    if (typeof amt === 'number') return amt;
+    if (!amt) return 0;
+    if (amt === 'vivid') return CardUtils.countVividColors ? CardUtils.countVividColors(gameState, controller) : 0;
+    if (amt === 'X') return gameState._currentXValue || 0; // Use context X value
+    if (amt === 'creature_count') return gameState.players[controller].zones.battlefield.cards.filter(c => Cards.isCreature(c)).length;
+    if (amt === 'lands_count') return gameState.players[controller].zones.battlefield.cards.filter(c => Cards.isLand(c)).length;
+    if (amt === 'lands_in_gy_count') return gameState.players[controller].zones.graveyard.getAll().filter(c => Cards.isLand(c)).length;
+    if (amt === 'spells_this_turn') return gameState._spellsThisTurn ? gameState._spellsThisTurn[controller] || 0 : 0;
+    if (amt === 'returned_creature_power') return gameState._lastReturnedPower || 0; // For Lie in Wait
+    if (amt === 'mana_value') return card.cmc || 0;
+    if (amt === 'prevented') return gameState._lastPreventedDamage || 0;
+    // Safety: if still a string, parse as int or default to 0
+    const parsed = parseInt(amt);
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  const waitingBefore = gameState.waitingForInput;
+  for (let ei = 0; ei < effects.length; ei++) {
+    const effect = effects[ei];
+    // Check effect-level condition
+    if (effect.condition) {
+      // Special case: "if_cast" needs card context
+      if (effect.condition === 'if_cast' && !card._wasCast) {
+        continue; // Card was not cast, skip this effect
+      }
+      // Special case: "dealt_damage_this_turn" for targeted effects (Unsparing Boltcaster)
+      // Should check if the TARGET creature was dealt damage, not the controller
+      else if (effect.condition === 'dealt_damage_this_turn' && targets && targets.length > 0) {
+        const target = targets[0];
+        if (target.type === 'creature') {
+          const bf = gameState.players[target.player].zones.battlefield;
+          const targetCard = bf.get(target.uid);
+          if (!targetCard || !targetCard._damagedThisTurn) {
+            continue; // Target was not dealt damage this turn, skip effect
+          }
+        }
+      }
+      // Other conditions via GameState
+      else if (effect.condition !== 'dealt_damage_this_turn' && typeof GameState._checkEffectCondition === 'function' &&
+          !GameState._checkEffectCondition(gameState, controller, effect)) {
+        continue; // Condition not met, skip
+      }
+    }
+
+    // If a previous effect in THIS resolution set waitingForInput (scry, surveil, etc.),
+    // save remaining effects to resume after human input completes
+    if (gameState.waitingForInput && gameState.waitingForInput !== waitingBefore && ei > 0) {
+      gameState._pendingStackEffects = {
+        card, controller, targets,
+        effects: effects.slice(ei),
+        log
+      };
+      return log;
+    }
+
+    switch (effect.type) {
+      case 'modal': {
+        const modes = effect.modes || [];
+        if (modes.length === 0) break;
+        const chooseCount = effect.chooseTwo ? 2 : (effect.chooseCount || 1);
+
+        if (controller === 0 && gameState.players[0].isHuman) {
+          // Human player: show interactive modal choice overlay
+          gameState._pendingModal = {
+            cardName: card.name,
+            modes: modes,
+            chooseCount: chooseCount,
+            controller: controller,
+            card: card,
+            targets: targets,
+            remainingEffects: effects.slice(ei + 1)
+          };
+          gameState.waitingForInput = { type: 'modal_choice', playerId: controller };
+          log.push(`${card.name}: escolha ${chooseCount === 1 ? 'um modo' : chooseCount + ' modos'}.`);
+          return log; // Stop resolving — will continue after human picks
+        } else {
+          // AI picks best mode(s)
+          const chosen = _aiChooseModes(modes, chooseCount, gameState, controller, opponent, targets);
+          const modeEffects = chosen.flatMap(m => Array.isArray(m) ? m : [m]);
+          effects.splice(ei + 1, 0, ...modeEffects);
+          log.push(`Modo(s) escolhido(s): ${modeEffects.map(e => e.type).join(', ')}.`);
+        }
+        break;
+      }
+
+      case 'damage': {
+        const dmgAmt = resolveAmount(effect.amount);
+        // Check for divided damage (Twin Bolt)
+        if (effect.target === 'divided' && targets && targets.length > 0) {
+          for (const target of targets) {
+            const dividedDmg = target.dividedAmount || dmgAmt;
+            if (target.type === 'creature') {
+              const bf = gameState.players[target.player].zones.battlefield;
+              const creature = bf.get(target.uid);
+              if (creature) {
+                if (!Cards.canBeTargeted(creature, controller)) {
+                  log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                  continue;
+                }
+                if (!_payWardCost(creature, controller, gameState, log)) continue;
+                // TODO: VFX
+                creature._damage += dividedDmg;
+                creature._damagedThisTurn = true;
+                log.push(`${creature.name} recebe ${dividedDmg} dano.`);
+                GameState._checkCreatureDeath(gameState, creature, target.player);
+              }
+            } else if (target.type === 'player') {
+              gameState.players[target.player].life -= dividedDmg;
+              if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
+              gameState._damageDealtThisTurn[target.player] = (gameState._damageDealtThisTurn[target.player] || 0) + dividedDmg;
+              log.push(`${dividedDmg} dano ao jogador ${target.player}. (Vida: ${gameState.players[target.player].life})`);
+              // TODO: VFX
+            }
+          }
+          // Lifelink for total damage dealt
+          if (card && Cards.isCreature(card) && Cards.hasLifelink(card)) {
+            const totalDmg = targets.reduce((sum, t) => sum + (t.dividedAmount || 0), 0);
+            gameState.players[controller].life += totalDmg;
+            log.push(`Lifelink: +${totalDmg} vida.`);
+            // TODO: VFX
+          }
+        } else if (effect.target === 'opponent' || effect.target === 'player') {
+          gameState.players[opponent].life -= dmgAmt;
+          // Track damage dealt this turn (for Spinerock Knoll hideaway)
+          if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
+          gameState._damageDealtThisTurn[opponent] = (gameState._damageDealtThisTurn[opponent] || 0) + dmgAmt;
+          log.push(`${dmgAmt} dano ao oponente. (Vida: ${gameState.players[opponent].life})`);
+          // TODO: VFX
+          // Lifelink on spell damage from source creature
+          if (card && Cards.isCreature(card) && Cards.hasLifelink(card)) {
+            gameState.players[controller].life += dmgAmt;
+            log.push(`Lifelink: +${dmgAmt} vida.`);
+            // TODO: VFX
+          }
+        } else if (targets && targets.length > 0) {
+          const target = targets[0];
+          // Validate target (hexproof/shroud)
+          if (target.type === 'creature') {
+            const bf = gameState.players[target.player].zones.battlefield;
+            const creature = bf.get(target.uid);
+            if (creature) {
+              if (!Cards.canBeTargeted(creature, controller)) {
+                log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                break;
+              }
+              if (!_payWardCost(creature, controller, gameState, log)) break;
+              // TODO: VFX
+              creature._damage += dmgAmt;
+              // Mark creature as damaged this turn (for Unsparing Boltcaster, etc.)
+              creature._damagedThisTurn = true;
+              if (creature._damage >= Cards.getToughness(creature)) {
+                GameState.creatureDies(gameState, creature, target.player);
+                log.push(`${creature.name} recebe ${dmgAmt} dano e morre.`);
+              } else {
+                log.push(`${creature.name} recebe ${dmgAmt} dano.`);
+              }
+            }
+          } else if (target.type === 'player') {
+            gameState.players[target.player].life -= dmgAmt;
+            log.push(`${dmgAmt} dano ao jogador. (Vida: ${gameState.players[target.player].life})`);
+          }
+        }
+        break;
+      }
+
+      case 'damage_all_creatures': {
+        for (const pid of [0, 1]) {
+          const bf = gameState.players[pid].zones.battlefield;
+          const creatures = bf.cards.filter(c => Cards.isCreature(c));
+          const dying = [];
+          for (const creature of creatures) {
+            creature._damage += effect.amount;
+            if (creature._damage >= Cards.getToughness(creature)) {
+              dying.push(creature);
+              log.push(`${creature.name} recebe ${effect.amount} dano e morre.`);
+            } else {
+              log.push(`${creature.name} recebe ${effect.amount} dano.`);
+            }
+          }
+          dying.forEach(c => GameState.creatureDies(gameState, c, pid));
+        }
+        break;
+      }
+
+      case 'damage_divided': {
+        // Damage divided among any number of targets (e.g., Twin Bolt, Ureni)
+        const totalDamage = resolveAmount(effect.amount);
+        if (targets && targets.length > 0) {
+          // For AI: divide evenly, for human: should use distribute UI (TODO)
+          const dmgPerTarget = Math.floor(totalDamage / targets.length);
+          let remainingDmg = totalDamage;
+
+          targets.forEach((target, idx) => {
+            const dmg = (idx === targets.length - 1) ? remainingDmg : dmgPerTarget;
+            remainingDmg -= dmg;
+
+            if (target.type === 'creature') {
+              const bf = gameState.players[target.player].zones.battlefield;
+              const creature = bf.get(target.uid);
+              if (creature && Cards.canBeTargeted(creature, controller)) {
+                // TODO: VFX
+                creature._damage += dmg;
+                if (creature._damage >= Cards.getToughness(creature)) {
+                  GameState.creatureDies(gameState, creature, target.player);
+                  log.push(`${creature.name} recebe ${dmg} dano e morre.`);
+                } else {
+                  log.push(`${creature.name} recebe ${dmg} dano.`);
+                }
+              }
+            } else if (target.type === 'player') {
+              gameState.players[target.player].life -= dmg;
+              log.push(`${dmg} dano ao ${target.player === 0 ? 'jogador' : 'oponente'}. (Vida: ${gameState.players[target.player].life})`);
+              // TODO: VFX
+            }
+          });
+        }
+        break;
+      }
+
+      case 'sacrifice': {
+        // Two modes:
+        // 1. Targeted sacrifice (force opponent to sacrifice)
+        // 2. Controller sacrifices own permanent (Felothar, Duty Beyond Death)
+
+        if (targets && targets.length > 0) {
+          // Mode 1: Targeted sacrifice (e.g., Liliana forcing opponent to sac)
+          const target = targets[0];
+          GameState.sacrifice(gameState, target.uid, target.player);
+          // TODO: VFX
+          log.push(`Permanente sacrificada.`);
+        } else {
+          // Mode 2: Controller sacrifices their own permanent
+          const targetPlayerId = controller;
+          const bf = gameState.players[targetPlayerId].zones.battlefield;
+
+          // Filter permanents based on target
+          let sacrificeable = bf.cards.filter(c => {
+            if (effect.target === 'nonland_permanent') return !Cards.isLand(c);
+            if (effect.target === 'creature') return Cards.isCreature(c);
+            if (effect.target === 'artifact_or_enchantment') return Cards.isArtifact(c) || Cards.isEnchantment(c);
+            return true; // Default: can sacrifice anything
+          });
+
+          if (sacrificeable.length === 0) {
+            if (!effect.optional) log.push('Nenhuma permanente valida para sacrificar.');
+            break;
+          }
+
+          if (effect.optional && controller !== 0) {
+            // AI decides whether to sacrifice (only if good reason)
+            const shouldSacrifice = sacrificeable.some(c =>
+              c._isToken || // Sacrifice tokens freely
+              Cards.getPower(c) <= 1 // Sacrifice weak creatures
+            );
+            if (!shouldSacrifice) {
+              log.push('IA escolhe nao sacrificar.');
+              break;
+            }
+          }
+
+          if (controller === 0) {
+            // Human player: interactive choice
+            gameState.waitingForInput = {
+              type: 'sacrifice',
+              playerId: controller,
+              choices: sacrificeable,
+              optional: effect.optional || false,
+              cardUid: card._uid
+            };
+            log.push(`${effect.optional ? 'Pode' : 'Deve'} sacrificar ${effect.target === 'nonland_permanent' ? 'uma permanente nao-terreno' : 'uma criatura'}.`);
+          } else {
+            // AI player: auto-pick worst permanent
+            // Prefer tokens > weak creatures > other permanents
+            sacrificeable.sort((a, b) => {
+              if (a._isToken !== b._isToken) return a._isToken ? -1 : 1;
+              if (Cards.isCreature(a) && Cards.isCreature(b)) {
+                return Cards.getPower(a) - Cards.getPower(b);
+              }
+              return (a.cmc || 0) - (b.cmc || 0);
+            });
+            const toSacrifice = sacrificeable[0];
+            GameState.sacrifice(gameState, toSacrifice._uid, targetPlayerId);
+            log.push(`IA sacrifica ${toSacrifice.name}.`);
+          }
+        }
+        break;
+      }
+
+      case 'destroy': {
+        if (targets && targets.length > 0) {
+          const target = targets[0];
+          const bf = gameState.players[target.player].zones.battlefield;
+          const permanent = bf.get(target.uid);
+          if (permanent) {
+            // Check targeting
+            if (!Cards.canBeTargeted(permanent, controller)) {
+              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              break;
+            }
+            // Check indestructible
+            if (Cards.hasIndestructible(permanent)) {
+              log.push(`${permanent.name} e indestruivel!`);
+              break;
+            }
+            if (Cards.isCreature(permanent)) {
+              const died = GameState.creatureDies(gameState, permanent, target.player);
+              if (died) log.push(`${permanent.name} e destruido.`);
+            } else {
+              // Non-creature permanent (enchantment, artifact, planeswalker)
+              bf.remove(permanent._uid);
+              GameState._unregisterCardTriggers(gameState, permanent._uid);
+              gameState.players[target.player].zones.graveyard.add(permanent);
+              log.push(`${permanent.name} e destruido.`);
+              // TODO: VFX
+            }
+          }
+        }
+        break;
+      }
+
+      case 'destroy_all': {
+        const players = effect.target === 'opponent_creatures' ? [opponent] : [0, 1];
+        let totalDestroyed = 0; // Track total destroyed permanents for "X" value
+
+        for (const pid of players) {
+          const bf = gameState.players[pid].zones.battlefield;
+          const toDestroy = bf.cards.filter(c => {
+            if (effect.target === 'creatures' || effect.target === 'opponent_creatures') return Cards.isCreature(c);
+            if (effect.target === 'creatures_and_enchantments') return Cards.isCreature(c) || (c.type_line && c.type_line.toLowerCase().includes('enchantment'));
+            if (effect.target === 'nonland') return !Cards.isLand(c);
+            return false;
+          });
+          const dying = toDestroy.filter(c => !Cards.hasIndestructible(c));
+          const surviving = toDestroy.filter(c => Cards.hasIndestructible(c));
+          surviving.forEach(c => log.push(`${c.name} e indestruivel!`));
+          dying.forEach(c => {
+            GameState.creatureDies(gameState, c, pid);
+            log.push(`${c.name} e destruido.`);
+            totalDestroyed++; // Count each destroyed permanent
+          });
+        }
+
+        // Store total destroyed count for next effect with amount: "X"
+        gameState._currentXValue = totalDestroyed;
+        break;
+      }
+
+      case 'exile': {
+        if (effect.target === 'opponent_hand_nonland') {
+          // Exile a nonland card from opponent's hand (e.g., Severance Priest)
+          const opponentId = controller === 0 ? 1 : 0;
+          const hand = gameState.players[opponentId].zones.hand;
+          const nonlandCards = hand.getAll().filter(c => !Cards.isLand(c));
+
+          if (nonlandCards.length === 0) {
+            log.push('Oponente nao tem cartas nao-terreno na mao.');
+            break;
+          }
+
+          if (gameState.players[controller].isHuman) {
+            // Human player: show hand and let them choose which card to exile
+            gameState._pendingHandExile = {
+              targetPlayerId: opponentId,
+              cardToExile: card, // The card doing the exiling (for storing exiled card)
+              choices: nonlandCards,
+              selected: null,
+              controller
+            };
+            gameState.waitingForInput = { type: 'opponent_hand_exile', playerId: controller };
+            log.push(`Escolha uma carta nao-terreno da mao do oponente para exilar.`);
+            return log;
+          } else {
+            // AI player: pick best card to exile
+            nonlandCards.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+            const exiledCard = nonlandCards[0];
+            hand.remove(exiledCard._uid);
+            gameState.players[opponentId].zones.exile.add(exiledCard);
+
+            // Store exiled card on the source card for LtB trigger
+            if (!card._exiledByPriest) card._exiledByPriest = [];
+            card._exiledByPriest.push({ card: exiledCard, cmc: exiledCard.cmc || 0 });
+            log.push(`${exiledCard.name} e exilado da mao do oponente.`);
+          }
+        } else if (effect.target === 'nonland_from_hand') {
+          // Special case: exile from your own hand (Aggressive Negotiations)
+          const targetPlayerId = controller; // FIX: exile from controller's hand, not opponent's
+          const hand = gameState.players[targetPlayerId].zones.hand;
+          const nonlandCards = hand.getAll().filter(c => !Cards.isLand(c));
+
+          if (nonlandCards.length === 0) {
+            log.push('Nenhuma carta nao-terreno na sua mao para exilar.');
+            // Continue to next effect - spell still resolves partially
+            break;
+          }
+
+          if (nonlandCards.length === 1 || !gameState.players[controller].isHuman) {
+            // Only one card or AI: auto-pick
+            const cardToExile = nonlandCards.length === 1
+              ? nonlandCards[0]
+              : GameAI._pickBestCardToExileFromHand(gameState, controller, nonlandCards);
+
+            if (cardToExile) {
+              hand.remove(cardToExile._uid);
+              gameState.players[targetPlayerId].zones.exile.add(cardToExile);
+              log.push(`${cardToExile.name} e exilado da sua mao.`);
+            } else {
+              log.push('Erro: nenhuma carta valida encontrada para exilar.');
+            }
+          } else {
+            // Human with multiple options: need choice overlay
+            GameState._setupHandExileChoice(gameState, controller, targetPlayerId, nonlandCards, () => {
+              StackEngine._processNextEffect(gameState);
+            });
+            return; // Wait for choice
+          }
+        } else if (targets && targets.length > 0) {
+          const target = targets[0];
+          const bf = gameState.players[target.player].zones.battlefield;
+          const permanent = bf.get(target.uid);
+          if (permanent) {
+            if (!Cards.canBeTargeted(permanent, controller)) {
+              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              break;
+            }
+            // Exile bypasses indestructible
+            // TODO: VFX
+            bf.remove(permanent._uid);
+            GameState._unregisterCardTriggers(gameState, permanent._uid);
+            // Fire leaves_battlefield for creatures
+            if (Cards.isCreature(permanent)) {
+              GameState.fireTrigger(gameState, 'leaves_battlefield', { cardUid: permanent._uid, card: permanent, ownerId: target.player });
+            }
+            gameState.players[target.player].zones.exile.add(permanent);
+
+            // Store exiled creature reference if until_leaves or until_source_leaves is set
+            // (until_leaves: for token creation like Mardu Siegebreaker)
+            // (until_source_leaves: for returning creature when source leaves like Stormplain Detainment)
+            if (effect.until_leaves || effect.until_source_leaves) {
+              if (!card._exiledUntilLeaves) card._exiledUntilLeaves = [];
+              permanent._owner = target.player; // Store original owner for later return
+              card._exiledUntilLeaves.push(permanent);
+            }
+
+            log.push(`${permanent.name} e exilado.`);
+          }
+        }
+        break;
+      }
+
+      case 'exile_all': {
+        for (const pid of [0, 1]) {
+          const bf = gameState.players[pid].zones.battlefield;
+          const exile = gameState.players[pid].zones.exile;
+          const toExile = bf.cards.filter(c => Cards.isCreature(c));
+          for (const c of toExile) {
+            // Remove aura effects if this creature has auras
+            if (c._attachments) {
+              for (const attUid of c._attachments) {
+                for (const p of gameState.players) {
+                  const att = p.zones.battlefield.get(attUid);
+                  if (att && Cards.isAura(att)) {
+                    GameState._removeAuraEffects(gameState, att, c);
+                  }
+                }
+              }
+            }
+            bf.remove(c._uid);
+            GameState._unregisterCardTriggers(gameState, c._uid);
+            exile.add(c);
+            log.push(`${c.name} e exilado.`);
+          }
+        }
+        break;
+      }
+
+      case 'bounce': {
+        if (targets && targets.length > 0) {
+          const target = targets[0];
+          const bf = gameState.players[target.player].zones.battlefield;
+          const permanent = bf.get(target.uid);
+          if (permanent) {
+            if (!Cards.canBeTargeted(permanent, controller)) {
+              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              break;
+            }
+            // TODO: VFX
+
+            // If aura, remove effects from enchanted creature
+            if (Cards.isAura(permanent) && permanent._attachedTo) {
+              for (const p of gameState.players) {
+                const enchanted = p.zones.battlefield.get(permanent._attachedTo);
+                if (enchanted) {
+                  GameState._removeAuraEffects(gameState, permanent, enchanted);
+                  enchanted._attachments = enchanted._attachments.filter(uid => uid !== permanent._uid);
+                  break;
+                }
+              }
+            }
+
+            bf.remove(permanent._uid);
+            GameState._unregisterCardTriggers(gameState, permanent._uid);
+            // Fire leaves_battlefield for creatures
+            if (Cards.isCreature(permanent)) {
+              GameState.fireTrigger(gameState, 'leaves_battlefield', { cardUid: permanent._uid, card: permanent, ownerId: target.player });
+            }
+            // Tokens disappear, non-tokens return to hand
+            if (permanent._isToken) {
+              log.push(`${permanent.name} token desaparece.`);
+            } else {
+              gameState.players[target.player].zones.hand.add(permanent);
+              log.push(`${permanent.name} volta para a mao.`);
+            }
+          }
+        }
+        break;
+      }
+
+      case 'bounce_to_library': {
+        // Riverwalk Technique: "The owner of target nonland permanent puts it on their choice of the top or bottom of their library"
+        if (targets && targets.length > 0) {
+          const target = targets[0];
+          const bf = gameState.players[target.player].zones.battlefield;
+          const permanent = bf.get(target.uid);
+          if (permanent) {
+            if (!Cards.canBeTargeted(permanent, controller)) {
+              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              break;
+            }
+            // TODO: VFX
+
+            // Remove from battlefield
+            bf.remove(permanent._uid);
+            GameState._unregisterCardTriggers(gameState, permanent._uid);
+            if (Cards.isCreature(permanent)) {
+              GameState.fireTrigger(gameState, 'leaves_battlefield', { cardUid: permanent._uid, card: permanent, ownerId: target.player });
+            }
+
+            // Owner chooses top or bottom
+            const position = effect.position || 'top'; // default to top
+            if (permanent._isToken) {
+              log.push(`${permanent.name} token desaparece.`);
+            } else {
+              // AI always chooses bottom (to avoid redrawing it immediately)
+              // Human would get UI choice (not implemented yet - defaults to top)
+              const chosenPosition = target.player === 0 ? 'top' : 'bottom'; // player 0 = human (top), player 1 = AI (bottom)
+              if (chosenPosition === 'top') {
+                gameState.players[target.player].zones.library.putOnTop(permanent);
+                log.push(`${permanent.name} volta para o topo do grimorio.`);
+              } else {
+                gameState.players[target.player].zones.library.putOnBottom(permanent);
+                log.push(`${permanent.name} volta para o fundo do grimorio.`);
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case 'damage_each_opponent': {
+        // Cori Mountain Stalwart, Devoted Duelist: "deals 2 damage to each opponent"
+        const dmgAmt = resolveAmount(effect.amount);
+        const opponents = gameState.players.map((_, i) => i).filter(i => i !== controller);
+        for (const oppId of opponents) {
+          gameState.players[oppId].life -= dmgAmt;
+          if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
+          gameState._damageDealtThisTurn[oppId] = (gameState._damageDealtThisTurn[oppId] || 0) + dmgAmt;
+          // TODO: VFX
+        }
+        log.push(`${dmgAmt} dano a cada oponente.`);
+        // Lifelink check (if source creature has lifelink)
+        if (card && Cards.isCreature(card) && Cards.hasLifelink(card)) {
+          const totalDamage = dmgAmt * opponents.length;
+          gameState.players[controller].life += totalDamage;
+          log.push(`Lifelink: +${totalDamage} vida.`);
+          // TODO: VFX
+        }
+        break;
+      }
+
+      case 'optional_discard_draw': {
+        // Rescue Leopard: "you may discard a card. If you do, draw a card"
+        // For AI: auto-discard worst card if hand size > 4
+        // For Human: show UI to choose
+        if (controller === 0) {
+          // Human player - set up interactive choice
+          gameState.waitingForInput = {
+            type: 'optional_discard_draw',
+            playerId: controller,
+            cardUid: card._uid
+          };
+          log.push(`${card.name}: Pode descartar uma carta para comprar.`);
+        } else {
+          // AI player - auto-decide
+          const hand = gameState.players[controller].zones.hand.getAll();
+          if (hand.length > 4) {
+            // Discard worst card (highest CMC land or lowest value spell)
+            const lands = hand.filter(c => Cards.isLand(c));
+            const spells = hand.filter(c => !Cards.isLand(c));
+            let worstCard = null;
+            if (lands.length > 3) {
+              worstCard = lands.sort((a, b) => (b.cmc || 0) - (a.cmc || 0))[0];
+            } else if (spells.length > 0) {
+              worstCard = spells.sort((a, b) => (a.cmc || 0) - (b.cmc || 0))[0];
+            }
+            if (worstCard) {
+              gameState.players[controller].zones.hand.remove(worstCard._uid);
+              gameState.players[controller].zones.graveyard.add(worstCard);
+              log.push(`IA descarta ${worstCard.name}.`);
+              // Draw card
+              const drawn = gameState.players[controller].zones.library.drawFromTop();
+              if (drawn) {
+                gameState.players[controller].zones.hand.add(drawn);
+                log.push(`IA compra 1 carta.`);
+              }
+            }
+          } else {
+            log.push(`IA escolhe nao descartar.`);
+          }
+        }
+        break;
+      }
+
+      case 'draw': {
+        const drawAmt = resolveAmount(effect.amount);
+        for (let i = 0; i < drawAmt; i++) {
+          const drawn = gameState.players[controller].zones.library.drawFromTop();
+          if (drawn) {
+            gameState.players[controller].zones.hand.add(drawn);
+            if (gameState.players[controller].isHuman) {
+              log.push(`Voce compra ${drawn.name}.`);
+            } else {
+              log.push(`Oponente compra uma carta.`);
+            }
+          }
+        }
+        // TODO: VFX
+        break;
+      }
+
+      case 'gainLife': {
+        const gainAmt = resolveAmount(effect.amount);
+        gameState.players[controller].life += gainAmt;
+        log.push(`+${gainAmt} vida. (Vida: ${gameState.players[controller].life})`);
+        // TODO: VFX
+        // Fire gain_life triggers
+        const gainLogs = GameState.fireTrigger(gameState, 'gain_life', { playerId: controller });
+        log.push(...gainLogs);
+        break;
+      }
+
+      case 'loseLife': {
+        // loseLife is a drawback/cost — defaults to controller (self-harm)
+        const loseLifeTarget = (effect.target === 'opponent' || effect.target === 'each_opponent') ? opponent : controller;
+        const loseAmt = resolveAmount(effect.amount);
+        gameState.players[loseLifeTarget].life -= loseAmt;
+        log.push(`${loseLifeTarget === controller ? 'Voce perde' : 'Oponente perde'} ${loseAmt} vida. (Vida: ${gameState.players[loseLifeTarget].life})`);
+        break;
+      }
+
+      case 'opponent_loses_half_life': {
+        // Betor, Kin to All: "each opponent loses half their life, rounded up"
+        const opponents = gameState.players.map((_, i) => i).filter(i => i !== controller);
+        for (const oppId of opponents) {
+          const currentLife = gameState.players[oppId].life;
+          const halfLife = Math.ceil(currentLife / 2); // Rounded up
+          gameState.players[oppId].life -= halfLife;
+          log.push(`Oponente perde metade da vida (${halfLife}). (Vida: ${gameState.players[oppId].life})`);
+          // TODO: VFX
+        }
+        break;
+      }
+
+      case 'buff':
+      case 'multi_buff_up_to': {
+        // Buffs from non-permanent spells are temporary (until end of turn)
+        const isTemp = !Cards.isPermanent(card);
+        // Resolve dynamic power/toughness (e.g. "creature_count", "double")
+        let buffPow = effect.power;
+        let buffTou = effect.toughness;
+        if (typeof buffPow === 'string') {
+          if (buffPow === 'double') {
+            // Double power of target - resolved per-creature below
+            buffPow = 'double';
+          } else {
+            // Use resolveAmount for dynamic values like "creature_count"
+            buffPow = resolveAmount(buffPow);
+          }
+        }
+        if (typeof buffTou === 'string') {
+          if (buffTou === 'double') buffTou = 'double';
+          else {
+            // Use resolveAmount for dynamic values like "creature_count"
+            buffTou = resolveAmount(buffTou);
+          }
+        }
+        const applyBuff = (creature) => {
+          const p = buffPow === 'double' ? Cards.getPower(creature) : (buffPow || 0);
+          const t = buffTou === 'double' ? Cards.getToughness(creature) : (buffTou || 0);
+          creature._powerMod += p;
+          creature._toughnessMod += t;
+          if (isTemp) {
+            creature._tempPowerMod = (creature._tempPowerMod || 0) + p;
+            creature._tempToughnessMod = (creature._tempToughnessMod || 0) + t;
+          }
+          return { p, t };
+        };
+        if (effect.target === 'all_own_creatures') {
+          let bp = 0, bt = 0;
+          gameState.players[controller].zones.battlefield.cards.forEach(c => {
+            if (Cards.isCreature(c)) {
+              const r = applyBuff(c);
+              bp = r.p; bt = r.t;
+            }
+          });
+          log.push(`Todas as criaturas recebem ${bp >= 0 ? '+' : ''}${bp}/${bt >= 0 ? '+' : ''}${bt}.`);
+        } else if (effect.type === 'multi_buff_up_to' && targets && targets.length > 0) {
+          // Rally the Monastery: buff multiple targets
+          for (const target of targets) {
+            const bf = gameState.players[target.player].zones.battlefield;
+            const creature = bf.get(target.uid);
+            if (creature && Cards.canBeTargeted(creature, controller)) {
+              const r = applyBuff(creature);
+              log.push(`${creature.name} recebe ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
+            }
+          }
+        } else if (targets && targets.length > 0) {
+          const target = targets[0];
+          const bf = gameState.players[target.player].zones.battlefield;
+          const creature = bf.get(target.uid);
+          if (creature) {
+            if (!Cards.canBeTargeted(creature, controller)) {
+              log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+              break;
+            }
+            const r = applyBuff(creature);
+            log.push(`${creature.name} recebe ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
+            // Apply keywords from buff effect (e.g. Alesha's Legacy grants deathtouch+indestructible)
+            if (effect.keywords && effect.keywords.length > 0) {
+              if (!creature.keywords) creature.keywords = [];
+              effect.keywords.forEach(kw => {
+                const kwCap = kw.charAt(0).toUpperCase() + kw.slice(1);
+                if (!creature.keywords.includes(kwCap)) creature.keywords.push(kwCap);
+                if (!creature._tempKeywords) creature._tempKeywords = [];
+                creature._tempKeywords.push(kwCap);
+              });
+              log.push(`${creature.name} ganha ${effect.keywords.join(', ')} ate o fim do turno.`);
+            }
+            if (Cards.getToughness(creature) <= 0) {
+              GameState.creatureDies(gameState, creature, target.player);
+              log.push(`${creature.name} morre.`);
+            }
+          }
+        }
+        break;
+      }
+
+      case 'scry': {
+        const lib = gameState.players[controller].zones.library;
+        const top = [];
+        for (let i = 0; i < effect.amount && lib.count() > 0; i++) {
+          top.push(lib.drawFromTop());
+        }
+        if (top.length === 0) break;
+
+        // TODO: VFX (library glow scry)
+
+        if (gameState.players[controller].isHuman) {
+          gameState._pendingScry = {
+            type: 'scry',
+            cards: top,
+            playerId: controller,
+            choices: top.map(() => 'top')
+          };
+          gameState.waitingForInput = { type: 'scry', playerId: controller };
+          log.push(`Scry ${effect.amount} - escolha quais ficam no topo.`);
+        } else {
+          const keep = [];
+          const bottom = [];
+          for (const c of top) {
+            const bf = gameState.players[controller].zones.battlefield;
+            const landCount = bf.cards.filter(x => Cards.isLand(x)).length;
+            if (Cards.isLand(c) && landCount < 4) {
+              keep.push(c);
+            } else if (Cards.isLand(c) && landCount >= 5) {
+              bottom.push(c);
+            } else if (Cards.isCreature(c) || c.cmc <= landCount + 1) {
+              keep.push(c);
+            } else {
+              bottom.push(c);
+            }
+          }
+          for (const c of keep.reverse()) lib.addToTop(c);
+          for (const c of bottom) lib.addToBottom(c);
+          log.push(`Oponente faz scry ${effect.amount}.`);
+        }
+        break;
+      }
+
+      case 'surveil': {
+        const lib = gameState.players[controller].zones.library;
+        const top = [];
+        for (let i = 0; i < effect.amount && lib.count() > 0; i++) {
+          top.push(lib.drawFromTop());
+        }
+        if (top.length === 0) break;
+
+        // TODO: VFX (library glow surveil)
+
+        if (gameState.players[controller].isHuman) {
+          gameState._pendingScry = {
+            type: 'surveil',
+            cards: top,
+            playerId: controller,
+            choices: top.map(() => 'top')
+          };
+          gameState.waitingForInput = { type: 'surveil', playerId: controller };
+          log.push(`Surveil ${effect.amount} - escolha quais vao pro cemiterio.`);
+        } else {
+          const gy = gameState.players[controller].zones.graveyard;
+          const keep = [];
+          const toGY = [];
+
+          for (const c of top) {
+            const bf = gameState.players[controller].zones.battlefield;
+            const landCount = bf.cards.filter(x => Cards.isLand(x)).length;
+            if (Cards.isLand(c) && landCount >= 5) {
+              toGY.push(c);
+            } else if (c.cmc > landCount + 2) {
+              toGY.push(c);
+            } else {
+              keep.push(c);
+            }
+          }
+
+          for (const c of keep.reverse()) lib.addToTop(c);
+          for (const c of toGY) gy.add(c);
+          log.push(`Oponente faz surveil ${effect.amount}.`);
+        }
+        break;
+      }
+
+      case 'mill': {
+        const millAmt = resolveAmount(effect.amount);
+        let targetPlayer;
+        if (effect.target === 'any_player') {
+          if (gameState.players[controller].isHuman) {
+            // Human: show choice overlay
+            gameState._pendingPlayerChoice = {
+              effectType: 'mill',
+              amount: millAmt,
+              controller,
+              card: card,
+              remainingEffects: effects.slice(ei + 1),
+              targets: targets
+            };
+            gameState.waitingForInput = { type: 'player_choice', playerId: controller };
+            log.push(`Escolha quem sera millado (${millAmt} cartas).`);
+            return log;
+          } else {
+            // AI: mill opponent by default
+            targetPlayer = opponent;
+          }
+        } else {
+          targetPlayer = effect.target === 'opponent' ? opponent : controller;
+        }
+        const lib = gameState.players[targetPlayer].zones.library;
+        const gy = gameState.players[targetPlayer].zones.graveyard;
+        const milled = [];
+        for (let i = 0; i < millAmt && lib.count() > 0; i++) {
+          const c = lib.drawFromTop();
+          gy.add(c);
+          milled.push(c.name);
+        }
+        if (milled.length > 0) {
+          const who = targetPlayer === 0 ? 'Voce' : 'Oponente';
+          log.push(`${who} coloca ${milled.length} carta(s) no cemiterio: ${milled.slice(0, 3).join(', ')}${milled.length > 3 ? '...' : ''}`);
+          // TODO: VFX
+        }
+        break;
+      }
+
+      case 'mill_land_choice': {
+        // Mill land choice: put a land from recently milled cards into hand, or +1/+1 counter
+        const gy = gameState.players[controller].zones.graveyard;
+        const recentMilled = gy.getAll().slice(-3); // Last 3 cards added (from mill)
+        const milledLands = recentMilled.filter(c => Cards.isLand(c));
+
+        if (milledLands.length === 0) {
+          // No lands milled, auto-counter
+          const targetCard = gameState.players[controller].zones.battlefield.get(card._uid);
+          if (targetCard) {
+            if (!targetCard._counters) targetCard._counters = { '+1/+1': 0, '-1/-1': 0 };
+            targetCard._counters['+1/+1']++;
+            log.push(`${targetCard.name} recebe +1/+1 (nenhum terreno millado).`);
+          }
+        } else if (gameState.players[controller].isHuman) {
+          // Human: choice between land to hand or +1/+1 counter
+          gameState._pendingMillLandChoice = {
+            cardUid: card._uid,
+            milledLands: milledLands,
+            controller: controller
+          };
+          gameState.waitingForInput = { type: 'mill_land_choice', playerId: controller };
+          log.push(`Escolha: colocar terreno na mao ou +1/+1 counter.`);
+          return log;
+        } else {
+          // AI: always take land if available
+          const landToTake = milledLands[0];
+          gy.remove(landToTake._uid);
+          gameState.players[controller].zones.hand.add(landToTake);
+          log.push(`${landToTake.name} volta para a mao.`);
+        }
+        break;
+      }
+
+      case 'ramp': {
+        console.log('[RAMP DEBUG] Stack.js ramp effect called:', effect);
+        const lib = gameState.players[controller].zones.library;
+        const bf = gameState.players[controller].zones.battlefield;
+        const isBasicOnly = effect.landType === 'basic' || !effect.landType;
+        const availableLands = lib.cards.filter(c => isBasicOnly ? Cards.isBasicLand(c) : Cards.isLand(c));
+
+        if (availableLands.length === 0) {
+          lib.shuffle();
+          log.push(`Nenhum terreno encontrado no grimorio.`);
+          break;
+        }
+
+        // Determine final destination (to_top can be overridden by condition)
+        let toTop = effect.to_top || false;
+        let toBattlefield = false;
+        if (toTop && effect.condition === 'control_dragon' && effect.condition_dest === 'battlefield_tapped') {
+          const hasDragon = bf.cards.some(c => Cards.hasCreatureType(c, 'Dragon'));
+          if (hasDragon) {
+            toBattlefield = true;
+            toTop = false;
+          }
+        }
+
+        if (gameState.players[controller].isHuman) {
+          // Interactive: show land selection overlay
+          const landOptions = [];
+          const seenNames = new Set();
+          for (const land of availableLands) {
+            if (!seenNames.has(land.name)) {
+              seenNames.add(land.name);
+              landOptions.push(land);
+            }
+          }
+          gameState._pendingRamp = {
+            lands: landOptions,
+            tapped: toBattlefield ? true : (effect.tapped || false),
+            toHand: effect.to_hand || false,
+            toTop: toTop,
+            toBattlefield: toBattlefield,
+            optional: effect.optional || false,
+            playerId: controller
+          };
+          gameState.waitingForInput = { type: 'ramp_choice', playerId: controller };
+          log.push(`Escolha um terreno da sua biblioteca.`);
+        } else {
+          // AI: always search if available (optional or not)
+          let land = null;
+          const hand = gameState.players[controller].zones.hand.cards;
+          const colorNeeds = {};
+          hand.forEach(c => {
+            const pips = (c.mana_cost || '').match(/\{([WUBRG])\}/gi) || [];
+            pips.forEach(p => {
+              const color = p.replace(/[{}]/g, '').toUpperCase();
+              colorNeeds[color] = (colorNeeds[color] || 0) + 1;
+            });
+          });
+          let bestLand = availableLands[0];
+          let bestScore = -1;
+          for (const l of availableLands) {
+            const colors = Cards.getLandManaColors ? Cards.getLandManaColors(l) : [];
+            let score = 0;
+            for (const c of colors) {
+              score += (colorNeeds[c] || 0);
+            }
+            if (score > bestScore) {
+              bestScore = score;
+              bestLand = l;
+            }
+          }
+          land = bestLand;
+          const idx = lib.cards.indexOf(land);
+          if (idx !== -1) lib.cards.splice(idx, 1);
+          console.log(`[RAMP DEBUG] to_hand: ${effect.to_hand}, toTop: ${toTop}, toBattlefield: ${toBattlefield}`);
+          if (effect.to_hand) {
+            console.log('[RAMP DEBUG] Adding to HAND');
+            gameState.players[controller].zones.hand.add(land);
+            lib.shuffle();
+            log.push(`Oponente busca ${land.name} no grimorio e coloca na mao.`);
+          } else if (toTop) {
+            lib.cards.unshift(land);
+            // Don't shuffle - card goes on top
+            log.push(`Oponente busca ${land.name} e coloca no topo do grimorio.`);
+          } else if (toBattlefield) {
+            const bfLand = Cards.prepareForBattlefield(land);
+            bfLand._tapped = true;
+            bfLand._summoningSick = false;
+            bf.add(bfLand);
+            lib.shuffle();
+            log.push(`Oponente busca ${land.name} e coloca no campo virado.`);
+          } else {
+            console.log('[RAMP DEBUG] Adding to BATTLEFIELD (default case)');
+            const bfLand = Cards.prepareForBattlefield(land);
+            bfLand._tapped = effect.tapped ? true : false;
+            bfLand._summoningSick = false;
+            bf.add(bfLand);
+            lib.shuffle();
+            log.push(`Oponente busca ${land.name} no grimorio e coloca no campo${effect.tapped ? ' virado' : ''}.`);
+          }
+        }
+        break;
+      }
+
+      case 'strategic_betrayal': {
+        // Target opponent exiles a creature and their graveyard
+        if (!targets || targets.length === 0) break;
+        const targetPlayer = targets[0].player;
+        const bf = gameState.players[targetPlayer].zones.battlefield;
+        const gy = gameState.players[targetPlayer].zones.graveyard;
+        const exile = gameState.players[targetPlayer].zones.exile;
+
+        // Get opponent's creatures
+        const creatures = bf.cards.filter(c => Cards.isCreature(c));
+        if (creatures.length === 0) {
+          log.push(`${gameState.players[targetPlayer].isHuman ? 'Voce' : 'Oponente'} nao tem criaturas para exilar.`);
+        } else if (creatures.length === 1 || !gameState.players[targetPlayer].isHuman) {
+          // Auto-pick strongest creature or only option
+          const creature = creatures.length === 1 ? creatures[0] : creatures.reduce((a, b) => (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a)) > 0 ? b : a);
+          bf.remove(creature._uid);
+          exile.add(creature);
+          log.push(`${creature.name} e exilado da criatura do oponente.`);
+        }
+
+        // Exile opponent's graveyard
+        const gyCards = gy.getAll();
+        gyCards.forEach(c => {
+          gy.remove(c._uid);
+          exile.add(c);
+        });
+        if (gyCards.length > 0) {
+          log.push(`${gyCards.length} carta(s) do cemiterio do oponente foram exiladas.`);
+        }
+        break;
+      }
+
+      case 'severance_priest_token': {
+        // Create Spirit token equal to CMC of exiled card (from Severance Priest)
+        if (!card._exiledByPriest || card._exiledByPriest.length === 0) {
+          log.push('Nenhuma carta foi exilada por Severance Priest.');
+          break;
+        }
+
+        const exiledData = card._exiledByPriest[card._exiledByPriest.length - 1];
+        const cmc = exiledData.cmc || 0;
+
+        // Create the Spirit token
+        const token = Cards.createToken(controller, cmc, cmc, 'Spirit');
+        token.type_line = 'Spirit';
+        token.colors = ['W'];
+        token.color_identity = ['W'];
+
+        const bf = gameState.players[controller].zones.battlefield;
+        bf.add(token);
+        GameState._registerCardTriggers(gameState, token, controller);
+
+        log.push(`${controller === 0 ? 'Voce' : 'Oponente'} cria um token ${cmc}/${cmc} branco Spirit.`);
+        break;
+      }
+
+      case 'create_token': {
+        let tokenOwner = controller;
+        if (effect.controller === 'opponent') {
+          tokenOwner = controller === 0 ? 1 : 0;
+        } else if (effect.controller === 'target_controller' && targets && targets.length > 0) {
+          tokenOwner = targets[0].player;
+        }
+        const bf = gameState.players[tokenOwner].zones.battlefield;
+        const count = effect.count || 1;
+        for (let i = 0; i < count; i++) {
+          const token = Cards.createToken(tokenOwner, effect.power, effect.toughness, effect.name);
+          // Set colors if specified (e.g., "1/1 red Goblin")
+          if (effect.colors) {
+            token.colors = [...effect.colors];
+            token.color_identity = [...effect.colors];
+          }
+          // Set type_line if specified
+          if (effect.type_line) {
+            token.type_line = effect.type_line;
+          }
+          if (effect.keywords) {
+            effect.keywords.forEach(kw => {
+              if (!token.keywords) token.keywords = [];
+              token.keywords.push(kw);
+              token.oracle_text = (token.oracle_text || '') + (token.oracle_text ? ', ' : '') + kw;
+            });
+          }
+          // Add ETB damage trigger if specified
+          if (effect.etb_damage) {
+            if (!token._triggers) token._triggers = [];
+            token._triggers.push({
+              event: 'enters_battlefield',
+              effects: [{ type: 'damage', amount: effect.etb_damage, target: 'any_target' }]
+            });
+          }
+          if (effect.sacrificeAtEndStep || effect.sacrifice_eot) token._sacrificeAtEndStep = true;
+          if (effect.attacking && gameState.combat && gameState.combat.phase !== 'none') {
+            token._attacking = true;
+            token._tapped = true;
+            token._summoningSickness = false;
+            gameState.combat.attackers.push({ uid: token._uid, card: token });
+          }
+          bf.add(token);
+          GameState._registerCardTriggers(gameState, token, tokenOwner);
+        }
+        const who = gameState.players[tokenOwner].isHuman ? 'Voce' : 'Oponente';
+        log.push(`${who} cria ${count} token(s) ${effect.power}/${effect.toughness} ${effect.name}.`);
+        break;
+      }
+
+      case 'counter': {
+        // Check if this is countering a spell (anulação) vs adding counters to creature
+        if (effect.target === 'spell' || effect.target === 'creature_spell' || effect.target === 'noncreature_spell') {
+          // Counter a spell on the stack
+          if (!targets || targets.length === 0) {
+            log.push('Counter spell requer um alvo na stack.');
+            break;
+          }
+
+          const targetSpell = targets[0];
+          if (!targetSpell || !targetSpell.name) {
+            log.push('Alvo invalido para counter.');
+            break;
+          }
+
+          // Check spell type if restricted
+          if (effect.target === 'creature_spell' && !Cards.isCreature(targetSpell)) {
+            log.push(`${targetSpell.name} nao e uma magia de criatura.`);
+            break;
+          }
+          if (effect.target === 'noncreature_spell' && Cards.isCreature(targetSpell)) {
+            log.push(`${targetSpell.name} e uma magia de criatura.`);
+            break;
+          }
+
+          // Remove from stack
+          gameState.stack = gameState.stack.filter(s => s.card._uid !== targetSpell._uid);
+          log.push(`${targetSpell.name} foi anulado!`);
+          break;
+        }
+
+        // Otherwise: add counters to a creature
+        if (targets && targets.length > 0) {
+          // Check for distribute_creatures (Armament Dragon)
+          if (effect.target === 'distribute_creatures') {
+            // Distribute counters among multiple targets
+            for (const target of targets) {
+              const bf = gameState.players[target.player].zones.battlefield;
+              const creature = bf.get(target.uid);
+              if (creature) {
+                if (!Cards.canBeTargeted(creature, controller)) {
+                  log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                  continue;
+                }
+                const counterAmount = target.amount || 1; // Amount for this specific target
+                if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
+                creature._counters[effect.counter] = (creature._counters[effect.counter] || 0) + counterAmount;
+                log.push(`${creature.name} recebe ${counterAmount} ${effect.counter} counter(s).`);
+
+                if (creature._counters['+1/+1'] > 0 && creature._counters['-1/-1'] > 0) {
+                  const cancel = Math.min(creature._counters['+1/+1'], creature._counters['-1/-1']);
+                  creature._counters['+1/+1'] -= cancel;
+                  creature._counters['-1/-1'] -= cancel;
+                }
+
+                if (Cards.getToughness(creature) <= 0) {
+                  GameState.creatureDies(gameState, creature, target.player);
+                  log.push(`${creature.name} morre.`);
+                }
+              }
+            }
+          } else {
+            // Single target counter
+            const target = targets[0];
+            const bf = gameState.players[target.player].zones.battlefield;
+            const creature = bf.get(target.uid);
+            if (creature) {
+              if (!Cards.canBeTargeted(creature, controller)) {
+                log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                break;
+              }
+              if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
+              creature._counters[effect.counter] = (creature._counters[effect.counter] || 0) + effect.amount;
+              log.push(`${creature.name} recebe ${effect.amount} ${effect.counter} counter(s).`);
+
+              if (creature._counters['+1/+1'] > 0 && creature._counters['-1/-1'] > 0) {
+                const cancel = Math.min(creature._counters['+1/+1'], creature._counters['-1/-1']);
+                creature._counters['+1/+1'] -= cancel;
+                creature._counters['-1/-1'] -= cancel;
+              }
+
+              if (Cards.getToughness(creature) <= 0) {
+                GameState.creatureDies(gameState, creature, target.player);
+                log.push(`${creature.name} morre.`);
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case 'counter_self': {
+        const bf = gameState.players[controller].zones.battlefield;
+        const self = bf.get(card._uid);
+        if (self) {
+          if (!self._counters) self._counters = { '+1/+1': 0, '-1/-1': 0 };
+          self._counters[effect.counter] = (self._counters[effect.counter] || 0) + effect.amount;
+          log.push(`${self.name} entra com ${effect.amount} ${effect.counter} counter(s).`);
+        }
+        break;
+      }
+
+      case 'counter_all': {
+        const bf = gameState.players[controller].zones.battlefield;
+        const creatures = bf.cards.filter(c => Cards.isCreature(c));
+        for (const creature of creatures) {
+          if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
+          creature._counters[effect.counter] = (creature._counters[effect.counter] || 0) + effect.amount;
+        }
+        log.push(`Todas as criaturas recebem ${effect.amount} ${effect.counter} counter(s).`);
+        break;
+      }
+
+      case 'discard': {
+        const targetPlayer = effect.target === 'opponent' ? opponent : controller;
+        const hand = gameState.players[targetPlayer].zones.hand;
+        const gy = gameState.players[targetPlayer].zones.graveyard;
+
+        // If human player needs to discard, pause for interactive choice
+        if (gameState.players[targetPlayer].isHuman && hand.count() > 0) {
+          gameState._pendingDiscard = {
+            targetPlayer,
+            amount: effect.amount || 1,
+            controller,
+            effectIndex: gameState._effectStack ? gameState._effectStack.length : 0
+          };
+          gameState.waitingForInput = { type: 'mandatory_discard', playerId: targetPlayer };
+          log.push(`Voce deve descartar ${effect.amount || 1} carta(s).`);
+          return log; // Pause resolution until human chooses
+        }
+
+        // AI or opponent: auto-discard
+        const sorted = hand.getAll().sort((a, b) => {
+          if (Cards.isLand(a) && !Cards.isLand(b)) return -1;
+          if (!Cards.isLand(a) && Cards.isLand(b)) return 1;
+          return (a.cmc || 0) - (b.cmc || 0);
+        });
+
+        const discarded = [];
+        for (let i = 0; i < effect.amount && sorted.length > 0; i++) {
+          const c = sorted.shift();
+          hand.remove(c._uid);
+          gy.add(c);
+          discarded.push(c.name);
+          // Track nonland discard for conditions
+          if (!Cards.isLand(c)) {
+            if (!gameState._lastDiscardedNonland) gameState._lastDiscardedNonland = {};
+            gameState._lastDiscardedNonland[controller] = true;
+          }
+          // Fire opponent_discards trigger
+          if (targetPlayer !== controller) {
+            const trigLogs = GameState.fireTrigger(gameState, 'opponent_discards', { playerId: controller, cardUid: c._uid });
+            log.push(...trigLogs);
+          }
+        }
+
+        if (discarded.length > 0) {
+          const who = targetPlayer === 0 ? 'Voce' : 'Oponente';
+          log.push(`${who} descarta: ${discarded.join(', ')}.`);
+        }
+        break;
+      }
+
+      case 'optional_discard': {
+        // Optional discard (used by Glacial Dragonhunt, etc.)
+        const optHand = gameState.players[controller].zones.hand;
+        const optHandSize = optHand.count();
+
+        if (optHandSize === 0) {
+          log.push('Nenhuma carta na mao para descartar.');
+          break;
+        }
+
+        if (gameState.players[controller].isHuman) {
+          // Human: optional choice overlay
+          gameState._pendingOptionalDiscard = {
+            controller,
+            amount: effect.amount || 1,
+            onNonlandDiscard: effect.onNonlandDiscard || null
+          };
+          gameState.waitingForInput = { type: 'optional_discard_choice', playerId: controller };
+          log.push('Voce pode descartar uma carta.');
+          return log;
+        } else {
+          // AI: decide whether to discard
+          const hasBonus = effect.onNonlandDiscard && effect.onNonlandDiscard.length > 0;
+          const oppBf = gameState.players[1 - controller].zones.battlefield;
+          const oppCreatures = oppBf.cards.filter(c => Cards.isCreature(c));
+
+          // If has bonus damage effect and opponent has creatures, strongly prefer discarding nonland
+          let shouldDiscard = false;
+          let preferNonland = false;
+          if (hasBonus && oppCreatures.length > 0) {
+            shouldDiscard = true;
+            preferNonland = true;
+          } else {
+            shouldDiscard = optHandSize > 4 ? Math.random() < 0.7 : Math.random() < 0.3;
+          }
+
+          if (shouldDiscard) {
+            const optGy = gameState.players[controller].zones.graveyard;
+            let sorted;
+            if (preferNonland) {
+              // Prefer discarding cheapest nonland card for the bonus effect
+              const nonlands = optHand.getAll().filter(c => !Cards.isLand(c));
+              const lands = optHand.getAll().filter(c => Cards.isLand(c));
+              if (nonlands.length > 0) {
+                sorted = nonlands.sort((a, b) => (a.cmc || 0) - (b.cmc || 0));
+              } else {
+                sorted = lands; // No nonlands, discard land (no bonus)
+              }
+            } else {
+              sorted = optHand.getAll().sort((a, b) => {
+                if (Cards.isLand(a) && !Cards.isLand(b)) return -1;
+                if (!Cards.isLand(a) && Cards.isLand(b)) return 1;
+                return (a.cmc || 0) - (b.cmc || 0);
+              });
+            }
+
+            const toDiscard = sorted[0];
+            optHand.remove(toDiscard._uid);
+            optGy.add(toDiscard);
+
+            // Track nonland discard for conditions
+            const discardedNonland = !Cards.isLand(toDiscard);
+            if (discardedNonland) {
+              if (!gameState._lastDiscardedNonland) gameState._lastDiscardedNonland = {};
+              gameState._lastDiscardedNonland[controller] = true;
+            }
+
+            log.push(`IA descarta ${toDiscard.name}.`);
+
+            // Process onNonlandDiscard bonus effects (AI auto-targets)
+            if (discardedNonland && hasBonus) {
+              for (const bonusEffect of effect.onNonlandDiscard) {
+                if (bonusEffect.type === 'damage' && bonusEffect.target === 'creature') {
+                  // AI: pick best target creature (opponent's, highest threat)
+                  if (oppCreatures.length > 0) {
+                    const bestTarget = oppCreatures.sort((a, b) =>
+                      (GameState._threatScore ? GameState._threatScore(b) : (b.cmc || 0)) -
+                      (GameState._threatScore ? GameState._threatScore(a) : (a.cmc || 0))
+                    )[0];
+                    if (bestTarget && Cards.canBeTargeted(bestTarget, controller)) {
+                      bestTarget._damage = (bestTarget._damage || 0) + bonusEffect.amount;
+                      // TODO: VFX
+                      if (bestTarget._damage >= Cards.getToughness(bestTarget)) {
+                        GameState.creatureDies(gameState, bestTarget, 1 - controller);
+                        log.push(`Glacial Dragonhunt causa ${bonusEffect.amount} dano em ${bestTarget.name} - morre!`);
+                      } else {
+                        log.push(`Glacial Dragonhunt causa ${bonusEffect.amount} dano em ${bestTarget.name}.`);
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            log.push('IA escolhe nao descartar carta.');
+          }
+        }
+        break;
+      }
+
+      case 'fight': {
+        if (targets && targets.length > 0) {
+          const target = targets[0];
+          const myBf = gameState.players[controller].zones.battlefield;
+          const ourCreature = myBf.get(card._uid);
+          const theirBf = gameState.players[target.player].zones.battlefield;
+          const theirCreature = theirBf.get(target.uid);
+
+          if (ourCreature && theirCreature) {
+            const ourPower = Cards.getPower(ourCreature);
+            const theirPower = Cards.getPower(theirCreature);
+
+            theirCreature._damage += ourPower;
+            ourCreature._damage += theirPower;
+
+            if (Cards.hasKeyword(ourCreature, 'Deathtouch') && ourPower > 0) {
+              theirCreature._damage = Cards.getToughness(theirCreature);
+            }
+            if (Cards.hasKeyword(theirCreature, 'Deathtouch') && theirPower > 0) {
+              ourCreature._damage = Cards.getToughness(ourCreature);
+            }
+
+            log.push(`${ourCreature.name} luta com ${theirCreature.name}.`);
+
+            if (theirCreature._damage >= Cards.getToughness(theirCreature)) {
+              GameState.creatureDies(gameState, theirCreature, target.player);
+              log.push(`${theirCreature.name} morre.`);
+            }
+            if (ourCreature._damage >= Cards.getToughness(ourCreature)) {
+              GameState.creatureDies(gameState, ourCreature, controller);
+              log.push(`${ourCreature.name} morre.`);
+            }
+          }
+        }
+        break;
+      }
+
+      case 'tap': {
+        if (effect.target === 'all_opponent_creatures') {
+          const tapCreatures = gameState.players[opponent].zones.battlefield.cards.filter(c => Cards.isCreature(c));
+          tapCreatures.forEach(c => { c._tapped = true; });
+          log.push(`Todas as criaturas do oponente sao viradas.`);
+        } else if (targets && targets.length > 0) {
+          const target = targets[0];
+          const bf = gameState.players[target.player].zones.battlefield;
+          const creature = bf.get(target.uid);
+          if (creature) {
+            if (!Cards.canBeTargeted(creature, controller)) {
+              log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+              break;
+            }
+            const wasTapped = creature._tapped;
+            creature._tapped = true;
+            log.push(`${creature.name} e virado.`);
+            // Fire becomes_tapped trigger
+            if (!wasTapped) {
+              const tapLogs = GameState.fireTrigger(gameState, 'becomes_tapped', {
+                cardUid: creature._uid,
+                card: creature,
+                controllerId: target.player
+              });
+              log.push(...tapLogs);
+            }
+          }
+        }
+        break;
+      }
+
+      case 'untap': {
+        if (targets && targets.length > 0) {
+          const target = targets[0];
+          const bf = gameState.players[target.player].zones.battlefield;
+          const creature = bf.get(target.uid);
+          if (creature) {
+            if (!Cards.canBeTargeted(creature, controller)) {
+              log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+              break;
+            }
+            creature._tapped = false;
+            log.push(`${creature.name} e desvirado.`);
+          }
+        }
+        break;
+      }
+
+      case 'prevent_damage': {
+        // Store prevention shield on controller
+        if (!gameState._damageShield) gameState._damageShield = {};
+        gameState._damageShield[controller] = (gameState._damageShield[controller] || 0) + effect.amount;
+        log.push(`Previne os proximos ${effect.amount} de dano.`);
+        break;
+      }
+
+      case 'return_from_graveyard': {
+        const gy = gameState.players[controller].zones.graveyard;
+        const toHand = effect.to_hand !== false;
+        const toTopLibrary = effect.to_top_library === true;
+        const optional = effect.optional === true;
+
+        // Pick best creature from graveyard (or target type)
+        let candidates = gy.getAll();
+        if (effect.target === 'creature') {
+          candidates = candidates.filter(c => Cards.isCreature(c));
+        } else if (effect.target === 'noncreature_nonland') {
+          candidates = candidates.filter(c => !Cards.isCreature(c) && !Cards.isLand(c));
+        } else if (effect.target === 'creature_mv3') {
+          // Yathan Roadwatcher: creature with mana value 3 or less
+          candidates = candidates.filter(c => Cards.isCreature(c) && (c.cmc || 0) <= 3);
+        } else if (effect.target === 'permanent') {
+          candidates = candidates.filter(c => Cards.isPermanent(c));
+        } else if (effect.target === 'nonland_permanent_mv2') {
+          // Wayspeaker Bodyguard: nonland permanent with mana value 2 or less
+          candidates = candidates.filter(c => Cards.isPermanent(c) && !Cards.isLand(c) && (c.cmc || 0) <= 2);
+        } else if (effect.target === 'instant_or_sorcery') {
+          // Kishla Trawlers: instant or sorcery card
+          candidates = candidates.filter(c => {
+            const types = (c.type_line || '').toLowerCase();
+            return types.includes('instant') || types.includes('sorcery');
+          });
+        }
+
+        const amount = effect.amount || 1;
+
+        // If optional and human player, show modal to choose
+        if (optional && controller === 0 && candidates.length > 0) {
+          gameState._pendingGYReturn = {
+            effect, candidates, amount, toHand, toTopLibrary, controller
+          };
+          gameState.waitingForInput = { type: 'choose_gy_return', playerId: 0, optional: true };
+          // Save remaining effects to resume after choice
+          if (ei < effects.length - 1) {
+            gameState._pendingStackEffects = {
+              card, controller, targets,
+              effects: effects.slice(ei + 1),
+              log
+            };
+          }
+          return log; // Pause resolution for player choice
+        }
+
+        // Auto-pick best candidates
+        candidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+        for (let i = 0; i < amount && i < candidates.length; i++) {
+          const card = candidates[i];
+          gy.remove(card._uid);
+
+          // Store returned creature's power for next effect with amount: "returned_creature_power"
+          if (Cards.isCreature(card)) {
+            gameState._lastReturnedPower = Cards.getPower(card);
+          }
+
+          // Fire trigger when card leaves graveyard
+          GameState.fireTrigger(gameState, 'card_leaves_graveyard', { playerId: controller, card: card });
+          if (toTopLibrary) {
+            gameState.players[controller].zones.library.cards.unshift(card);
+            log.push(`${card.name} volta do cemiterio para o topo da biblioteca.`);
+          } else if (toHand) {
+            gameState.players[controller].zones.hand.add(card);
+            log.push(`${card.name} volta do cemiterio para a mao.`);
+          } else {
+            const bfCard = Cards.prepareForBattlefield(card);
+            bfCard._ownerId = controller;
+
+            // Apply with_counters (keyword counters like hexproof, indestructible)
+            if (effect.with_counters && Array.isArray(effect.with_counters)) {
+              if (!bfCard._counters) bfCard._counters = {};
+              for (const keyword of effect.with_counters) {
+                bfCard._counters[keyword] = (bfCard._counters[keyword] || 0) + 1;
+                log.push(`${bfCard.name} entra com contador ${keyword}.`);
+              }
+            }
+
+            gameState.players[controller].zones.battlefield.add(bfCard);
+            GameState._registerCardTriggers(gameState, bfCard, controller);
+            log.push(`${card.name} volta do cemiterio para o campo!`);
+          }
+        }
+        if (candidates.length === 0) {
+          log.push('Nenhuma carta valida no cemiterio.');
+        }
+        break;
+      }
+
+      case 'debuff':
+      case 'debuff_all': {
+        if (effect.type === 'debuff_all') {
+          // Resolve X values if present
+          let powerMod = effect.power;
+          let toughnessMod = effect.toughness;
+          if (powerMod === "X" || toughnessMod === "X") {
+            const xValue = card._xValue || 3; // Default to 3 if X not set
+            if (powerMod === "X") powerMod = -xValue;
+            if (toughnessMod === "X") toughnessMod = -xValue;
+          }
+
+          let allCreatures = [];
+          if (effect.target === 'opponent_creatures') {
+            const targetId = controller === 0 ? 1 : 0;
+            allCreatures = gameState.players[targetId].zones.battlefield.cards.filter(c => Cards.isCreature(c));
+          } else if (effect.target === 'non_dragon_creatures') {
+            // All non-Dragon creatures on both battlefields
+            for (let pid = 0; pid < gameState.players.length; pid++) {
+              const creatures = gameState.players[pid].zones.battlefield.cards.filter(c =>
+                Cards.isCreature(c) && !Cards.hasCreatureType(c, 'Dragon')
+              );
+              creatures.forEach(c => allCreatures.push({ creature: c, playerId: pid }));
+            }
+          } else {
+            const targetId = controller;
+            allCreatures = gameState.players[targetId].zones.battlefield.cards.filter(c => Cards.isCreature(c));
+          }
+
+          // Apply debuff
+          if (effect.target === 'non_dragon_creatures') {
+            for (const { creature, playerId } of allCreatures) {
+              creature._powerMod = (creature._powerMod || 0) + (powerMod || 0);
+              creature._toughnessMod = (creature._toughnessMod || 0) + (toughnessMod || 0);
+              creature._tempPowerMod = (creature._tempPowerMod || 0) + (powerMod || 0);
+              creature._tempToughnessMod = (creature._tempToughnessMod || 0) + (toughnessMod || 0);
+            }
+            log.push(`Todas as criaturas não-Dragão recebem ${powerMod}/${toughnessMod}.`);
+            // Kill creatures with 0 or less toughness
+            for (const { creature, playerId } of allCreatures) {
+              if (Cards.getToughness(creature) <= 0) {
+                GameState.creatureDies(gameState, creature, playerId);
+              }
+            }
+          } else {
+            for (const c of allCreatures) {
+              c._powerMod = (c._powerMod || 0) + (powerMod || 0);
+              c._toughnessMod = (c._toughnessMod || 0) + (toughnessMod || 0);
+              c._tempPowerMod = (c._tempPowerMod || 0) + (powerMod || 0);
+              c._tempToughnessMod = (c._tempToughnessMod || 0) + (toughnessMod || 0);
+            }
+            const targetId = effect.target === 'opponent_creatures' ? (controller === 0 ? 1 : 0) : controller;
+            log.push(`Todas as criaturas do ${targetId === 0 ? 'jogador' : 'oponente'} recebem ${powerMod}/${toughnessMod}.`);
+            // Kill creatures with 0 or less toughness
+            const dying = allCreatures.filter(c => Cards.getToughness(c) <= 0);
+            dying.forEach(c => GameState.creatureDies(gameState, c, targetId));
+          }
+        } else if (targets && targets.length > 0) {
+          const target = targets[0];
+          const creature = gameState.players[target.player].zones.battlefield.get(target.uid);
+          if (creature) {
+            creature._powerMod = (creature._powerMod || 0) + (effect.power || 0);
+            creature._toughnessMod = (creature._toughnessMod || 0) + (effect.toughness || 0);
+            creature._tempPowerMod = (creature._tempPowerMod || 0) + (effect.power || 0);
+            creature._tempToughnessMod = (creature._tempToughnessMod || 0) + (effect.toughness || 0);
+            log.push(`${creature.name} recebe ${effect.power}/${effect.toughness} ate o fim do turno.`);
+            if (Cards.getToughness(creature) <= 0) {
+              GameState.creatureDies(gameState, creature, target.player);
+              log.push(`${creature.name} morre.`);
+            }
+          }
+        }
+        break;
+      }
+
+      // Route all remaining effect types to stack-part2 handlers
+      default: {
+        const part2Result = StackPart2.dispatch(
+          effect, state, card, controller, targets, effects, ei, log, resolveAmount
+        );
+        if (part2Result) return part2Result;
+        break;
+      }
+
+    } // end switch
+  } // end for effects loop
+
+  return log;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: pay ward cost
+// ---------------------------------------------------------------------------
+
+export function _payWardCost(creature, controller, state, log) {
+  const gameState = state;
+  if (!Cards.hasKeyword(creature, 'Ward')) return true;
+
+  const wardCostMatch = (creature.oracle_text || '').match(/ward[\s—]+\{?(\d+)\}?/i);
+  if (!wardCostMatch) return true; // Ward without a cost — assume free
+
+  const wardCost = parseInt(wardCostMatch[1]) || 0;
+  if (wardCost === 0) return true;
+
+  if (gameState.manaPool && gameState.manaPool[controller]) {
+    const pool = gameState.manaPool[controller];
+    const totalMana = Object.values(pool).reduce((sum, v) => sum + v, 0);
+    if (totalMana >= wardCost) {
+      // Pay from pool
+      let remaining = wardCost;
+      for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+        const paid = Math.min(pool[color] || 0, remaining);
+        pool[color] = (pool[color] || 0) - paid;
+        remaining -= paid;
+        if (remaining === 0) break;
+      }
+      log.push(`Ward ${wardCost} pago.`);
+      return true;
+    }
+  }
+
+  // Cannot pay ward — spell is countered
+  log.push(`Ward ${wardCost}: nao pode pagar — feitico e anulado.`);
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: AI mode selection for modal spells
+// ---------------------------------------------------------------------------
+
+export function _aiChooseModes(modes, chooseCount, state, controller, opponent, targets) {
+  const gameState = state;
+  // Score each mode and pick the best N
+  const scored = modes.map((mode, idx) => {
+    let score = 0;
+    const effects = Array.isArray(mode) ? mode : [mode];
+    for (const eff of effects) {
+      switch (eff.type) {
+        case 'damage': score += (eff.amount || 0) * 2; break;
+        case 'draw': score += (eff.amount || 0) * 3; break;
+        case 'gainLife': score += (eff.amount || 0); break;
+        case 'destroy': score += 8; break;
+        case 'exile': score += 9; break;
+        case 'counter': score += 7; break;
+        case 'bounce': score += 5; break;
+        case 'buff': score += (eff.power || 0) + (eff.toughness || 0); break;
+        case 'create_token': score += (eff.count || 1) * 3; break;
+        case 'ramp': score += 6; break;
+        default: score += 2;
+      }
+    }
+    return { mode: effects, score, idx };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, chooseCount).map(s => s.mode);
+}
+
+// --- CONTINUES IN stack-part2.ts ---

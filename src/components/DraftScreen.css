@@ -1,0 +1,410 @@
+/* ============================================
+   Draft Screen
+   ============================================ */
+
+.draft-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+/* ── Loading / Error ─────────────────────────── */
+
+.draft-loading,
+.draft-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  color: var(--text-secondary);
+}
+
+.draft-error h2 { color: var(--danger); }
+
+.draft-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--glass-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Top Bar ─────────────────────────────────── */
+
+.draft-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+  gap: 16px;
+}
+
+.draft-progress-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.draft-round {
+  font-weight: 700;
+  color: var(--gold);
+  font-size: 14px;
+}
+
+.draft-pick {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.draft-progress-bar {
+  width: 140px;
+  height: 6px;
+  background: var(--glass-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.draft-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.draft-progress-pct {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.draft-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-muted {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+}
+
+.btn-muted:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+
+/* ── Body Layout ─────────────────────────────── */
+
+.draft-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+/* ── Pack Area ───────────────────────────────── */
+
+.draft-pack-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--glass-border) transparent;
+}
+
+.draft-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+
+.draft-pack-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.draft-pack-card {
+  position: relative;
+  cursor: pointer;
+  border-radius: var(--border-radius);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.draft-pack-card:hover {
+  transform: translateY(-4px) scale(1.03);
+  z-index: 2;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+
+.draft-pack-card.selected {
+  transform: translateY(-6px) scale(1.05);
+  z-index: 3;
+  box-shadow: 0 0 0 3px var(--gold), 0 8px 32px rgba(0,0,0,0.6);
+}
+
+.draft-rarity-dot {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.5);
+}
+
+.draft-rarity-dot.rarity-common  { background: var(--rarity-common); }
+.draft-rarity-dot.rarity-uncommon{ background: var(--rarity-uncommon); }
+.draft-rarity-dot.rarity-rare    { background: var(--rarity-rare); }
+.draft-rarity-dot.rarity-mythic  { background: var(--rarity-mythic); }
+
+/* ── Pool Sidebar ────────────────────────────── */
+
+.draft-pool-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--glass-border);
+  overflow: hidden;
+}
+
+.draft-pool-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+
+.draft-pool-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.draft-pool-tab {
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  color: var(--text-muted);
+  padding: 3px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.draft-pool-tab:hover { background: rgba(255,255,255,0.06); }
+.draft-pool-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+.draft-pool-empty {
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.draft-pool-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--glass-border) transparent;
+}
+
+.draft-pool-group {
+  margin-bottom: 8px;
+}
+
+.draft-pool-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: rgba(255,255,255,0.03);
+}
+
+.draft-pool-cards { padding: 2px 0; }
+
+.draft-pool-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 14px;
+  cursor: default;
+  transition: background 0.1s;
+  font-size: 12px;
+}
+
+.draft-pool-item:hover { background: rgba(255,255,255,0.04); }
+
+.draft-pool-cmc {
+  width: 16px;
+  height: 16px;
+  background: var(--bg-glass);
+  border: 1px solid var(--glass-border);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.draft-pool-name {
+  flex: 1;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.draft-pool-rarity {
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.draft-pool-rarity.rarity-common   { color: var(--rarity-common); }
+.draft-pool-rarity.rarity-uncommon { color: var(--rarity-uncommon); }
+.draft-pool-rarity.rarity-rare     { color: var(--rarity-rare); }
+.draft-pool-rarity.rarity-mythic   { color: var(--rarity-mythic); }
+
+/* ── Mana icons ──────────────────────────────── */
+
+.mana-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mana-W { background: var(--mana-W); border: 1px solid #ccc; }
+.mana-U { background: var(--mana-U); }
+.mana-B { background: #555; }
+.mana-R { background: var(--mana-R); }
+.mana-G { background: var(--mana-G); }
+.mana-M { background: linear-gradient(135deg, var(--mana-R), var(--mana-U)); }
+.mana-C { background: #888; }
+
+/* ── Hover Tooltip ───────────────────────────── */
+
+.draft-card-tooltip {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 220px;
+}
+
+.draft-tooltip-img {
+  width: 220px;
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+}
+
+.draft-tooltip-info {
+  background: var(--bg-glass);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius);
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.draft-tooltip-name {
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.draft-tooltip-type {
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  font-style: italic;
+}
+
+.draft-tooltip-text {
+  color: var(--text-primary);
+  white-space: pre-line;
+}
+
+/* ── Finished Screen ─────────────────────────── */
+
+.draft-finished {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.draft-finished-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.draft-finished-title h2 {
+  font-size: 22px;
+  color: var(--gold);
+  margin: 0 0 2px 0;
+}
+
+.draft-finished-title p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0;
+}
+
+.draft-finished-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.draft-finished-pool-grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  align-content: start;
+}
+
+.draft-finished-pool-card {
+  cursor: default;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: transform 0.12s ease;
+}
+
+.draft-finished-pool-card:hover {
+  transform: translateY(-4px) scale(1.04);
+  z-index: 5;
+  position: relative;
+}

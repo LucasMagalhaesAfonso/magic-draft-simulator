@@ -5584,6 +5584,7 @@ export function _applyStaticOnETB(state, card, playerId) {
         case 'double_damage':
           card._doubleDamage = s.target || 'creatures_entered_this_turn';
           break;
+        case 'anthem': // fallthrough — same as buff_all (anthem targets own_creatures)
         case 'buff_all': {
           // Anthem-like static: buff all matching creatures
           // Check condition first

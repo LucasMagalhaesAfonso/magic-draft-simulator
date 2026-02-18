@@ -734,7 +734,7 @@ export function parseSpellEffects(card: GameCard): Effect[] {
     if (target === 'each creature you control') {
       effects.push({ type: 'counter_all', counter: '+1/+1', amount } as any);
     } else {
-      effects.push({ type: 'counters', counter: '+1/+1', amount, target: 'creature' } as any);
+      effects.push({ type: 'counter', counter: '+1/+1', amount, target: 'creature' } as any);
     }
   }
 
@@ -742,7 +742,7 @@ export function parseSpellEffects(card: GameCard): Effect[] {
   const negCounterMatch = text.match(/put (?:a |(\w+) )?(-1\/-1) counters? on (target creature)/);
   if (negCounterMatch) {
     effects.push({
-      type: 'counters',
+      type: 'counter',
       counter: '-1/-1',
       amount: negCounterMatch[1] ? (wordToNum(negCounterMatch[1]) || parseInt(negCounterMatch[1]) || 1) : 1,
       target: 'creature',
@@ -943,7 +943,7 @@ export function parseETBEffects(card: GameCard): Effect[] {
     if (counterTargetMatch[2] === 'each creature you control') {
       effects.push({ type: 'counter_all', counter: '+1/+1', amount } as any);
     } else {
-      effects.push({ type: 'counters', counter: '+1/+1', amount, target: 'creature' } as any);
+      effects.push({ type: 'counter', counter: '+1/+1', amount, target: 'creature' } as any);
     }
   }
 

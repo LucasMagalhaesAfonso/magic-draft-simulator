@@ -58,12 +58,14 @@ export function DeckBuilderScreen() {
   }
 
   function moveToMain(card: Card) {
-    setSideboard(prev => prev.filter(c => c.id !== card.id));
+    // Remove only the FIRST matching card (not all copies with same id)
+    setSideboard(prev => { const i = prev.findIndex(c => c.id === card.id); return i === -1 ? prev : [...prev.slice(0, i), ...prev.slice(i + 1)]; });
     setMainboard(prev => [...prev, card]);
   }
 
   function moveToSide(card: Card) {
-    setMainboard(prev => prev.filter(c => c.id !== card.id));
+    // Remove only the FIRST matching card (not all copies with same id)
+    setMainboard(prev => { const i = prev.findIndex(c => c.id === card.id); return i === -1 ? prev : [...prev.slice(0, i), ...prev.slice(i + 1)]; });
     setSideboard(prev => [...prev, card]);
   }
 

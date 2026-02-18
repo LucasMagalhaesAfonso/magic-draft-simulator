@@ -1,6 +1,5 @@
 // combat.ts — Combat system for resolving MTG combat phases
 // Ported from legacy combat.js (CombatSystem object → named exports)
-// No VFX or UI code — pure game logic only
 
 import type { GameCard, EngineGameState, EnginePlayer } from './engine-types';
 import {
@@ -11,6 +10,7 @@ import {
   canAttack,
   canBlock,
 } from './card-utils';
+import { vfxPlay } from './vfx-bridge';
 
 // ============================================
 // Combat State Interface
@@ -357,7 +357,6 @@ export function resolveDamagePhase(
   isFirstStrike: boolean
 ): string[] {
   const log: string[] = [];
-  // TODO: VFX - staggered element-aware combat animations removed
 
   for (const { uid, card: attacker } of attackers) {
     const blockers = combatState.blockers[uid] || [];
@@ -396,7 +395,7 @@ export function resolveDamagePhase(
             `${attacker.name} ataca e causa ${dmg} de dano. (Vida: ${defendingPlayer.life})`
           );
 
-          // TODO: VFX - elementAttackPlayer removed
+          vfxPlay('playerDamage', 'p' + defendingPlayer.id);
 
           // Lifelink
           if (hasKeyword(attacker, 'Lifelink')) {
@@ -404,7 +403,7 @@ export function resolveDamagePhase(
             log.push(
               `${attacker.name} tem lifelink. +${dmg} vida. (Vida: ${attackingPlayer.life})`
             );
-            // TODO: VFX - heal animation removed
+            vfxPlay('heal', 'p' + attackingPlayer.id);
           }
 
           // Fire combat_damage_player trigger
@@ -468,7 +467,9 @@ export function resolveDamagePhase(
           }
         }
 
-        // TODO: VFX - staggered attacker/blocker element-aware animations removed
+        // VFX: show damage on both creatures
+        vfxPlay('damage', blocker._uid);
+        if (blockerPower > 0) vfxPlay('damage', uid);
 
         log.push(
           `${attacker.name} (${attackPower}/${getToughness(attacker)}) combate com ${blocker.name} (${blockerPower}/${getToughness(blocker)})`
@@ -488,7 +489,7 @@ export function resolveDamagePhase(
           `${attacker.name} tem trample. ${remainingAttackPower} dano ao jogador. (Vida: ${defendingPlayer.life})`
         );
 
-        // TODO: VFX - playerDamage animation removed
+        vfxPlay('playerDamage', 'p' + defendingPlayer.id);
 
         // Trample combat damage trigger
         const trampleLogs = gameState.fireTrigger('combat_damage_player', {

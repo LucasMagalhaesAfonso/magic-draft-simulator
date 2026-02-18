@@ -1,5 +1,5 @@
 import type { CardRow } from './types';
-import { bulkInsertCards, getDb } from './database';
+import { bulkInsertCards, setPref } from './database';
 
 const SCRYFALL_BULK_URL = 'https://api.scryfall.com/bulk-data';
 const BATCH_SIZE = 500;
@@ -150,11 +150,7 @@ export async function syncAllCards(
     }
 
     // Store sync timestamp
-    const database = await getDb();
-    await database.execute(
-      `INSERT OR REPLACE INTO user_prefs (key, value) VALUES ('last_sync', $1)`,
-      [new Date().toISOString()]
-    );
+    await setPref('last_sync', new Date().toISOString());
 
     onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `Done! ${rows.length} cards imported.` });
 

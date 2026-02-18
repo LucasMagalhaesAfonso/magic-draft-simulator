@@ -740,6 +740,13 @@ export function _checkEffectCondition(state, controllerId, effect) {
         }
         return counterTypes.size >= 3;
       }
+      case 'if_library_empty':
+        // Stillness in Motion: only return cards if library is empty
+        return state.players[controllerId].zones.library.count() === 0;
+      case 'if_no_draw':
+        // Trade Route Envoy: get counter if the draw condition (control_creature_with_counter) wasn't met
+        return !bf.some(c => CardEngine.isCreature(c) && c._counters &&
+          Object.values(c._counters).some((count: any) => count > 0));
       default:
         return true; // Unknown condition - allow (fail open)
     }
@@ -3489,6 +3496,18 @@ export function resolveBuffChoice(state, creatureUid) {
     state.waitingForInput = null;
   }
 
+export function resolveDistributeCounters(state, creatureUid) {
+    if (!state._pendingDistribute) return;
+    const { amount, counter, controller } = state._pendingDistribute;
+    const creature = state.players[controller].zones.battlefield.get(creatureUid);
+    if (!creature || !CardEngine.isCreature(creature)) return;
+    if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
+    creature._counters[counter] = (creature._counters[counter] || 0) + amount;
+    state.log.push(`${creature.name} recebe ${amount} contador(es) ${counter}.`);
+    state._pendingDistribute = null;
+    state.waitingForInput = null;
+  }
+
 export function resolveMultiBuffChoice(state) {
     if (!state._pendingMultiBuffChoice) return;
 
@@ -4415,6 +4434,23 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       return { success: false, msg: 'Carta nao encontrada.' };
     }
     console.log(`[CAST_SPELL] Card found: ${card.name}`);
+
+    // Auto-target for counter spells: if no explicit target and there's a spell on the stack, target it
+    if (!targets || targets.length === 0) {
+      const spellFx = CardEngine.getSpellEffects(card);
+      const isCounter = spellFx.some((e: any) => e.type === 'counter_spell');
+      if (isCounter) {
+        // Target the pending stack spell (cast by opponent) if available
+        if (state._pendingCastOnStack && state._pendingCastOnStack.card) {
+          targets = [state._pendingCastOnStack.card];
+        } else if (state.stack && state.stack.items.length > 0) {
+          // Fallback: target top of stack belonging to opponent
+          const opId = playerId === 0 ? 1 : 0;
+          const oppItem = state.stack.items.slice().reverse().find((it: any) => it.controller === opId);
+          if (oppItem) targets = [oppItem.card];
+        }
+      }
+    }
 
     // Detect evoke casting from card flag or parameter
     const isEvoke = castingEvoke || card._castingEvoke;
@@ -5649,6 +5685,8 @@ export function _endOfTurnCleanup(state) {
           if (c._damagedThisTurn) delete c._damagedThisTurn;
           // Clear "entered this turn" tracking (for Neriv double damage, etc.)
           if (c._enteredThisTurn) delete c._enteredThisTurn;
+          // Clear exile-on-death mark (for Narset's Rebuke, etc.)
+          if (c._exileOnDeath) delete c._exileOnDeath;
           // Revert mass_clone copies
           if (c._copyingUntilEOT && c._originalCard) {
             c.name = c._originalCard.name;
@@ -6107,12 +6145,20 @@ export function creatureDies(state, card, ownerId) {
     }
 
     // Move to graveyard (tokens just disappear)
+    // Finality counter or mark_exile_on_death: exile instead of going to graveyard
+    const hasFinality = card._finalityCounter || (card._counters && card._counters['finality']);
     if (!card._isToken) {
-      state.players[ownerId].zones.graveyard.add(card);
+      if (hasFinality || card._exileOnDeath) {
+        state.players[ownerId].zones.exile.add(card);
+        state.log.push(`${card.name} e exilado (${hasFinality ? 'finality counter' : 'exile on death'}).`);
+      } else {
+        state.players[ownerId].zones.graveyard.add(card);
+      }
     }
 
     // Persist: if creature had persist and no -1/-1 counters, return with a -1/-1 counter
-    if (CardEngine.hasKeyword(card, 'Persist') && !card._isToken) {
+    // (Persist doesn't apply if creature was exiled instead of going to graveyard)
+    if (CardEngine.hasKeyword(card, 'Persist') && !card._isToken && !hasFinality && !card._exileOnDeath) {
       const had = card._counters && card._counters['-1/-1'] > 0;
       if (!had) {
         // Remove from graveyard, return to battlefield with -1/-1 counter

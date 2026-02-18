@@ -7,6 +7,7 @@ import * as CardUtils from './card-utils';
 import * as GameState from './game-state';
 import * as GameAI from './game-ai';
 import * as StackPart2 from './stack-part2';
+import { vfxPlay } from './vfx-bridge';
 
 // Legacy name aliases
 const CardEngine = { ...Cards, ...CardUtils };
@@ -173,7 +174,7 @@ export function _resolveItem(item, state) {
                   continue;
                 }
                 if (!_payWardCost(creature, controller, gameState, log)) continue;
-                // TODO: VFX
+                vfxPlay('damage', creature._uid);
                 creature._damage += dividedDmg;
                 creature._damagedThisTurn = true;
                 log.push(`${creature.name} recebe ${dividedDmg} dano.`);
@@ -184,7 +185,7 @@ export function _resolveItem(item, state) {
               if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
               gameState._damageDealtThisTurn[target.player] = (gameState._damageDealtThisTurn[target.player] || 0) + dividedDmg;
               log.push(`${dividedDmg} dano ao jogador ${target.player}. (Vida: ${gameState.players[target.player].life})`);
-              // TODO: VFX
+              vfxPlay('playerDamage', 'p' + target.player);
             }
           }
           // Lifelink for total damage dealt
@@ -192,7 +193,7 @@ export function _resolveItem(item, state) {
             const totalDmg = targets.reduce((sum, t) => sum + (t.dividedAmount || 0), 0);
             gameState.players[controller].life += totalDmg;
             log.push(`Lifelink: +${totalDmg} vida.`);
-            // TODO: VFX
+            vfxPlay('heal', 'p' + controller);
           }
         } else if (effect.target === 'opponent' || effect.target === 'player') {
           gameState.players[opponent].life -= dmgAmt;
@@ -200,12 +201,12 @@ export function _resolveItem(item, state) {
           if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
           gameState._damageDealtThisTurn[opponent] = (gameState._damageDealtThisTurn[opponent] || 0) + dmgAmt;
           log.push(`${dmgAmt} dano ao oponente. (Vida: ${gameState.players[opponent].life})`);
-          // TODO: VFX
+          vfxPlay('playerDamage', 'p' + opponent);
           // Lifelink on spell damage from source creature
           if (card && Cards.isCreature(card) && Cards.hasLifelink(card)) {
             gameState.players[controller].life += dmgAmt;
             log.push(`Lifelink: +${dmgAmt} vida.`);
-            // TODO: VFX
+            vfxPlay('heal', 'p' + controller);
           }
         } else if (targets && targets.length > 0) {
           const target = targets[0];
@@ -219,7 +220,7 @@ export function _resolveItem(item, state) {
                 break;
               }
               if (!_payWardCost(creature, controller, gameState, log)) break;
-              // TODO: VFX
+              vfxPlay('damage', creature._uid);
               creature._damage += dmgAmt;
               // Mark creature as damaged this turn (for Unsparing Boltcaster, etc.)
               creature._damagedThisTurn = true;
@@ -273,7 +274,7 @@ export function _resolveItem(item, state) {
               const bf = gameState.players[target.player].zones.battlefield;
               const creature = bf.get(target.uid);
               if (creature && Cards.canBeTargeted(creature, controller)) {
-                // TODO: VFX
+                vfxPlay('damage', creature._uid);
                 creature._damage += dmg;
                 if (creature._damage >= Cards.getToughness(creature)) {
                   GameState.creatureDies(gameState, creature, target.player);
@@ -285,7 +286,7 @@ export function _resolveItem(item, state) {
             } else if (target.type === 'player') {
               gameState.players[target.player].life -= dmg;
               log.push(`${dmg} dano ao ${target.player === 0 ? 'jogador' : 'oponente'}. (Vida: ${gameState.players[target.player].life})`);
-              // TODO: VFX
+              vfxPlay('playerDamage', 'p' + target.player);
             }
           });
         }
@@ -301,7 +302,7 @@ export function _resolveItem(item, state) {
           // Mode 1: Targeted sacrifice (e.g., Liliana forcing opponent to sac)
           const target = targets[0];
           GameState.sacrifice(gameState, target.uid, target.player);
-          // TODO: VFX
+          vfxPlay('death', target.uid);
           log.push(`Permanente sacrificada.`);
         } else {
           // Mode 2: Controller sacrifices their own permanent
@@ -386,7 +387,7 @@ export function _resolveItem(item, state) {
               GameState._unregisterCardTriggers(gameState, permanent._uid);
               gameState.players[target.player].zones.graveyard.add(permanent);
               log.push(`${permanent.name} e destruido.`);
-              // TODO: VFX
+              vfxPlay('destroy', permanent._uid);
             }
           }
         }
@@ -498,7 +499,7 @@ export function _resolveItem(item, state) {
               break;
             }
             // Exile bypasses indestructible
-            // TODO: VFX
+            vfxPlay('exile', permanent._uid);
             bf.remove(permanent._uid);
             GameState._unregisterCardTriggers(gameState, permanent._uid);
             // Fire leaves_battlefield for creatures
@@ -558,7 +559,7 @@ export function _resolveItem(item, state) {
               log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
               break;
             }
-            // TODO: VFX
+            vfxPlay('bounce', permanent._uid);
 
             // If aura, remove effects from enchanted creature
             if (Cards.isAura(permanent) && permanent._attachedTo) {
@@ -601,7 +602,7 @@ export function _resolveItem(item, state) {
               log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
               break;
             }
-            // TODO: VFX
+            vfxPlay('bounce', permanent._uid);
 
             // Remove from battlefield
             bf.remove(permanent._uid);
@@ -639,7 +640,7 @@ export function _resolveItem(item, state) {
           gameState.players[oppId].life -= dmgAmt;
           if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
           gameState._damageDealtThisTurn[oppId] = (gameState._damageDealtThisTurn[oppId] || 0) + dmgAmt;
-          // TODO: VFX
+          vfxPlay('playerDamage', 'p' + oppId);
         }
         log.push(`${dmgAmt} dano a cada oponente.`);
         // Lifelink check (if source creature has lifelink)
@@ -647,7 +648,7 @@ export function _resolveItem(item, state) {
           const totalDamage = dmgAmt * opponents.length;
           gameState.players[controller].life += totalDamage;
           log.push(`Lifelink: +${totalDamage} vida.`);
-          // TODO: VFX
+          vfxPlay('heal', 'p' + controller);
         }
         break;
       }
@@ -708,21 +709,22 @@ export function _resolveItem(item, state) {
             }
           }
         }
-        // TODO: VFX
         break;
       }
 
+      case 'gain_life': // alias legacy
       case 'gainLife': {
         const gainAmt = resolveAmount(effect.amount);
         gameState.players[controller].life += gainAmt;
         log.push(`+${gainAmt} vida. (Vida: ${gameState.players[controller].life})`);
-        // TODO: VFX
+        vfxPlay('heal', 'p' + controller);
         // Fire gain_life triggers
         const gainLogs = GameState.fireTrigger(gameState, 'gain_life', { playerId: controller });
         log.push(...gainLogs);
         break;
       }
 
+      case 'lose_life': // alias legacy
       case 'loseLife': {
         // loseLife is a drawback/cost — defaults to controller (self-harm)
         const loseLifeTarget = (effect.target === 'opponent' || effect.target === 'each_opponent') ? opponent : controller;
@@ -740,7 +742,7 @@ export function _resolveItem(item, state) {
           const halfLife = Math.ceil(currentLife / 2); // Rounded up
           gameState.players[oppId].life -= halfLife;
           log.push(`Oponente perde metade da vida (${halfLife}). (Vida: ${gameState.players[oppId].life})`);
-          // TODO: VFX
+          vfxPlay('playerDamage', 'p' + oppId);
         }
         break;
       }
@@ -837,7 +839,7 @@ export function _resolveItem(item, state) {
         }
         if (top.length === 0) break;
 
-        // TODO: VFX (library glow scry)
+        vfxPlay('spellCast');
 
         if (gameState.players[controller].isHuman) {
           gameState._pendingScry = {
@@ -879,7 +881,7 @@ export function _resolveItem(item, state) {
         }
         if (top.length === 0) break;
 
-        // TODO: VFX (library glow surveil)
+        vfxPlay('spellCast');
 
         if (gameState.players[controller].isHuman) {
           gameState._pendingScry = {
@@ -949,7 +951,7 @@ export function _resolveItem(item, state) {
         if (milled.length > 0) {
           const who = targetPlayer === 0 ? 'Voce' : 'Oponente';
           log.push(`${who} coloca ${milled.length} carta(s) no cemiterio: ${milled.slice(0, 3).join(', ')}${milled.length > 3 ? '...' : ''}`);
-          // TODO: VFX
+          vfxPlay('mill', 'p' + targetPlayer);
         }
         break;
       }
@@ -1197,6 +1199,7 @@ export function _resolveItem(item, state) {
         break;
       }
 
+      case 'counters': // alias gerado pelo parser de cards.ts
       case 'counter': {
         // Check if this is countering a spell (anulação) vs adding counters to creature
         if (effect.target === 'spell' || effect.target === 'creature_spell' || effect.target === 'noncreature_spell') {
@@ -1294,7 +1297,23 @@ export function _resolveItem(item, state) {
         if (self) {
           if (!self._counters) self._counters = { '+1/+1': 0, '-1/-1': 0 };
           self._counters[effect.counter] = (self._counters[effect.counter] || 0) + effect.amount;
+          // Finality counter: also set flag so creatureDies can exile instead of going to GY
+          if (effect.counter === 'finality') self._finalityCounter = true;
           log.push(`${self.name} entra com ${effect.amount} ${effect.counter} counter(s).`);
+        }
+        break;
+      }
+
+      case 'mark_exile_on_death': {
+        // Replacement effect: if target creature would die this turn, exile it instead
+        const target = (targets || [])[0];
+        if (target && target.type === 'creature') {
+          const bf = gameState.players[target.player].zones.battlefield;
+          const targetCard = bf.get(target.uid);
+          if (targetCard) {
+            targetCard._exileOnDeath = true;
+            log.push(`${targetCard.name}: se morrer este turno, sera exilado.`);
+          }
         }
         break;
       }
@@ -1441,7 +1460,7 @@ export function _resolveItem(item, state) {
                     )[0];
                     if (bestTarget && Cards.canBeTargeted(bestTarget, controller)) {
                       bestTarget._damage = (bestTarget._damage || 0) + bonusEffect.amount;
-                      // TODO: VFX
+                      vfxPlay('damage', bestTarget._uid);
                       if (bestTarget._damage >= Cards.getToughness(bestTarget)) {
                         GameState.creatureDies(gameState, bestTarget, 1 - controller);
                         log.push(`Glacial Dragonhunt causa ${bonusEffect.amount} dano em ${bestTarget.name} - morre!`);

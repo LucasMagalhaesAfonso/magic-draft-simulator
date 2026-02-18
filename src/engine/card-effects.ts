@@ -799,7 +799,8 @@ export const CardEffectsDB: Record<string, any> = {
       { type: "damage", amount: 5, target: "creature" },
       { type: "add_mana", color: "U" },
       { type: "add_mana", color: "R" },
-      { type: "add_mana", color: "W" }
+      { type: "add_mana", color: "W" },
+      { type: "mark_exile_on_death", target: "creature" }
     ]
   },
 

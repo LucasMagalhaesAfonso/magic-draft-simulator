@@ -80,10 +80,9 @@
 .game-opp-bf,
 .game-my-bf {
   display: flex;
-  flex-wrap: wrap;
-  align-content: center;
-  gap: 6px;
-  padding: 8px 12px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--glass-border) transparent;
@@ -93,7 +92,6 @@
 .game-opp-bf {
   background: rgba(231, 76, 60, 0.04);
   border-bottom: 1px solid var(--glass-border);
-  align-content: flex-start;
 }
 
 .game-my-bf {
@@ -102,6 +100,25 @@
   background-size: cover;
   background-position: center;
   transition: background 0.4s ease;
+}
+
+/* ── Battlefield rows: creatures top, lands bottom ── */
+.bf-creatures-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  flex: 1;
+}
+
+.bf-lands-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  padding-top: 4px;
 }
 
 /* ── Playmats ── */

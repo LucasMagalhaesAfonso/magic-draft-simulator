@@ -277,6 +277,61 @@ export function _chooseTargets(state, playerId, card) {
 
   for (const effect of effects) {
     switch (effect.type) {
+      case 'counter_spell': {
+        // Target the most threatening opponent spell on the stack
+        const oppItems = state.stack.items.filter((item: any) => item.controller === opponentId);
+        if (oppItems.length > 0) {
+          const targetItem = oppItems[oppItems.length - 1];
+          targets.push(targetItem.card); // handleCounterSpell expects the card object directly
+        } else if (state._pendingCastOnStack && state._pendingCastOnStack.playerId === opponentId) {
+          targets.push(state._pendingCastOnStack.card);
+        }
+        break;
+      }
+
+      case 'become_copy': {
+        // Pick the best creature on the battlefield to copy (prefer opponent's threats)
+        const allCreatures = [
+          ...state.players[opponentId].zones.battlefield.cards
+            .filter((c: any) => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId)),
+          ...state.players[playerId].zones.battlefield.cards
+            .filter((c: any) => CardEngine.isCreature(c) && c._uid !== card._uid),
+        ];
+        if (allCreatures.length > 0) {
+          allCreatures.sort((a: any, b: any) => _threatScore(b) - _threatScore(a));
+          const best = allCreatures[0];
+          const owner = state.players[opponentId].zones.battlefield.cards.includes(best) ? opponentId : playerId;
+          targets.push({ type: 'creature', player: owner, uid: best._uid });
+        }
+        break;
+      }
+
+      case 'mass_clone': {
+        // Pick the best creature to use as the clone template
+        const allBf = [
+          ...state.players[opponentId].zones.battlefield.cards.filter((c: any) => CardEngine.isCreature(c)),
+          ...state.players[playerId].zones.battlefield.cards.filter((c: any) => CardEngine.isCreature(c) && c._uid !== card._uid),
+        ];
+        if (allBf.length > 0) {
+          allBf.sort((a: any, b: any) => _threatScore(b) - _threatScore(a));
+          const best = allBf[0];
+          const owner = state.players[opponentId].zones.battlefield.cards.includes(best) ? opponentId : playerId;
+          targets.push({ type: 'creature', player: owner, uid: best._uid });
+        }
+        break;
+      }
+
+      case 'threaten': {
+        // Target best opponent creature to steal (prefer biggest power, not hexproof)
+        const oppCreatures = state.players[opponentId].zones.battlefield.cards
+          .filter((c: any) => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId));
+        if (oppCreatures.length > 0) {
+          oppCreatures.sort((a: any, b: any) => _threatScore(b) - _threatScore(a));
+          targets.push({ type: 'creature', player: opponentId, uid: oppCreatures[0]._uid });
+        }
+        break;
+      }
+
       case 'damage': {
         if (effect.target === 'attacking_or_blocking_creature') {
           // Only target creatures currently in combat

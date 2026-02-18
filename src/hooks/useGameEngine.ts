@@ -3,6 +3,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Card } from '../lib/types';
+import { VfxManager } from '../components/game/VfxLayer';
+import { setVfxBridge } from '../engine/vfx-bridge';
+
+// ── Register VFX bridge so engine can trigger animations ──────────────────
+setVfxBridge((type, targetUid) => VfxManager.play(type as any, targetUid));
 
 // ── Lazy import helpers (avoid circular deps) ──────────────────────────────
 
@@ -145,6 +150,9 @@ export interface GameActions {
   unassignBlocker(blockerUid: string): void;
   confirmBlockers(): void;
 
+  // Equipment
+  equipCreature(equipmentUid: string, creatureUid: string): void;
+
   // Activated abilities
   activateLoyaltyAbility(cardUid: string, abilityIdx: number): void;
   activateCycling(cardUid: string): void;
@@ -158,6 +166,7 @@ export interface GameActions {
   resolveMillLand(choice: string): void;
   resolveBlight(creatureUid: string): void;
   resolveBuffChoiceAction(creatureUid: string): void;
+  resolveDistributeCountersAction(creatureUid: string): void;
   resolveHandExile(cardUid: string): void;
   resolveTriggerCostAction(choice: string): void;
   resolveUnlessPayAction(shouldPay: boolean): void;
@@ -723,6 +732,17 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[activateHideaway]', e); }
     },
 
+    // ── Equipment ────────────────────────────────────────────────────────────
+
+    equipCreature(equipmentUid: string, creatureUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.equipCreature(gs, 0, equipmentUid, creatureUid);
+        refresh();
+      } catch (e) { console.warn('[equipCreature]', e); }
+    },
+
     // ── Simple resolve functions ────────────────────────────────────────────
 
     resolveManaColor(color: string) {
@@ -783,6 +803,17 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const ap = gs.activePlayer;
         if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveBuffChoiceAction] error:', e); }
+    },
+
+    resolveDistributeCountersAction(creatureUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveDistributeCounters(gs, creatureUid);
+        refresh();
+        const ap = gs.activePlayer;
+        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
+      } catch (e) { console.warn('[resolveDistributeCounters] error:', e); }
     },
 
     resolveHandExile(cardUid: string) {

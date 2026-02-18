@@ -108,6 +108,8 @@ export function GameScreen() {
   const [blockingWith, setBlockingWith] = useState<string | null>(null);
   // Ability modal: double-click on creature/planeswalker
   const [abilityModal, setAbilityModal] = useState<{ card: any; abilities: any[] } | null>(null);
+  // Equipment modal: double-click on equipment to pick which creature to attach
+  const [equipModal, setEquipModal] = useState<{ equipUid: string; equipName: string } | null>(null);
   // Adventure modal: choose between casting as creature or adventure/omen
   const [adventureModal, setAdventureModal] = useState<{ card: any } | null>(null);
   // London mulligan: phase 2 - selecting cards to put on bottom
@@ -341,7 +343,9 @@ export function GameScreen() {
     }
     return text.includes('target creature') || text.includes('target player') ||
            text.includes('target opponent') || text.includes('target permanent') ||
-           text.includes('target land');
+           text.includes('target land') || text.includes('target artifact') ||
+           text.includes('target enchantment') || text.includes('target planeswalker') ||
+           text.includes('target nonland') || text.includes('any target');
   }
 
   // Build valid targets for current targeting spell
@@ -350,23 +354,53 @@ export function GameScreen() {
     const text = (card?.oracle_text || '').toLowerCase();
     const targets: any[] = [];
 
-    const wantsCreature = text.includes('target creature') || text.includes('target permanent');
+    const wantsCreature = text.includes('target creature') || text.includes('target permanent') || text.includes('target nonland');
     const wantsPlayer = text.includes('target player') || text.includes('target opponent') || text.includes('deals') || text.includes('damage');
     const wantsEnemy = text.includes('target opponent') || (text.includes('destroy') && text.includes('target'));
     const wantsAny = text.includes('target creature or player') || text.includes('any target');
+    const wantsPlaneswalker = text.includes('planeswalker');
+    const wantsArtifact = text.includes('target artifact') || text.includes('target permanent') || text.includes('target nonland') || wantsAny;
+    const wantsEnchantment = text.includes('target enchantment') || text.includes('target permanent') || text.includes('target nonland') || wantsAny;
 
     // Add creatures
     if (wantsCreature || wantsAny || wantsEnemy) {
-      // Enemy creatures
       snap.players[1].battlefield
         .filter((c: any) => c.type_line?.includes('Creature'))
         .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: 1, card: c }));
-      // Own creatures (for buffs)
       if (!wantsEnemy) {
         snap.players[0].battlefield
           .filter((c: any) => c.type_line?.includes('Creature'))
           .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: 0, card: c }));
       }
+    }
+    // Add planeswalkers
+    if (wantsPlaneswalker || wantsAny) {
+      snap.players[1].battlefield
+        .filter((c: any) => c.type_line?.includes('Planeswalker'))
+        .forEach((c: any) => targets.push({ type: 'permanent', uid: c._uid, player: 1, card: c }));
+      if (!wantsEnemy) {
+        snap.players[0].battlefield
+          .filter((c: any) => c.type_line?.includes('Planeswalker'))
+          .forEach((c: any) => targets.push({ type: 'permanent', uid: c._uid, player: 0, card: c }));
+      }
+    }
+    // Add artifacts (non-creature)
+    if (wantsArtifact) {
+      [0, 1].forEach(pid => {
+        if (wantsEnemy && pid === 0) return;
+        snap.players[pid].battlefield
+          .filter((c: any) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'))
+          .forEach((c: any) => targets.push({ type: 'permanent', uid: c._uid, player: pid, card: c }));
+      });
+    }
+    // Add enchantments (non-creature)
+    if (wantsEnchantment) {
+      [0, 1].forEach(pid => {
+        if (wantsEnemy && pid === 0) return;
+        snap.players[pid].battlefield
+          .filter((c: any) => c.type_line?.includes('Enchantment') && !c.type_line?.includes('Creature'))
+          .forEach((c: any) => targets.push({ type: 'permanent', uid: c._uid, player: pid, card: c }));
+      });
     }
     // Add players
     if (wantsPlayer || wantsAny) {
@@ -381,12 +415,12 @@ export function GameScreen() {
     if (!snap) return;
     const wi = snap.waitingForInput;
 
-    // ── Targeting mode: clicking a creature to target it ──────────────────
+    // ── Targeting mode: clicking a creature/permanent to target it ──────────
     if (targeting) {
       const t = getValidTargets(targeting.card);
-      const hit = t.find((x: any) => x.type === 'creature' && x.uid === card._uid);
+      const hit = t.find((x: any) => (x.type === 'creature' || x.type === 'permanent') && x.uid === card._uid);
       if (hit) {
-        const tgt = [{ type: 'creature', uid: card._uid, player: hit.player }];
+        const tgt = [{ type: hit.type, uid: card._uid, player: hit.player }];
         if (targeting.card._isAdventure) {
           actions.castAdventure(targeting.cardUid, tgt);
         } else {
@@ -433,8 +467,9 @@ export function GameScreen() {
 
     const phase = snap.phase;
     const isInstantPriority = wi?.type === 'instant_priority' && wi.playerId === 0;
+    const isStackPriority = wi?.type === 'stack_priority' && wi.playerId === 0;
     const isMainPhase = phase === 'main1' || phase === 'main2';
-    const canPlaySpells = isMainPhase || isInstantPriority;
+    const canPlaySpells = isMainPhase || isInstantPriority || isStackPriority;
 
     if (pid !== 0) return; // clicking opp cards handled by targeting/blocking above
 
@@ -450,9 +485,11 @@ export function GameScreen() {
         actions.playLand(card._uid);
         return;
       }
-      // Instants/flash anytime during instant priority, sorceries only in main
+      // Instants/flash anytime during instant/stack priority, sorceries only in main
       if (!canPlaySpells && !isInstant) return;
-      if (!canPlaySpells && !isInstantPriority) return;
+      if (!canPlaySpells && !isInstantPriority && !isStackPriority) return;
+      // During stack priority, only instants/flash cards are allowed
+      if (isStackPriority && !isInstant) return;
 
       // If card has adventure/omen mode (layout='adventure', data in back_face), show choice modal
       if (card.layout === 'adventure' && card.back_face?.name) {
@@ -505,13 +542,19 @@ export function GameScreen() {
     }
   }
 
-  // Handle double-click on battlefield cards → show ability modal
+  // Handle double-click on battlefield cards → show ability modal or equip modal
   function handleDoubleClick(card: any) {
     if (!snap || snap.activePlayer !== 0) return;
     const phase = snap.phase;
     if (phase !== 'main1' && phase !== 'main2') return;
     const gs = gsRef.current;
     if (!gs) return;
+
+    // Equipment: show creature picker to attach to
+    if ((card.type_line || '').includes('Equipment')) {
+      setEquipModal({ equipUid: card._uid, equipName: card.name });
+      return;
+    }
 
     // Dynamically import cards engine to get abilities
     import('../engine/cards').then(({ getActivatedAbilities, getLoyaltyAbilities }) => {
@@ -730,26 +773,32 @@ export function GameScreen() {
           : (() => {
               const nonLands = p1.battlefield.filter((c: any) => !c.type_line?.includes('Land'));
               const lands = p1.battlefield.filter((c: any) => c.type_line?.includes('Land'));
-              return [...nonLands, ...lands].map((card: any) => {
-            const isTargetable = !!(targeting &&
-              getValidTargets(targeting.card).some((t: any) => t.type === 'creature' && t.uid === card._uid));
-            const isBlockingTarget = !!(snap.waitingForInput?.type === 'declare_blockers' &&
-              blockingWith && card._attacking);
-            return (
-              <BattlefieldCard
-                key={card._uid}
-                card={card}
-                isAttacking={combat.attackers.includes(card._uid)}
-                isAttacker={false}
-                isTargetable={isTargetable}
-                isBlockingTarget={isBlockingTarget}
-                overrideArtUrl={getLandArtUrl(card)}
-                onClick={c => handleCardClick(c, 1)}
-                onRightClick={c => setZoom(c)}
-              />
-            );
-          });
-          })()
+              const makeCard = (card: any) => {
+                const isTargetable = !!(targeting &&
+                  getValidTargets(targeting.card).some((t: any) => t.type === 'creature' && t.uid === card._uid));
+                const isBlockingTarget = !!(snap.waitingForInput?.type === 'declare_blockers' &&
+                  blockingWith && card._attacking);
+                return (
+                  <BattlefieldCard
+                    key={card._uid}
+                    card={card}
+                    isAttacking={combat.attackers.includes(card._uid)}
+                    isAttacker={false}
+                    isTargetable={isTargetable}
+                    isBlockingTarget={isBlockingTarget}
+                    overrideArtUrl={getLandArtUrl(card)}
+                    onClick={c => handleCardClick(c, 1)}
+                    onRightClick={c => setZoom(c)}
+                  />
+                );
+              };
+              return (
+                <>
+                  <div className="bf-creatures-row">{nonLands.map(makeCard)}</div>
+                  {lands.length > 0 && <div className="bf-lands-row">{lands.map(makeCard)}</div>}
+                </>
+              );
+            })()
         }
       </div>
 
@@ -861,29 +910,34 @@ export function GameScreen() {
           : (() => {
               const nonLands = p0.battlefield.filter((c: any) => !c.type_line?.includes('Land'));
               const lands = p0.battlefield.filter((c: any) => c.type_line?.includes('Land'));
-              return [...nonLands, ...lands].map((card: any) => {
-            const isTargetable = !!(targeting &&
-              getValidTargets(targeting.card).some((t: any) => t.type === 'creature' && t.uid === card._uid));
-            // card._blocking is set when this creature is declared as a blocker
-            const isAssignedBlocker = !!(card._blocking);
-            const isSelectedBlocker = blockingWith === card._uid;
-            return (
-              <BattlefieldCard
-                key={card._uid}
-                card={card}
-                isAttacking={combat.attackers.includes(card._uid)}
-                isAttacker
-                isTargetable={isTargetable}
-                isAssignedBlocker={isAssignedBlocker}
-                isSelectedBlocker={isSelectedBlocker}
-                overrideArtUrl={getLandArtUrl(card)}
-                onClick={c => handleCardClick(c, 0)}
-                onDoubleClick={c => handleDoubleClick(c)}
-                onRightClick={c => setZoom(c)}
-              />
-            );
-          });
-          })()
+              const makeCard = (card: any) => {
+                const isTargetable = !!(targeting &&
+                  getValidTargets(targeting.card).some((t: any) => t.type === 'creature' && t.uid === card._uid));
+                const isAssignedBlocker = !!(card._blocking);
+                const isSelectedBlocker = blockingWith === card._uid;
+                return (
+                  <BattlefieldCard
+                    key={card._uid}
+                    card={card}
+                    isAttacking={combat.attackers.includes(card._uid)}
+                    isAttacker
+                    isTargetable={isTargetable}
+                    isAssignedBlocker={isAssignedBlocker}
+                    isSelectedBlocker={isSelectedBlocker}
+                    overrideArtUrl={getLandArtUrl(card)}
+                    onClick={c => handleCardClick(c, 0)}
+                    onDoubleClick={c => handleDoubleClick(c)}
+                    onRightClick={c => setZoom(c)}
+                  />
+                );
+              };
+              return (
+                <>
+                  <div className="bf-creatures-row">{nonLands.map(makeCard)}</div>
+                  {lands.length > 0 && <div className="bf-lands-row">{lands.map(makeCard)}</div>}
+                </>
+              );
+            })()
         }
       </div>
 
@@ -1116,6 +1170,21 @@ export function GameScreen() {
                 creatures={candidates}
                 title="⬆ Buff — Choose Creature"
                 onConfirm={uid => uid && actions.resolveBuffChoiceAction(uid)}
+              />
+            );
+          }
+
+          // ── Distribute counters (pick creature to receive all counters) ──
+          case 'distribute_counters': {
+            const pending = gs?._pendingDistribute;
+            const creatures = pending
+              ? snap.players[0].battlefield.filter((c: any) => c.type_line?.includes('Creature'))
+              : [];
+            return (
+              <CreatureChoiceOverlay
+                creatures={creatures}
+                title={`🎯 Distribute — Choose Creature (+${pending?.amount || 0} ${pending?.counter || '+1/+1'})`}
+                onConfirm={uid => uid && actions.resolveDistributeCountersAction(uid)}
               />
             );
           }
@@ -1479,6 +1548,53 @@ export function GameScreen() {
           onClose={() => setAbilityModal(null)}
         />
       )}
+
+      {/* ── Equipment: pick creature to attach to ── */}
+      {equipModal && (() => {
+        const myCreatures = snap.players[0].battlefield.filter(
+          (c: any) => (c.type_line || '').includes('Creature') && !c._tapped
+        );
+        return (
+          <div
+            className="overlay-backdrop"
+            onClick={() => setEquipModal(null)}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000 }}
+          >
+            <div
+              className="glass overlay-panel"
+              style={{ maxWidth: 400, padding: 20 }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 15 }}>
+                ⚔️ Equipar {equipModal.equipName}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                Escolha uma criatura para equipar:
+              </div>
+              {myCreatures.length === 0 ? (
+                <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Nenhuma criatura disponível.</div>
+              ) : (
+                myCreatures.map((c: any) => (
+                  <button
+                    key={c._uid}
+                    className="btn btn-muted"
+                    style={{ display: 'block', width: '100%', marginBottom: 8, textAlign: 'left' }}
+                    onClick={() => {
+                      actions.equipCreature(equipModal.equipUid, c._uid);
+                      setEquipModal(null);
+                    }}
+                  >
+                    {c.name} ({c.power}/{c.toughness})
+                  </button>
+                ))
+              )}
+              <button className="btn" style={{ marginTop: 8 }} onClick={() => setEquipModal(null)}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Adventure / Omen modal ── */}
       {adventureModal && (() => {

@@ -2079,6 +2079,7 @@ export function dispatch(
     case 'grant_harmonize':
       handleGrantHarmonize(state, controller, log);
       return null;
+    case 'stun_counter': // alias legacy
     case 'stun':
       handleStun(state, effect, targets, log);
       return null;
@@ -2157,6 +2158,7 @@ export function dispatch(
     case 'grant_all':
       handleGrantAll(state, effect, controller, log);
       return null;
+    case 'grant_counter': // alias legacy (singular)
     case 'grant_counters':
       handleGrantCounters(state, effect, controller, targets, log);
       return null;

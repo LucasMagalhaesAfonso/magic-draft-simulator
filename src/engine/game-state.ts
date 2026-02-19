@@ -3431,8 +3431,16 @@ export function resolveHandExileChoice(state, cardUid) {
   // Called when human picks a mana color from choose options
 export function resolveManaChoice(state, chosenColor) {
     if (!state._pendingManaChoice) return;
-    const { colors, controllerId } = state._pendingManaChoice;
+    const { colors, controllerId, cardUid, tapLand: shouldTapLand } = state._pendingManaChoice;
     if (!colors.includes(chosenColor)) return;
+
+    // If this was triggered by manually tapping a dual land, mark it as tapped now
+    if (shouldTapLand && cardUid) {
+      const bf = state.players[controllerId].zones.battlefield;
+      const card = bf.get ? bf.get(cardUid) : null;
+      if (card) card._tapped = true;
+    }
+
     state._pendingManaChoice = null;
     state.waitingForInput = null;
     state.manaPool[controllerId][chosenColor] = (state.manaPool[controllerId][chosenColor] || 0) + 1;
@@ -3819,6 +3827,7 @@ export function advancePhase(state) {
     // Top-level call: run iterative loop instead of recursion
     state._processingPhases = true;
     state._continueProcessing = true;
+    let needsRecoveryLoop = false;
     try {
       while (state._continueProcessing && !state.waitingForInput && !state.winner) {
         state._continueProcessing = false;
@@ -3833,17 +3842,36 @@ export function advancePhase(state) {
         if (state.players[ap]?.isHuman) {
           state.waitingForInput = { type: 'main_phase', playerId: ap };
         } else {
-          // AI errored — advance to human's turn to prevent stuck game
+          // AI errored — reset to human's untap step
+          // Note: we can't run the loop here (we're in catch), so flag for recovery
           state.activePlayer = state.activePlayer === 0 ? 1 : 0;
           state.turn++;
           state.phaseIndex = 0;
           state.phase = PHASES[0];
           state.waitingForInput = null;
-          state._continueProcessing = true;
+          state._continueProcessing = false;
+          needsRecoveryLoop = true;
         }
       }
     } finally {
       state._processingPhases = false;
+    }
+
+    // Recovery: if AI error set up a new untap phase, run the processing loop now
+    if (needsRecoveryLoop && !state.waitingForInput && !state.winner) {
+      state._processingPhases = true;
+      state._continueProcessing = true;
+      try {
+        while (state._continueProcessing && !state.waitingForInput && !state.winner) {
+          state._continueProcessing = false;
+          _processPhase(state);
+        }
+      } catch (e2) {
+        console.error('[advancePhase] Recovery loop error:', e2);
+        state.waitingForInput = { type: 'main_phase', playerId: 0 };
+      } finally {
+        state._processingPhases = false;
+      }
     }
   }
 

@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import type { GameActions } from '../../hooks/useGameEngine';
 import { CardImage } from '../card/CardImage';
+import * as CardEngine from '../../engine/cards';
 import './GameOverlays.css';
 
 // ─── Scry / Surveil Overlay ────────────────────────────────────────────────
@@ -191,7 +192,7 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
 
         <div className="gy-grid">
           {cards.map((card: any, i: number) => {
-            const graveyardAbilities = card._graveyardAbilities || [];
+            const graveyardAbilities = CardEngine.getGraveyardAbilities(card);
             return (
               <div
                 key={card._uid || i}
@@ -208,7 +209,7 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
                       className="btn btn-gold btn-sm gy-activate-btn"
                       onClick={() => { onActivate(card._uid, idx); onClose(); }}
                     >
-                      Ativar
+                      {ab.label || 'Ativar'}
                     </button>
                   ))
                 )}
@@ -219,7 +220,7 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
 
         {zoomed && (
           <div className="gy-zoom">
-            <img src={zoomed.image_normal} alt={zoomed.name} className="gy-zoom-img" />
+            <img src={zoomed.image_normal || zoomed.image_small} alt={zoomed.name} className="gy-zoom-img" />
           </div>
         )}
       </div>

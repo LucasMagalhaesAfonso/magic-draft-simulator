@@ -808,9 +808,35 @@ export function GameScreen() {
             }
             // Main phase: lands + affordable spells
             if (isLand) return !landPlayedThisTurn;
-            if ((c.cmc ?? 0) > totalAvailableMana) return false;
             const cost = c.mana_cost || '';
-            return !cost || canPay(colorPool as ManaPool, cost, c.cmc ?? 0);
+            const mainAffordable = (c.cmc ?? 0) <= totalAvailableMana && (!cost || canPay(colorPool as ManaPool, cost, c.cmc ?? 0));
+            if (mainAffordable) return true;
+            // Check omen/adventure side cost — if affordable, card is playable even if main isn't
+            if (c.layout === 'adventure' && c.back_face?.mana_cost) {
+              const advCost = c.back_face.mana_cost;
+              const advCmc = (advCost.match(/\{[^}]+\}/g) || []).reduce((s: number, t: string) => {
+                const sym = t.slice(1, -1);
+                return s + (/^\d+$/.test(sym) ? parseInt(sym, 10) : sym === 'X' ? 0 : 1);
+              }, 0);
+              if (advCmc <= totalAvailableMana && canPay(colorPool as ManaPool, advCost, advCmc)) return true;
+            }
+            return false;
+          })
+          .map((c: any) => c._uid)
+      : []
+  );
+
+  // Track which cards are omen/adventure playable only (not main face)
+  const omenOnlyPlayable = new Set<string>(
+    humanHasPriority && !isInstantPriorityHuman
+      ? p0.hand
+          .filter((c: any) => {
+            if (!playableSet.has(c._uid)) return false;
+            if (c.layout !== 'adventure' || !c.back_face?.mana_cost) return false;
+            // Is the main face NOT affordable?
+            const cost = c.mana_cost || '';
+            const mainAffordable = (c.cmc ?? 0) <= totalAvailableMana && (!cost || canPay(colorPool as ManaPool, cost, c.cmc ?? 0));
+            return !mainAffordable;
           })
           .map((c: any) => c._uid)
       : []
@@ -1178,16 +1204,31 @@ export function GameScreen() {
         {/* Hand + Harmonize sidebar in the same row */}
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
           <div className="game-hand">
-            {p0.hand.map((card: any) => (
-              <div
-                key={card._uid}
-                className={`game-hand-card ${playableSet.has(card._uid) ? 'hand-playable' : humanHasPriority ? 'hand-unplayable' : ''}`}
-                onClick={() => handleCardClick(card, 0)}
-                onContextMenu={e => { e.preventDefault(); setZoom(card); }}
-              >
-                <CardImage card={card} size="small" overrideArtUrl={getLandArtUrl(card)} />
-              </div>
-            ))}
+            {p0.hand.map((card: any) => {
+              const isPlayable = playableSet.has(card._uid);
+              const isOmenMode = omenOnlyPlayable.has(card._uid);
+              const advFace = card.back_face;
+              const omenLabel = advFace?.type_line?.toLowerCase().includes('omen') ? 'Omen' : 'Adv';
+              return (
+                <div
+                  key={card._uid}
+                  className={`game-hand-card ${isPlayable ? 'hand-playable' : humanHasPriority ? 'hand-unplayable' : ''}`}
+                  onClick={() => handleCardClick(card, 0)}
+                  onContextMenu={e => { e.preventDefault(); setZoom(card); }}
+                  style={{ position: 'relative' }}
+                >
+                  <CardImage card={card} size="small" overrideArtUrl={getLandArtUrl(card)} />
+                  {isOmenMode && (
+                    <div style={{
+                      position: 'absolute', bottom: 2, left: '50%', transform: 'translateX(-50%)',
+                      background: 'rgba(78,205,196,0.9)', color: '#000', fontSize: '8px',
+                      fontWeight: 700, padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap',
+                      pointerEvents: 'none',
+                    }}>✦ {omenLabel}</div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           {/* ── Harmonize sidebar ── (beside hand, visible during main phase) */}
           {(phase === 'main1' || phase === 'main2') && activePlayer === 0 && (() => {

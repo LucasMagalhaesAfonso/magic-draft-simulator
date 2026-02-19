@@ -553,9 +553,21 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
     tapLand(cardUid: string) {
       const gs = gsRef.current;
-      if (!gs || !_GS) return;
+      if (!gs || !_GS || !_Mana) return;
       try {
-        // Snapshot mana pool before tap to detect what color was added
+        const card = gs.players[0].zones.battlefield.get(cardUid);
+        if (!card || card._tapped) return;
+
+        const colors = _Mana.getLandManaColors(card);
+        if (colors.length > 1) {
+          // Dual/multi-color land — show color picker overlay
+          gs._pendingManaChoice = { colors, controllerId: 0, cardUid, tapLand: true };
+          gs.waitingForInput = { type: 'mana_color_choice', playerId: 0 };
+          refresh();
+          return;
+        }
+
+        // Single color — tap normally
         const prevPool = { ...gs.manaPool[0] };
         const tapped = _GS.tapLandForMana(gs, 0, cardUid);
         if (tapped) {
@@ -958,8 +970,20 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
+        // Capture dual-land-tap info before resolveManaChoice clears _pendingManaChoice
+        const pendingChoice = gs._pendingManaChoice;
+        const isTapLand = pendingChoice?.tapLand === true;
+        const tapCardUid = pendingChoice?.cardUid;
+
         _GS.resolveManaChoice(gs, color);
         gs.waitingForInput = null;
+
+        // Track undo entry for dual land taps
+        if (isTapLand && tapCardUid) {
+          tapUndoRef.current.push({ uid: tapCardUid, color });
+          setCanUndoMana(true);
+        }
+
         refresh();
         const ap = gs.activePlayer;
         if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);

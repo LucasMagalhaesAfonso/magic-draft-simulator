@@ -1327,7 +1327,9 @@ export function handleSearchLibrary(
   let toBattlefield = false;
   let tappedDest = effect.tapped || false;
 
-  if (effect.condition === 'control_dragon') {
+  // dragon_condition: branch on whether controller has a Dragon (condition field renamed
+  // to avoid stack-part1 from treating it as a gate condition and skipping the effect)
+  if (effect.dragon_condition === 'control_dragon' || effect.condition === 'control_dragon') {
     const hasDragon = bf.cards.some((c: any) => CardEngine.hasCreatureType(c, 'Dragon'));
     if (hasDragon) {
       if (effect.if_true) {

@@ -44,7 +44,15 @@ export function addEffectEntry(cardName: string, entry: CardEffectEntry): void {
 }
 
 export function getPreprocessedEffects(card: GameCard): CardEffectEntry | null {
-  return effectsCache.get(card.name.toLowerCase()) ?? null;
+  const lookupName = card.name.toLowerCase();
+  const entry = effectsCache.get(lookupName);
+  if (entry) return entry;
+  // Adventure/omen cards have names like "Feral Deathgorger // Dusk Sight"
+  // but the DB key is just "feral deathgorger" — try the short name.
+  if (lookupName.includes(' // ')) {
+    return effectsCache.get(lookupName.split(' // ')[0].trim()) ?? null;
+  }
+  return null;
 }
 
 export function hasAnyEffects(card: GameCard): boolean {
@@ -79,8 +87,15 @@ export function getETBEffects(card: GameCard): Effect[] {
 export function getSpellEffects(card: GameCard): Effect[] {
   const db = getPreprocessedEffects(card);
   if (db) {
-    if ((db as any).modal && (db as any).modes) {
-      return [{ type: 'modal', modes: (db as any).modes, chooseTwo: (db as any).chooseTwo || false } as any];
+    // Old format: modal: { modes: [{ label, effects: [...] }] }
+    // Only for non-ETB modals (siege enchantments have chooseOnETB handled in getETBEffects)
+    if ((db as any).modal?.modes && !(db as any).modal.chooseOnETB) {
+      const rawModes = (db as any).modal.modes as Array<{label?: string, effects?: Effect[]}>;
+      const normalizedModes = rawModes.map(m => {
+        if (m.effects) return m.effects.length === 1 ? m.effects[0] : m.effects;
+        return m as any;
+      });
+      return [{ type: 'modal', modes: normalizedModes, chooseTwo: (db as any).modal.chooseTwo || false } as any];
     }
     if (db.cast) return db.cast;
   }

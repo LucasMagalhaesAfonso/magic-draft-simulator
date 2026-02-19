@@ -538,25 +538,56 @@ function describeAbility(ab: any): string {
 }
 
 export function AbilityModal({ card, abilities, onActivate, onClose }: AbilityModalProps) {
+  const isPlaneswalker = (card.type_line || '').includes('Planeswalker');
+  const currentLoyalty = card._loyalty;
+
   return (
     <div className="overlay-backdrop" onClick={onClose}>
       <div className="overlay-panel glass" style={{ maxWidth: 440 }} onClick={e => e.stopPropagation()}>
         <div className="overlay-header">
-          <h3 className="overlay-title">⚡ {card.name}</h3>
+          <h3 className="overlay-title">
+            {isPlaneswalker ? '🌟' : '⚡'} {card.name}
+            {isPlaneswalker && currentLoyalty !== undefined && (
+              <span style={{
+                marginLeft: 10, background: 'rgba(230,100,0,0.85)', color: '#fff',
+                borderRadius: 10, padding: '2px 10px', fontSize: 14, fontWeight: 800,
+              }}>
+                ★ {currentLoyalty}
+              </span>
+            )}
+          </h3>
           <button className="btn btn-muted btn-sm" onClick={onClose}>✕</button>
         </div>
-        <p className="overlay-hint">Choose an ability to activate:</p>
+        <p className="overlay-hint">{isPlaneswalker ? 'Choose a loyalty ability:' : 'Choose an ability to activate:'}</p>
         <div className="modal-modes">
-          {abilities.map((ab: any, i: number) => (
-            <button
-              key={i}
-              className="modal-mode-btn"
-              onClick={() => { onActivate(i); onClose(); }}
-            >
-              <span className="modal-mode-num">{i + 1}</span>
-              <span className="modal-mode-desc">{describeAbility(ab)}</span>
-            </button>
-          ))}
+          {abilities.map((ab: any, i: number) => {
+            const cost = ab.cost || {};
+            const loyaltyCost = cost.loyalty;
+            const isPositive = typeof loyaltyCost === 'number' && loyaltyCost >= 0;
+            const costLabel = typeof loyaltyCost === 'number'
+              ? (loyaltyCost >= 0 ? `+${loyaltyCost}` : `${loyaltyCost}`)
+              : null;
+            return (
+              <button
+                key={i}
+                className="modal-mode-btn"
+                onClick={() => { onActivate(i); onClose(); }}
+                style={isPlaneswalker ? { gap: 10 } : undefined}
+              >
+                {isPlaneswalker && costLabel !== null ? (
+                  <span style={{
+                    background: isPositive ? 'rgba(39,174,96,0.85)' : 'rgba(192,57,43,0.85)',
+                    color: '#fff', borderRadius: 6, padding: '2px 8px',
+                    fontWeight: 800, fontSize: 14, minWidth: 32, textAlign: 'center',
+                    flexShrink: 0,
+                  }}>{costLabel}</span>
+                ) : (
+                  <span className="modal-mode-num">{i + 1}</span>
+                )}
+                <span className="modal-mode-desc">{describeAbility(ab)}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

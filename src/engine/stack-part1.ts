@@ -225,8 +225,10 @@ export function _resolveItem(item, state) {
               // Mark creature as damaged this turn (for Unsparing Boltcaster, etc.)
               creature._damagedThisTurn = true;
               if (creature._damage >= Cards.getToughness(creature)) {
-                GameState.creatureDies(gameState, creature, target.player);
-                log.push(`${creature.name} recebe ${dmgAmt} dano e morre.`);
+                const died = GameState.creatureDies(gameState, creature, target.player);
+                log.push(died !== false
+                  ? `${creature.name} recebe ${dmgAmt} dano e morre.`
+                  : `${creature.name} recebe ${dmgAmt} dano (indestruivel/regenera).`);
               } else {
                 log.push(`${creature.name} recebe ${dmgAmt} dano.`);
               }
@@ -363,8 +365,29 @@ export function _resolveItem(item, state) {
       }
 
       case 'destroy': {
-        if (targets && targets.length > 0) {
-          const target = targets[0];
+        // If no pre-selected target (e.g. modal spell cast without targeting), auto-pick
+        let effectTargets = targets && targets.length > 0 ? targets : [];
+        if (effectTargets.length === 0 && effect.target) {
+          const tgt = effect.target as string;
+          const allBFCards = [...gameState.players[0].zones.battlefield.cards.map(c => ({ c, pid: 0 })),
+                              ...gameState.players[1].zones.battlefield.cards.map(c => ({ c, pid: 1 }))];
+          let validChoices: { c: any; pid: number }[] = [];
+          if (tgt === 'artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact'));
+          else if (tgt === 'enchantment') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Enchantment'));
+          else if (tgt === 'creature_with_flying') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.hasKeyword(c, 'Flying') && Cards.canBeTargeted(c, controller));
+          else if (tgt === 'noncreature_artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
+
+          if (validChoices.length === 0) {
+            log.push(`Sem alvo valido para destruir.`);
+            break;
+          }
+          // Auto-pick highest-power valid target (most threatening)
+          validChoices.sort((a, b) => Cards.getPower(b.c) - Cards.getPower(a.c));
+          const pick = validChoices[0];
+          if (pick) effectTargets = [{ type: 'permanent', uid: pick.c._uid, player: pick.pid }];
+        }
+        if (effectTargets && effectTargets.length > 0) {
+          const target = effectTargets[0];
           const bf = gameState.players[target.player].zones.battlefield;
           const permanent = bf.get(target.uid);
           if (permanent) {
@@ -550,8 +573,39 @@ export function _resolveItem(item, state) {
       }
 
       case 'bounce': {
-        if (targets && targets.length > 0) {
-          const target = targets[0];
+        // Auto-target when no explicit targets provided (e.g., ETB bounce effects)
+        let resolvedBounceTargets = targets;
+        if ((!resolvedBounceTargets || resolvedBounceTargets.length === 0) && effect.target) {
+          const opponentId = controller === 0 ? 1 : 0;
+          let autoTargetPlayer: number;
+          let filterFn: (c: any) => boolean;
+          if (effect.target === 'opponent_creature' || effect.target === 'creature') {
+            autoTargetPlayer = opponentId;
+            filterFn = (c: any) => Cards.isCreature(c) && !c._isToken;
+          } else if (effect.target === 'nonland_permanent') {
+            autoTargetPlayer = opponentId;
+            filterFn = (c: any) => !Cards.isLand(c);
+          } else if (effect.target === 'own_nonland') {
+            // Sunpearl Kirin: bounce own non-land (optional, not source card itself)
+            autoTargetPlayer = controller;
+            filterFn = (c: any) => !Cards.isLand(c) && c._uid !== card._uid;
+          } else {
+            autoTargetPlayer = opponentId;
+            filterFn = (c: any) => !Cards.isLand(c);
+          }
+          const candidates = gameState.players[autoTargetPlayer].zones.battlefield.cards
+            .filter(filterFn)
+            .filter((c: any) => Cards.canBeTargeted(c, controller));
+          if (candidates.length > 0) {
+            candidates.sort((a: any, b: any) =>
+              (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a))
+            );
+            const best = candidates[0];
+            resolvedBounceTargets = [{ type: 'creature', uid: best._uid, player: autoTargetPlayer }];
+          }
+        }
+        if (resolvedBounceTargets && resolvedBounceTargets.length > 0) {
+          const target = resolvedBounceTargets[0];
           const bf = gameState.players[target.player].zones.battlefield;
           const permanent = bf.get(target.uid);
           if (permanent) {
@@ -800,10 +854,19 @@ export function _resolveItem(item, state) {
               log.push(`${creature.name} recebe ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
             }
           }
-        } else if (targets && targets.length > 0) {
-          const target = targets[0];
-          const bf = gameState.players[target.player].zones.battlefield;
-          const creature = bf.get(target.uid);
+        } else if (targets && targets.length > 0 || (!targets?.length && (effect.target === 'creature' || effect.target === 'own_creature' || effect.target === 'opponent_creature'))) {
+          // Auto-pick target if no pre-selected target (e.g. modal spell)
+          let buffTarget = targets?.[0];
+          if (!buffTarget) {
+            const targetPid = effect.target === 'opponent_creature' ? opponent : controller;
+            const bf2 = gameState.players[targetPid].zones.battlefield;
+            const best = bf2.cards.filter(c => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
+              .sort((a, b) => Cards.getPower(b) - Cards.getPower(a))[0];
+            if (best) buffTarget = { type: 'creature', uid: best._uid, player: targetPid };
+          }
+          const target = buffTarget;
+          const bf = target ? gameState.players[target.player].zones.battlefield : null;
+          const creature = bf?.get(target?.uid);
           if (creature) {
             if (!Cards.canBeTargeted(creature, controller)) {
               log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
@@ -1231,6 +1294,19 @@ export function _resolveItem(item, state) {
           break;
         }
 
+        // Fallback: target: "self" with no explicit targets → place counter on the card itself (ETB self-buff)
+        if ((!targets || targets.length === 0) && effect.target === 'self') {
+          const bf = gameState.players[controller].zones.battlefield;
+          const self = bf.get(card._uid);
+          if (self) {
+            if (!self._counters) self._counters = { '+1/+1': 0, '-1/-1': 0 };
+            const amt = resolveAmount(effect.amount) || 1;
+            self._counters[effect.counter] = (self._counters[effect.counter] || 0) + amt;
+            log.push(`${self.name} recebe ${amt} ${effect.counter} counter(s).`);
+            GameState.fireTrigger(gameState, 'counter_placed', { cardUid: self._uid, playerId: controller });
+          }
+          break;
+        }
         // Otherwise: add counters to a creature
         if (targets && targets.length > 0) {
           // Check for distribute_creatures (Armament Dragon)
@@ -1336,14 +1412,27 @@ export function _resolveItem(item, state) {
 
         // If human player needs to discard, pause for interactive choice
         if (gameState.players[targetPlayer].isHuman && hand.count() > 0) {
+          const isOptional = effect.up_to || effect.optional;
           gameState._pendingDiscard = {
             targetPlayer,
             amount: effect.amount || 1,
+            up_to: !!effect.up_to,
+            optional: !!effect.optional,
             controller,
             effectIndex: gameState._effectStack ? gameState._effectStack.length : 0
           };
           gameState.waitingForInput = { type: 'mandatory_discard', playerId: targetPlayer };
-          log.push(`Voce deve descartar ${effect.amount || 1} carta(s).`);
+          log.push(isOptional
+            ? `Voce pode descartar ate ${effect.amount || 1} carta(s).`
+            : `Voce deve descartar ${effect.amount || 1} carta(s).`);
+          // Save remaining effects so they resume after human chooses (e.g., draw 2 after discard)
+          if (ei < effects.length - 1) {
+            gameState._pendingStackEffects = {
+              card, controller, targets,
+              effects: effects.slice(ei + 1),
+              log
+            };
+          }
           return log; // Pause resolution until human chooses
         }
 

@@ -369,7 +369,8 @@ export function _chooseTargets(state, playerId, card) {
             });
             targets.push({ type: 'creature', player: opponentId, uid: opCreatures[0]._uid });
           }
-        } else if (effect.target === 'creature' || effect.target === 'any target' || effect.target === 'creature or player' || effect.target === 'creature or planeswalker') {
+        } else if (effect.target === 'creature' || effect.target === 'any target' || effect.target === 'creature or player' || effect.target === 'creature or planeswalker' || effect.target === 'creature_or_planeswalker') {
+          const isCreatureOrPW = effect.target === 'creature or planeswalker' || effect.target === 'creature_or_planeswalker';
           // Filter for targetable (hexproof/shroud check), sort by threat score, prefer non-ward
           const opCreatures = state.players[opponentId].zones.battlefield.cards
             .filter(c => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId))
@@ -380,8 +381,8 @@ export function _chooseTargets(state, playerId, card) {
               return _threatScore(b) - _threatScore(a);
             });
 
+          const dmgAmount = effect.amount || 0;
           if (opCreatures.length > 0) {
-            const dmgAmount = effect.amount || 0;
             // Prefer killable targets: toughness - existing damage <= our damage
             const killable = opCreatures.filter(c =>
               CardEngine.getToughness(c) - (c._damage || 0) <= dmgAmount
@@ -389,7 +390,18 @@ export function _chooseTargets(state, playerId, card) {
 
             if (killable.length > 0) {
               targets.push({ type: 'creature', player: opponentId, uid: killable[0]._uid });
-            } else if (effect.target !== 'creature' && effect.target !== 'creature or planeswalker') {
+            } else if (isCreatureOrPW) {
+              // Check if we can kill a planeswalker instead
+              const killablePWs = state.players[opponentId].zones.battlefield.cards
+                .filter(c => CardEngine.isPlaneswalker(c) && CardEngine.canBeTargeted(c, playerId) && ((c as any)._loyalty || 0) <= dmgAmount)
+                .sort((a, b) => ((a as any)._loyalty || 0) - ((b as any)._loyalty || 0));
+              if (killablePWs.length > 0) {
+                targets.push({ type: 'permanent', player: opponentId, uid: killablePWs[0]._uid });
+              } else {
+                // Chip damage on highest-threat creature
+                targets.push({ type: 'creature', player: opponentId, uid: opCreatures[0]._uid });
+              }
+            } else if (effect.target !== 'creature') {
               // Can't kill anything — go face if allowed and opponent is low enough for it to matter
               const oppLife = state.players[opponentId].life;
               if (oppLife <= dmgAmount * 4) {
@@ -401,6 +413,14 @@ export function _chooseTargets(state, playerId, card) {
             } else {
               // creature-only target, pick highest threat even if we can't kill it
               targets.push({ type: 'creature', player: opponentId, uid: opCreatures[0]._uid });
+            }
+          } else if (isCreatureOrPW) {
+            // No creatures — target a planeswalker
+            const oppPWs = state.players[opponentId].zones.battlefield.cards
+              .filter(c => CardEngine.isPlaneswalker(c) && CardEngine.canBeTargeted(c, playerId))
+              .sort((a, b) => _threatScore(b) - _threatScore(a));
+            if (oppPWs.length > 0) {
+              targets.push({ type: 'permanent', player: opponentId, uid: oppPWs[0]._uid });
             }
           } else if (effect.target !== 'creature') {
             targets.push({ type: 'player', player: opponentId });
@@ -521,6 +541,27 @@ export function _chooseTargets(state, playerId, card) {
         if (tgt === 'creatures_and_planeswalkers') {
           // Dragonback Assault: "deals 3 damage to each creature and each planeswalker"
           // This is a mass effect - no targeting needed, handled by stack.js
+          break;
+        }
+        if (tgt === 'creature_or_planeswalker' || tgt === 'creature or planeswalker') {
+          const opTargets = state.players[opponentId].zones.battlefield.cards
+            .filter(c => (CardEngine.isCreature(c) || CardEngine.isPlaneswalker(c)) && CardEngine.canBeTargeted(c, playerId))
+            .sort((a, b) => {
+              const aWard = CardEngine.hasWard(a) ? 1 : 0;
+              const bWard = CardEngine.hasWard(b) ? 1 : 0;
+              if (aWard !== bWard) return aWard - bWard;
+              return _threatScore(b) - _threatScore(a);
+            });
+          if (effect.type === 'destroy') {
+            const killable = opTargets.filter(c => !CardEngine.hasIndestructible(c));
+            if (killable.length > 0) {
+              const t = killable[0];
+              targets.push({ type: CardEngine.isCreature(t) ? 'creature' : 'permanent', player: opponentId, uid: t._uid });
+            }
+          } else if (opTargets.length > 0) {
+            const t = opTargets[0];
+            targets.push({ type: CardEngine.isCreature(t) ? 'creature' : 'permanent', player: opponentId, uid: t._uid });
+          }
           break;
         }
         // Filter opponent creatures

@@ -247,11 +247,20 @@ function _cardPower(card: Card): number {
     return score;
   }
 
-  // Non-creature spells
-  if (text.includes('draw') && text.includes('card')) score += 3.0;
+  // Non-creature spells — evaluate card advantage, tempo, and board impact
+  if (text.includes('draw') && text.includes('card')) {
+    score += text.includes('draw two') || text.includes('draw 2') ? 4.0 : 3.0;
+  }
+  if (text.includes('scry') || text.includes('surveil')) score += 0.5;
   if (text.includes('search your library for a basic land') || text.includes('add {')) score += 2.5;
   if (text.includes('create') && text.includes('token')) score += 2.5;
   if (text.includes('all creatures get') || text.includes('creatures you control get')) score += 2.0;
+  // Bounce (tempo) — slightly weaker than hard removal
+  if (text.includes('return target') && (text.includes("owner's hand") || text.includes('its owner'))) score += 1.5;
+  // Counterspells — valued as hard removal
+  if (text.includes('counter target')) score += 2.0;
+  // Instants with multiple modes or conditional draw
+  if (typeLine.includes('instant') && text.includes('if') && text.includes('draw')) score += 1.0;
 
   if (typeLine.includes('aura')) score = Math.max(score, POWER_FILLER) - 0.5;
   if (typeLine.includes('equipment')) score = Math.max(score, POWER_AGGRO);
@@ -282,6 +291,10 @@ function _isBomb(card: Card, text: string, rarity: string): boolean {
 
   if (typeLine.includes('planeswalker')) return true;
   if (rarity === 'rare' && text.includes('draw') && text.includes('each') && text.includes('turn')) return true;
+  // Hard counter that also draws or has massive effect
+  if (rarity === 'rare' && text.includes('counter target spell') && (text.includes('draw') || text.includes('gain control'))) return true;
+  // Mass bounce / wrath effects
+  if (text.includes('return all') || (text.includes('each player') && text.includes('return'))) return true;
 
   return false;
 }
@@ -295,6 +308,10 @@ function _isRemoval(text: string, typeLine: string): boolean {
   if (text.includes('target creature gets -') && text.includes('until end of turn')) return true;
   if (text.includes('fight')) return true;
   if (text.includes("target creature's owner")) return true;
+  // Counterspells — blue's signature removal equivalent
+  if (text.includes('counter target spell') || text.includes('counter target creature') || text.includes('counter target instant') || text.includes('counter target sorcery')) return true;
+  // Bounce — tempo removal
+  if (text.includes('return target') && (text.includes("owner's hand") || text.includes('its owner'))) return true;
   return false;
 }
 
@@ -529,10 +546,20 @@ export function buildDeck(pool: Card[]): DeckBuildResult {
   const splashable: Card[] = [];
   const offColor: Card[] = [];
 
+  const nonBasicLands: Card[] = [];
+
   for (const card of pool) {
     const typeLine = (card.type_line || '').toLowerCase();
     if (typeLine.includes('land') && !typeLine.includes('basic')) {
-      onColor.push(card);
+      // Only include non-basic lands whose colors overlap with the chosen colors
+      const landColors = card.color_identity || [];
+      const isColorless = landColors.length === 0;
+      const matchesDeck = landColors.every(c => bestColors.includes(c));
+      if (isColorless || matchesDeck) {
+        nonBasicLands.push(card);
+      } else {
+        offColor.push(card); // wrong-color dual → sideboard
+      }
       continue;
     }
 
@@ -554,11 +581,15 @@ export function buildDeck(pool: Card[]): DeckBuildResult {
   }
 
   const scored = onColor
-    .filter(c => !(c.type_line || '').toLowerCase().includes('basic land'))
+    .filter(c => {
+      const tl = (c.type_line || '').toLowerCase();
+      return !tl.includes('land'); // exclude ALL lands from the 23 spell slots
+    })
     .map(card => ({ card, score: _deckBuildScore(card, bestColors) }))
     .sort((a, b) => b.score - a.score);
 
-  const deck = _selectDeckCards(scored, splashable);
+  const spells = _selectDeckCards(scored, splashable);
+  const deck = [...spells, ...nonBasicLands];
   const lands = _calculateLands(deck, bestColors);
 
   const deckIds = new Set(deck.map(c => c.id));
@@ -574,24 +605,32 @@ function _findBestColorPair(pool: Card[]): string[] {
     colors: _getCardColors(card),
   }));
 
-  const colorPairs: string[][] = [
+  // All 2-color pairs + all 10 3-color combinations (wedges/shards)
+  const colorCombos: string[][] = [
+    // 2-color
     ['W', 'U'], ['W', 'B'], ['W', 'R'], ['W', 'G'],
     ['U', 'B'], ['U', 'R'], ['U', 'G'],
     ['B', 'R'], ['B', 'G'],
     ['R', 'G'],
+    // 3-color
+    ['W', 'U', 'B'], ['W', 'U', 'R'], ['W', 'U', 'G'],
+    ['W', 'B', 'R'], ['W', 'B', 'G'], ['W', 'R', 'G'],
+    ['U', 'B', 'R'], ['U', 'B', 'G'], ['U', 'R', 'G'],
+    ['B', 'R', 'G'],
   ];
 
   let bestPair = ['W', 'U'];
   let bestPairScore = -Infinity;
 
-  for (const [c1, c2] of colorPairs) {
+  for (const combo of colorCombos) {
+    const is3Color = combo.length === 3;
     let pairScore = 0;
     let pairCreatures = 0;
     let pairRemoval = 0;
     const pairCards: { card: Card; score: number }[] = [];
 
     for (const { card, score, colors } of cardScores) {
-      if (colors.length === 0 || colors.every(c => c === c1 || c === c2)) {
+      if (colors.length === 0 || colors.every(c => combo.includes(c))) {
         pairCards.push({ card, score });
         const tl = (card.type_line || '').toLowerCase();
         if (tl.includes('creature')) pairCreatures++;
@@ -620,9 +659,12 @@ function _findBestColorPair(pool: Card[]): string[] {
     if (twos >= 3) pairScore += 3;
     if (twos < 2) pairScore -= 3;
 
+    // 3-color penalty: mana is harder to fix, needs dual lands
+    if (is3Color) pairScore -= 8;
+
     if (pairScore > bestPairScore) {
       bestPairScore = pairScore;
-      bestPair = [c1, c2];
+      bestPair = combo;
     }
   }
 
@@ -652,7 +694,7 @@ function _selectDeckCards(scoredCards: { card: Card; score: number }[], splashab
     if (deck.length >= 23) break;
 
     const typeLine = (card.type_line || '').toLowerCase();
-    if (typeLine.includes('basic land')) continue;
+    if (typeLine.includes('land')) continue; // skip all lands (non-basic already extracted)
 
     const isCreatureCard = typeLine.includes('creature');
     const cmc = Math.min(Math.max(Math.ceil(card.cmc || 0), 1), 6);
@@ -689,7 +731,7 @@ function _selectDeckCards(scoredCards: { card: Card; score: number }[], splashab
       if (deck.length >= 23) break;
       if (deck.includes(card)) continue;
       const typeLine = (card.type_line || '').toLowerCase();
-      if (typeLine.includes('basic land')) continue;
+      if (typeLine.includes('land')) continue; // skip all lands
       deck.push(card);
     }
   }
@@ -726,9 +768,10 @@ function _calculateLands(deck: Card[], mainColors: string[]): Record<string, num
   const totalLands = Math.max(0, IDEAL_LANDS - nonBasicLandCount);
 
   if (totalPips === 0) {
-    const half = Math.ceil(totalLands / 2);
-    lands[mainColors[0]] = half;
-    lands[mainColors[1]] = totalLands - half;
+    // Distribute evenly across all main colors (2 or 3)
+    const perColor = Math.floor(totalLands / mainColors.length);
+    const remainder = totalLands % mainColors.length;
+    mainColors.forEach((c, i) => { lands[c] = perColor + (i < remainder ? 1 : 0); });
     return lands;
   }
 

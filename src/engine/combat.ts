@@ -19,6 +19,7 @@ import { vfxPlay } from './vfx-bridge';
 export interface CombatAttackerEntry {
   uid: string;
   card: GameCard;
+  attackTarget?: string; // undefined = attack defending player; string = planeswalker UID
 }
 
 export interface CombatBlockerEntry {
@@ -358,12 +359,45 @@ export function resolveDamagePhase(
 ): string[] {
   const log: string[] = [];
 
-  for (const { uid, card: attacker } of attackers) {
+  for (const attackEntry of attackers) {
+    const { uid, card: attacker, attackTarget } = attackEntry;
     const blockers = combatState.blockers[uid] || [];
     const attackPower = getPower(attacker);
 
     if (blockers.length === 0) {
-      // Unblocked - damage to defending player
+      // Unblocked — check if attacking a planeswalker
+      if (attackTarget) {
+        // ── Attacking a planeswalker ──────────────────────────────────────────
+        const pwCard = gameState.players[defendingPlayer.id].zones.battlefield.cards
+          .find(c => c._uid === attackTarget) as any;
+        if (pwCard) {
+          const pwDmg = applyDamageModifiers(gameState, uid, attackPower);
+          if (pwDmg > 0) {
+            pwCard._loyalty = Math.max(0, (pwCard._loyalty || 0) - pwDmg);
+            log.push(`${attacker.name} ataca ${pwCard.name} e causa ${pwDmg} de dano (lealdade: ${pwCard._loyalty}).`);
+            vfxPlay('playerDamage', 'p' + defendingPlayer.id);
+
+            // Lifelink
+            if (hasKeyword(attacker, 'Lifelink')) {
+              attackingPlayer.life += pwDmg;
+              log.push(`${attacker.name} tem lifelink. +${pwDmg} vida. (Vida: ${attackingPlayer.life})`);
+              vfxPlay('heal', 'p' + attackingPlayer.id);
+            }
+
+            // Check planeswalker death (loyalty reaches 0)
+            if ((pwCard._loyalty || 0) <= 0) {
+              const defBf = gameState.players[defendingPlayer.id].zones.battlefield.cards;
+              const pwIdx = defBf.indexOf(pwCard);
+              if (pwIdx !== -1) {
+                defBf.splice(pwIdx, 1);
+                gameState.players[defendingPlayer.id].zones.graveyard.cards.push(pwCard);
+                log.push(`${pwCard.name} foi destruído (lealdade chegou a 0).`);
+              }
+            }
+          }
+        }
+      } else {
+        // ── Attacking the defending player ────────────────────────────────────
       let dmg = applyDamageModifiers(gameState, uid, attackPower);
       if (dmg > 0) {
         // Apply damage prevention shield
@@ -415,6 +449,7 @@ export function resolveDamagePhase(
           log.push(...cbtLogs);
         }
       }
+      } // end attacking player
     } else {
       // Blocked - use blocker order if set, otherwise default order
       let remainingAttackPower = applyDamageModifiers(gameState, uid, attackPower);
@@ -476,28 +511,49 @@ export function resolveDamagePhase(
         );
       }
 
-      // Trample - remaining damage goes to player
+      // Trample - remaining damage goes to attacked target (player or planeswalker)
       if (remainingAttackPower > 0 && hasKeyword(attacker, 'Trample')) {
-        defendingPlayer.life -= remainingAttackPower;
+        if (attackTarget) {
+          // Trample overflow → planeswalker
+          const pwCard = gameState.players[defendingPlayer.id].zones.battlefield.cards
+            .find(c => c._uid === attackTarget) as any;
+          if (pwCard) {
+            pwCard._loyalty = Math.max(0, (pwCard._loyalty || 0) - remainingAttackPower);
+            log.push(`${attacker.name} tem trample. ${remainingAttackPower} dano a ${pwCard.name} (lealdade: ${pwCard._loyalty}).`);
+            vfxPlay('playerDamage', 'p' + defendingPlayer.id);
+            if ((pwCard._loyalty || 0) <= 0) {
+              const defBf = gameState.players[defendingPlayer.id].zones.battlefield.cards;
+              const pwIdx = defBf.indexOf(pwCard);
+              if (pwIdx !== -1) {
+                defBf.splice(pwIdx, 1);
+                gameState.players[defendingPlayer.id].zones.graveyard.cards.push(pwCard);
+                log.push(`${pwCard.name} foi destruído (lealdade chegou a 0).`);
+              }
+            }
+          }
+        } else {
+          // Trample overflow → defending player
+          defendingPlayer.life -= remainingAttackPower;
 
-        // Track trample damage for Spinerock Knoll hideaway
-        if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
-        gameState._damageDealtThisTurn[defendingPlayer.id] =
-          (gameState._damageDealtThisTurn[defendingPlayer.id] || 0) + remainingAttackPower;
+          // Track trample damage for Spinerock Knoll hideaway
+          if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
+          gameState._damageDealtThisTurn[defendingPlayer.id] =
+            (gameState._damageDealtThisTurn[defendingPlayer.id] || 0) + remainingAttackPower;
 
-        log.push(
-          `${attacker.name} tem trample. ${remainingAttackPower} dano ao jogador. (Vida: ${defendingPlayer.life})`
-        );
+          log.push(
+            `${attacker.name} tem trample. ${remainingAttackPower} dano ao jogador. (Vida: ${defendingPlayer.life})`
+          );
 
-        vfxPlay('playerDamage', 'p' + defendingPlayer.id);
+          vfxPlay('playerDamage', 'p' + defendingPlayer.id);
 
-        // Trample combat damage trigger
-        const trampleLogs = gameState.fireTrigger('combat_damage_player', {
-          cardUid: uid,
-          card: attacker,
-          amount: remainingAttackPower,
-        });
-        log.push(...trampleLogs);
+          // Trample combat damage trigger
+          const trampleLogs = gameState.fireTrigger('combat_damage_player', {
+            cardUid: uid,
+            card: attacker,
+            amount: remainingAttackPower,
+          });
+          log.push(...trampleLogs);
+        }
       }
 
       // Attacker lifelink on damage dealt (uses POWER, not actual damage dealt)

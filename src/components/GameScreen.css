@@ -270,6 +270,8 @@
   border-top: 1px solid var(--glass-border);
   border-bottom: 1px solid var(--glass-border);
   overflow: hidden;
+  position: relative;
+  z-index: 60;
 }
 
 .game-phase-strip {
@@ -348,6 +350,7 @@
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  align-items: center;
 }
 
 .game-mana-pip {
@@ -412,12 +415,38 @@
 
 /* Playable card highlight */
 .game-hand-card.hand-playable {
-  box-shadow: 0 0 8px 2px rgba(108,92,231,0.6);
+  box-shadow: 0 0 10px 3px rgba(80, 220, 80, 0.7);
   border-radius: 6px;
 }
 .game-hand-card.hand-playable:hover {
-  box-shadow: 0 0 14px 4px rgba(255, 215, 0, 0.7);
+  box-shadow: 0 0 16px 5px rgba(255, 215, 0, 0.8);
 }
+
+/* Unplayable card — grayed out */
+.game-hand-card.hand-unplayable {
+  opacity: 0.45;
+  filter: grayscale(60%);
+  cursor: default;
+}
+.game-hand-card.hand-unplayable:hover {
+  transform: translateY(-4px) scale(1.02);
+  opacity: 0.55;
+}
+
+/* Undo mana button */
+.btn-undo-mana {
+  background: rgba(255, 100, 60, 0.85);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: 6px;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.btn-undo-mana:hover { background: rgba(255, 60, 20, 1); }
 
 /* ── Hand card sizing (inside game-hand-card) ── */
 .game-hand-card .card-small {
@@ -428,15 +457,15 @@
 /* ── Log ───────────────────────────────────── */
 
 .game-log {
-  position: absolute;
+  position: fixed;
   right: 12px;
-  top: 56px;
-  width: 280px;
-  max-height: 300px;
+  bottom: 10px;
+  width: 300px;
+  max-height: 45vh;
   overflow-y: auto;
   padding: 10px 12px;
   border-radius: var(--border-radius);
-  z-index: 50;
+  z-index: 55;
   font-size: 12px;
   line-height: 1.6;
   scrollbar-width: thin;
@@ -695,6 +724,46 @@
 }
 
 .bf-transform-badge:hover { background: var(--gold); color: #000; }
+
+/* ── Planeswalker loyalty badge ── */
+.bf-loyalty-badge {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(230,100,0,0.92);
+  color: white;
+  font-size: 12px;
+  font-weight: 800;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  padding: 0 5px;
+  border: 1px solid rgba(255,220,150,0.5);
+  pointer-events: none;
+}
+
+/* ── Planeswalker card border ── */
+.bf-card.bf-planeswalker {
+  border: 2px solid rgba(230,120,0,0.7);
+  box-shadow: 0 0 8px rgba(230,120,0,0.3);
+}
+
+/* ── Planeswalker can-activate glow ── */
+.bf-card.can-activate {
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 14px rgba(240,192,64,0.7), 0 0 4px rgba(240,192,64,0.4);
+  animation: pulse-gold 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse-gold {
+  0%, 100% { box-shadow: 0 0 10px rgba(240,192,64,0.5); }
+  50%       { box-shadow: 0 0 22px rgba(240,192,64,0.95), 0 0 6px rgba(240,192,64,0.5); }
+}
 
 /* ── Library Pile Visual ── */
 .library-pile {

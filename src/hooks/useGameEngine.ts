@@ -14,11 +14,15 @@ setVfxBridge((type, targetUid) => VfxManager.play(type as any, targetUid));
 let _GS: typeof import('../engine/game-state') | null = null;
 let _AI: typeof import('../engine/game-ai') | null = null;
 let _Combat: typeof import('../engine/combat') | null = null;
+let _Cards: typeof import('../engine/cards') | null = null;
+let _Mana: typeof import('../engine/mana') | null = null;
 
 async function loadEngine() {
   if (!_GS) _GS = await import('../engine/game-state');
   if (!_AI) _AI = await import('../engine/game-ai');
   if (!_Combat) _Combat = await import('../engine/combat');
+  if (!_Cards) _Cards = await import('../engine/cards');
+  if (!_Mana) _Mana = await import('../engine/mana');
 }
 
 // ── Card conversion: DB Card → GameCard ────────────────────────────────────
@@ -42,6 +46,11 @@ function dbCardToGameCard(card: Card, uid: string): any {
   // but the DB stores it as card.back_face. Normalize here.
   if (card.layout === 'adventure' && (card as any).back_face?.name) {
     gc.adventure = (card as any).back_face;
+    // Scryfall stores combined mana_cost "{5}{B} // {1}{B}" for adventure cards.
+    // parseCost would sum both faces → wrong CMC. Strip to creature face cost only.
+    if (gc.mana_cost && gc.mana_cost.includes('//')) {
+      gc.mana_cost = gc.mana_cost.split('//')[0].trim();
+    }
   }
   return gc;
 }
@@ -66,6 +75,19 @@ function snapshot(gs: any) {
     try { return zone.getAll ? zone.getAll() : []; } catch { return []; }
   }
 
+  // Augment graveyard cards with _graveyardAbilities so the UI can show Renew/Harmonize buttons
+  function graveyardCards(zone: any) {
+    const cards = zoneCards(zone);
+    if (!_Cards) return cards;
+    return cards.map((card: any) => {
+      const abilities = _Cards!.getGraveyardAbilities(card);
+      if (abilities.length > 0) {
+        return { ...card, _graveyardAbilities: abilities };
+      }
+      return card;
+    });
+  }
+
   return {
     phase: gs.phase,
     turn: gs.turn,
@@ -82,7 +104,7 @@ function snapshot(gs: any) {
         isHuman: true,
         hand: zoneCards(p0.zones.hand),
         battlefield: zoneCards(p0.zones.battlefield),
-        graveyard: zoneCards(p0.zones.graveyard),
+        graveyard: graveyardCards(p0.zones.graveyard),
         exile: zoneCards(p0.zones.exile),
         libraryCount: p0.zones.library?.count ? p0.zones.library.count() : 0,
         manaPool: gs.manaPool[0] || {},
@@ -93,7 +115,7 @@ function snapshot(gs: any) {
         isHuman: false,
         hand: zoneCards(p1.zones.hand),
         battlefield: zoneCards(p1.zones.battlefield),
-        graveyard: zoneCards(p1.zones.graveyard),
+        graveyard: graveyardCards(p1.zones.graveyard),
         exile: zoneCards(p1.zones.exile),
         libraryCount: p1.zones.library?.count ? p1.zones.library.count() : 0,
         manaPool: gs.manaPool[1] || {},
@@ -103,7 +125,20 @@ function snapshot(gs: any) {
     combat: {
       // Normalize attackers to string UIDs (CombatAttackerEntry has {uid,card}, legacy has string)
       attackers: (gs.combat?.attackers || []).map((a: any) => typeof a === 'string' ? a : a.uid),
-      blockers: gs.combat?.blockers || {},
+      // Transform blockers: engine stores { attackerUid: [{uid, card}] }
+      // CombatArrows expects { blockerUid: attackerUid }
+      blockers: (() => {
+        const raw = gs.combat?.blockers || {};
+        const mapped: Record<string, string> = {};
+        for (const [attackerUid, blockerList] of Object.entries(raw)) {
+          if (Array.isArray(blockerList)) {
+            for (const b of blockerList as any[]) {
+              if (b?.uid) mapped[b.uid] = attackerUid;
+            }
+          }
+        }
+        return mapped;
+      })(),
     },
 
     mulliganDone: gs.mulliganDone || [false, false],
@@ -133,7 +168,8 @@ export interface GameActions {
   castAdventure(cardUid: string, targets?: any[]): void;
   playLand(cardUid: string): void;
   tapLand(cardUid: string): void;
-  declareAttacker(cardUid: string): void;
+  undoTapLand(): void;
+  declareAttacker(cardUid: string, pwUid?: string): void;
   keepHand(bottomCardUids?: string[]): void;
   mulligan(): void;
   resolveChoice(type: string, value: any): void;
@@ -141,6 +177,7 @@ export interface GameActions {
   resolveScry(choices: ('top' | 'bottom' | 'graveyard')[]): void;
   resolveModal(modeIndices: number[]): void;
   resolveChooseTarget(targets: any[]): void;
+  resolvePostModalTarget(target: any): void;
   activateGraveyardAbility(cardUid: string, abilityIdx: number): void;
   activateBattlefieldAbility(cardUid: string, abilityIdx: number): void;
   activateFetchLand(cardUid: string): void;
@@ -215,6 +252,9 @@ export interface GameActions {
 
   // Graveyard card choice
   resolveGraveyardCardChoice(cardUids: string[]): void;
+
+  // Restart game with same decks
+  restartGame(): void;
 }
 
 export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
@@ -224,6 +264,15 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
   const gsRef = useRef<any>(null);
   const aiRunningRef = useRef(false);
   const mountedRef = useRef(true);
+
+  // Mana undo tracking: stack of { uid, color } for each land tapped this priority
+  const tapUndoRef = useRef<Array<{ uid: string; color: string }>>([]);
+  const [canUndoMana, setCanUndoMana] = useState(false);
+
+  function clearManaUndo() {
+    tapUndoRef.current = [];
+    setCanUndoMana(false);
+  }
 
   // Update snapshot (React re-render trigger)
   const refresh = useCallback(() => {
@@ -290,6 +339,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       // Don't advance during mulligan — handled by keepHand/mulligan actions
       if (gs.phase === 'mulligan') return;
+      clearManaUndo();
       try {
         const prevWaiting = gs.waitingForInput;
         // Clear waitingForInput so the engine trampoline loop can run _processPhase
@@ -298,13 +348,26 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         // When human confirms attackers (Space in combat_attackers), fire attack triggers
         // and tap attackers before advancing. This mirrors what the AI path does.
         if (prevWaiting?.type === 'declare_attackers' && gs.combat?.attackers?.length > 0) {
-          // Tap attacking creatures (unless vigilance) and fire "attacks" triggers
+          // Tap attacking creatures (unless vigilance) and fire "attacks" + "becomes_tapped" triggers
           for (const entry of gs.combat.attackers) {
             const attacker = (entry as any).card || entry;
             if (!attacker) continue;
             const hasVigilance = (attacker.keywords || []).some((k: string) => k?.toLowerCase() === 'vigilance') ||
               (attacker.oracle_text || '').toLowerCase().includes('vigilance');
-            if (!hasVigilance) attacker._tapped = true;
+            if (!hasVigilance && !attacker._tapped) {
+              attacker._tapped = true;
+              // Fire becomes_tapped trigger (e.g. Rescue Leopard)
+              if (_GS?.fireTrigger) {
+                const tapLogs = _GS.fireTrigger(gs, 'becomes_tapped', {
+                  cardUid: attacker._uid,
+                  card: attacker,
+                  controllerId: 0,
+                });
+                if (tapLogs?.length > 0) gs.log.push(...tapLogs);
+              }
+            }
+            // Mark as tapped-by-attack to prevent double-tap in resetCombatState
+            attacker._tappedByAttack = true;
           }
           if (_Combat?.fireAttackTriggers) {
             const triggerLogs = _Combat.fireAttackTriggers(gs.combat, gs, 0);
@@ -322,6 +385,31 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           typeof _GS.reprocessCurrentPhase === 'function'
         ) {
           _GS.reprocessCurrentPhase(gs);
+        } else if (prevWaiting?.type === 'stack_priority') {
+          // Human passed stack priority — resolve or counter the pending spell
+          const pending = (gs as any)._pendingCastOnStack;
+          if (pending) {
+            // Pop the temporary stack item (pushed during priority gate check)
+            if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
+            delete (gs as any)._pendingCastOnStack;
+
+            if (pending.card._countered) {
+              // Spell was countered by human — send to graveyard without resolving
+              delete pending.card._countered;
+              gs.players[pending.playerId].zones.graveyard.add(pending.card);
+              gs.log.push(`${pending.card.name} vai para o cemiterio (anulado).`);
+            } else {
+              // Spell not countered — resume the cast (skips cost checks)
+              (gs as any)._resumingFromStackPriority = true;
+              // Temporarily put card back in hand so castSpell can find and remove it
+              gs.players[pending.playerId].zones.hand.add(pending.card);
+              _GS.castSpell(gs, pending.playerId, pending.card._uid, pending.targets || [], pending.isAdventure || false, pending.isEvoke || false);
+            }
+          }
+          // Reprocess current phase so AI can continue (or human stays in main)
+          if (!gs.waitingForInput) {
+            _GS.reprocessCurrentPhase(gs);
+          }
         } else {
           _GS.advancePhase(gs);
         }
@@ -362,12 +450,50 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const card = hand.find((c: any) => c._uid === cardUid);
         if (!card) return;
 
-        // Use the real auto-tap system (handles colored mana, convoke, etc.)
-        if (card.mana_cost && card.cmc > 0) {
-          _GS.autoTapForSpell(gs, pid, card.mana_cost, card.cmc);
+        // Compute effective mana cost (conditional cost like Dragon's Prey +{2} for dragons)
+        let tapCost = card.mana_cost;
+        let tapCmc = card.cmc;
+        if (_Cards && _Mana && targets && targets.length > 0) {
+          const t0 = targets[0];
+          const targetPlayer = gs.players[t0.player];
+          if (targetPlayer) {
+            const targetCard = targetPlayer.zones.battlefield.get(t0.uid);
+            if (targetCard) {
+              const eff = _Cards.getEffectiveManaCost(card, targetCard);
+              if (eff && eff !== card.mana_cost) {
+                tapCost = eff;
+                tapCmc = _Mana.parseCost(eff).total || card.cmc;
+              }
+            }
+          }
+        }
+        // Pre-tap color check: build the available pool from untapped lands + current pool,
+        // then verify colors can be met BEFORE tapping anything. This prevents lands from
+        // being tapped uselessly when the color requirement can't be met.
+        if (tapCost && tapCmc > 0 && _Mana) {
+          const bf = gs.players[pid].zones.battlefield;
+          const availPool: Record<string, number> = { ...(gs.manaPool[pid] || {}) };
+          bf.cards
+            .filter((c: any) => (c.type_line || '').toLowerCase().includes('land') && !c._tapped)
+            .forEach((land: any) => {
+              const colors = _Mana.getLandManaColors(land);
+              colors.forEach((color: string) => { availPool[color] = (availPool[color] || 0) + 1; });
+            });
+          if (!_Mana.canPay(availPool, tapCost, tapCmc)) {
+            // Can't afford — abort without tapping anything
+            refresh();
+            return;
+          }
         }
 
-        _GS.castSpell(gs, pid, cardUid, targets);
+        // Use the real auto-tap system (handles colored mana, convoke, etc.)
+        if (tapCost && tapCmc > 0) {
+          _GS.autoTapForSpell(gs, pid, tapCost, tapCmc);
+        }
+
+        const result = _GS.castSpell(gs, pid, cardUid, targets);
+        // Clear mana undo when spell successfully starts casting
+        if (result?.success !== false) clearManaUndo();
         refresh();
       } catch (e) {
         console.warn('[castSpell] error:', e);
@@ -389,12 +515,24 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         // (passing cmc=0 would incorrectly reduce the cost to 0)
         // Adventure/omen data is stored in card.back_face (not card.adventure)
         const advCost = card.back_face?.mana_cost ?? card.adventure?.mana_cost ?? '';
-        if (advCost) {
+        if (advCost && _Mana) {
+          // Pre-tap color check — build available pool, verify colors before tapping
+          const bf = gs.players[pid].zones.battlefield;
+          const advPool: Record<string, number> = { ...(gs.manaPool[pid] || {}) };
+          bf.cards
+            .filter((c: any) => (c.type_line || '').toLowerCase().includes('land') && !c._tapped)
+            .forEach((land: any) => {
+              const colors = _Mana.getLandManaColors(land);
+              colors.forEach((color: string) => { advPool[color] = (advPool[color] || 0) + 1; });
+            });
+          const advCmc = _Mana.parseCost(advCost).total || 0;
+          if (!_Mana.canPay(advPool, advCost, advCmc)) { refresh(); return; }
           _GS.autoTapForSpell(gs, pid, advCost, undefined);
         }
 
         // castSpell(state, pid, uid, targets, castingAdventure, castingEvoke)
         _GS.castSpell(gs, pid, cardUid, targets, true);
+        clearManaUndo();
         refresh();
       } catch (e) {
         console.warn('[castAdventure] error:', e);
@@ -406,6 +544,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.playLand(gs, 0, cardUid);
+        clearManaUndo();
         refresh();
       } catch (e) {
         console.warn('[playLand] error:', e);
@@ -414,16 +553,44 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
     tapLand(cardUid: string) {
       const gs = gsRef.current;
-      if (!gs) return;
+      if (!gs || !_GS) return;
       try {
-        _GS.tapLandForMana(gs, 0, cardUid);
+        // Snapshot mana pool before tap to detect what color was added
+        const prevPool = { ...gs.manaPool[0] };
+        const tapped = _GS.tapLandForMana(gs, 0, cardUid);
+        if (tapped) {
+          let addedColor = 'C';
+          for (const [c, v] of Object.entries(gs.manaPool[0] as Record<string, number>)) {
+            if (v > (prevPool[c] || 0)) { addedColor = c; break; }
+          }
+          tapUndoRef.current.push({ uid: cardUid, color: addedColor });
+          setCanUndoMana(true);
+        }
         refresh();
       } catch (e) {
         console.warn('[tapLand] error:', e);
       }
     },
 
-    declareAttacker(cardUid: string) {
+    undoTapLand() {
+      const gs = gsRef.current;
+      if (!gs || tapUndoRef.current.length === 0) return;
+      const entry = tapUndoRef.current.pop();
+      if (entry) {
+        try {
+          const card = gs.players[0].zones.battlefield.get(entry.uid);
+          if (card) card._tapped = false;
+          const pool = gs.manaPool[0];
+          if (pool[entry.color] > 0) pool[entry.color]--;
+        } catch (e) {
+          console.warn('[undoTapLand] error:', e);
+        }
+      }
+      setCanUndoMana(tapUndoRef.current.length > 0);
+      refresh();
+    },
+
+    declareAttacker(cardUid: string, pwUid?: string) {
       const gs = gsRef.current;
       if (!gs) return;
       try {
@@ -444,8 +611,10 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           if (!card._tapped && (!card._summoningSick || hasHaste)) {
             card._attacking = true;
             if (!gs.combat.attackers) gs.combat.attackers = [];
-            // Push the proper CombatAttackerEntry object {uid, card}
-            gs.combat.attackers.push({ uid: cardUid, card });
+            // Push CombatAttackerEntry — include attackTarget if attacking a planeswalker
+            const entry: any = { uid: cardUid, card };
+            if (pwUid) entry.attackTarget = pwUid;
+            gs.combat.attackers.push(entry);
           }
         }
         refresh();
@@ -550,6 +719,17 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveChooseTarget] error:', e); }
     },
 
+    resolvePostModalTarget(target: any) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolvePostModalTarget(gs, target);
+        refresh();
+        const ap = gs.activePlayer;
+        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
+      } catch (e) { console.warn('[resolvePostModalTarget] error:', e); }
+    },
+
     activateGraveyardAbility(cardUid: string, abilityIdx: number) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
@@ -635,12 +815,20 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const gs = gsRef.current;
       if (!gs) return;
       if (!gs.combat.blockers) gs.combat.blockers = {};
-      // CombatState.blockers is Record<attackerUid, CombatBlockerEntry[]>
       const bf = gs.players[0].zones.battlefield.getAll();
       const blocker = bf.find((c: any) => c._uid === blockerUid);
       if (!blocker) return;
+
+      // First remove this blocker from any attacker they're already blocking
+      // (prevents one creature blocking two attackers)
+      for (const atkUid of Object.keys(gs.combat.blockers)) {
+        gs.combat.blockers[atkUid] = gs.combat.blockers[atkUid].filter(
+          (b: any) => b.uid !== blockerUid
+        );
+      }
+
+      // Check Menace: attacker with Menace needs 2+ blockers — allow assignment but warn later
       blocker._blocking = attackerUid;
-      // Add blocker entry keyed by ATTACKER uid, not blocker uid
       if (!gs.combat.blockers[attackerUid]) gs.combat.blockers[attackerUid] = [];
       const already = gs.combat.blockers[attackerUid].some((b: any) => b.uid === blockerUid);
       if (!already) gs.combat.blockers[attackerUid].push({ uid: blockerUid, card: blocker });
@@ -667,6 +855,27 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
     confirmBlockers() {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
+
+      // Validate Menace: attacker with Menace can only be blocked by 2+ creatures.
+      // If exactly 1 blocker assigned to a Menace attacker, remove that block (it's illegal).
+      if (gs.combat?.blockers && _Cards) {
+        const attackersBf = gs.players[gs.activePlayer].zones.battlefield.getAll();
+        for (const entry of (gs.combat.attackers || [])) {
+          const attackerCard = attackersBf.find((c: any) => c._uid === (entry.uid || entry));
+          if (!attackerCard) continue;
+          const hasMenace = (_Cards.hasKeyword as any)(attackerCard, 'Menace');
+          if (!hasMenace) continue;
+          const blockerList = gs.combat.blockers[attackerCard._uid] || [];
+          if (blockerList.length === 1) {
+            // Illegal: menace requires 2+ blockers. Remove the single blocker.
+            const singleBlocker = blockerList[0]?.card;
+            if (singleBlocker) singleBlocker._blocking = null;
+            gs.combat.blockers[attackerCard._uid] = [];
+            gs.log.push(`Blqueio invalido! ${attackerCard.name} tem Menace e precisa de 2+ bloqueadores. Bloqueio removido.`);
+          }
+        }
+      }
+
       gs.waitingForInput = null;
       try { _GS.advancePhase(gs); } catch (e) { console.warn('[confirmBlockers]', e); }
       refresh();
@@ -1015,15 +1224,26 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         const hand = gs.players[0].zones.hand;
         const gy = gs.players[0].zones.graveyard;
+        const drawOnDiscard = gs._pendingOptionalDiscard?.drawOnDiscard;
+        const discarded = cardUids.length > 0;
         cardUids.forEach((uid: string) => {
           const cards = hand.getAll();
           const card = cards.find((c: any) => c._uid === uid);
           if (card) {
-            if (typeof hand.remove === 'function') hand.remove(card._uid); // uid string, not object
+            if (typeof hand.remove === 'function') hand.remove(card._uid);
             if (typeof gy.add === 'function') gy.add(card);
             gs.log.push(`Voce descarta ${card.name}.`);
           }
         });
+        // If this was an optional_discard_choice with drawOnDiscard (Rescue Leopard), draw a card
+        if (drawOnDiscard && discarded) {
+          const drawn = gs.players[0].zones.library.drawFromTop();
+          if (drawn) {
+            gs.players[0].zones.hand.add(drawn);
+            gs.log.push(`Voce compra ${drawn.name}.`);
+          }
+        }
+        gs._pendingOptionalDiscard = null;
         gs.waitingForInput = null;
         // Re-run cleanup phase to call _endOfTurnCleanup + advance
         if (typeof _GS?.reprocessCurrentPhase === 'function') {
@@ -1037,21 +1257,9 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const gs = gsRef.current;
       if (!gs) return;
       try {
-        // Opponent (player 1) is forced to discard — cards go to their graveyard
-        const hand = gs.players[1].zones.hand;
-        const gy = gs.players[1].zones.graveyard;
-        cardUids.forEach((uid: string) => {
-          const cards = hand.getAll();
-          const card = cards.find((c: any) => c._uid === uid);
-          if (card) {
-            if (typeof hand.remove === 'function') hand.remove(card._uid); // uid string, not object
-            if (typeof gy.add === 'function') gy.add(card);
-            gs.log.push(`Oponente descarta ${card.name}.`);
-          }
-        });
-        gs.waitingForInput = null;
-        if (typeof _GS?.reprocessCurrentPhase === 'function') {
-          _GS.reprocessCurrentPhase(gs);
+        // Delegate to engine which handles targetPlayer, up_to/optional flags, and _pendingStackEffects
+        if (typeof _GS?.resolveMandatoryDiscard === 'function') {
+          _GS.resolveMandatoryDiscard(gs, cardUids);
         }
         refresh();
       } catch (e) { console.warn('[resolveMandatoryDiscard] error:', e); }
@@ -1269,7 +1477,26 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveGraveyardCardChoice]', e); }
     },
+
+    restartGame() {
+      if (!_GS) return;
+      try {
+        aiRunningRef.current = false;
+        clearManaUndo();
+        const p0Cards = deckToGameCards(playerDeck);
+        const p1Cards = botDeckToGameCards(botDeck);
+        const gs = _GS.create(p0Cards, p1Cards);
+        gs.players[0].isHuman = true;
+        gs.players[1].isHuman = false;
+        if (!gs.mulliganDone[1]) {
+          _GS.keepHand(gs, 1, []);
+        }
+        gs.waitingForInput = { type: 'mulligan', playerId: 0 };
+        gsRef.current = gs;
+        refresh();
+      } catch (e) { console.warn('[restartGame]', e); }
+    },
   };
 
-  return { snap, loading, error, actions, gsRef };
+  return { snap, loading, error, actions, gsRef, canUndoMana };
 }

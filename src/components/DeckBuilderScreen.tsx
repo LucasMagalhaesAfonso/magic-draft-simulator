@@ -30,14 +30,19 @@ export function DeckBuilderScreen() {
   const [dragOver, setDragOver] = useState<'main' | 'side' | null>(null);
   const draggedRef = useRef<{ card: Card; fromSide: boolean } | null>(null);
 
-  const totalLands = Object.values(lands).reduce((s, n) => s + n, 0);
-  const totalCards = mainboard.length + totalLands;
+  const basicLandsTotal = Object.values(lands).reduce((s, n) => s + n, 0);
+  const nonBasicLandsInMain = mainboard.filter(c => {
+    const tl = (c.type_line || '').toLowerCase();
+    return tl.includes('land') && !tl.includes('basic');
+  }).length;
+  const totalLands = basicLandsTotal + nonBasicLandsInMain;
+  const totalCards = mainboard.length + basicLandsTotal; // non-basics already in mainboard
   const stats = useMemo(() => computeStats(mainboard), [mainboard]);
 
   const cmcGroups = useMemo(() => {
     const groups: Record<number, Card[]> = {};
     for (const c of mainboard) {
-      const slot = Math.min(c.cmc ?? 0, 7);
+      const slot = Math.min(computeCardCmc(c), 7);
       (groups[slot] ??= []).push(c);
     }
     for (const g of Object.values(groups)) {
@@ -46,7 +51,8 @@ export function DeckBuilderScreen() {
     return groups;
   }, [mainboard]);
 
-  const maxCmc = Math.max(...Object.keys(cmcGroups).map(Number), 4);
+  // Always include slots 0-7 so the 7+ column is always visible
+  const maxCmc = Math.max(...Object.keys(cmcGroups).map(Number), 7);
   const cmcSlots = Array.from({ length: maxCmc + 1 }, (_, i) => i);
 
   function handleAutoBuild() {
@@ -112,7 +118,7 @@ export function DeckBuilderScreen() {
 
   const listSource = (sideView === 'sideboard' ? sideboard : draftPool)
     .slice()
-    .sort((a, b) => (a.cmc ?? 0) - (b.cmc ?? 0) || a.name.localeCompare(b.name));
+    .sort((a, b) => computeCardCmc(a) - computeCardCmc(b) || a.name.localeCompare(b.name));
 
   return (
     <div className="db-screen animate-fade-in" onClick={() => setZoomCard(null)}>
@@ -300,11 +306,27 @@ export function DeckBuilderScreen() {
   );
 }
 
+/** Compute CMC from mana_cost string as fallback when card.cmc is 0 or missing */
+function computeCardCmc(card: Card): number {
+  if (card.cmc > 0) return card.cmc;
+  // Lands are genuinely 0 cmc
+  if ((card.type_line || '').toLowerCase().includes('land')) return 0;
+  // Try to derive from mana_cost string (e.g. "{8}{C}{C}" → 10)
+  if (!card.mana_cost) return 0;
+  let total = 0;
+  for (const m of card.mana_cost.matchAll(/\{([^}]+)\}/g)) {
+    const sym = m[1];
+    if (/^\d+$/.test(sym)) total += parseInt(sym, 10);
+    else if (sym !== 'X') total += 1; // W/U/B/R/G/C/S each = 1
+  }
+  return total;
+}
+
 function computeStats(cards: Card[]) {
   const curve: Record<number, number> = {};
   const pips: Record<string, number> = { W: 0, U: 0, B: 0, R: 0, G: 0 };
   for (const card of cards) {
-    const slot = Math.min(card.cmc ?? 0, 7);
+    const slot = Math.min(computeCardCmc(card), 7);
     curve[slot] = (curve[slot] ?? 0) + 1;
     const cost = card.mana_cost ?? '';
     for (const m of cost.matchAll(/{([WUBRG])}/g)) pips[m[1]] = (pips[m[1]] ?? 0) + 1;

@@ -146,7 +146,8 @@ export const CardEffectsDB: Record<string, any> = {
       type: "search_library",
       target: "basic_land",
       optional: true,
-      condition: "control_dragon",
+      allow_choice: true,
+      dragon_condition: "control_dragon",
       if_true: {
         to_top: false,
         to_hand: false,
@@ -425,7 +426,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "cori-steel cutter": {
     static: [{ type: "grant", power: 1, toughness: 1, keywords: ["trample", "haste"], target: "equipped" }],
-    triggered: [{ event: "second_spell", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Monk", keywords: ["prowess"] }] }]
+    triggered: [{ event: "second_spell", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Monk", keywords: ["prowess"] }, { type: "attach", target: "token" }] }]
   },
 
   "dragon sniper": {
@@ -1386,7 +1387,7 @@ export const CardEffectsDB: Record<string, any> = {
     static: [{ type: "has_keyword", keywords: ["deathtouch"] }]
   },
   "trade route envoy": {
-    etb: [{ type: "draw", amount: 1, condition: "control_creature_with_counter" }, { type: "counter", counter: "+1/+1", amount: 1, target: "self", condition: "if_no_draw" }]
+    etb: [{ type: "draw", amount: 1, condition: "control_creature_with_counter" }, { type: "counter_self", counter: "+1/+1", amount: 1, condition: "if_no_draw" }]
   },
   "gurmag nightwatch": {
     etb: [{ type: "look_top", amount: 3, pick: 1, rest_to: "graveyard", optional: true }]
@@ -1652,6 +1653,10 @@ export const CardEffectsDB: Record<string, any> = {
 
   "jeskai brushmaster": {
     static: [{ type: "has_keyword", keywords: ["double strike", "prowess"] }]
+  },
+
+  "defibrillating current": {
+    cast: [{ type: "damage", amount: 4, target: "creature_or_planeswalker" }, { type: "gainLife", amount: 2 }]
   },
 
   // =================== METADATA ===================

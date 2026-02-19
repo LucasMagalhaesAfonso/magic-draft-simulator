@@ -28,11 +28,17 @@ export function isLand(card: GameCard): boolean {
 }
 
 export function isInstant(card: GameCard): boolean {
-  return (card.type_line || '').includes('Instant');
+  const typeLine = card.type_line || '';
+  // Adventure cards have combined type_line "Creature — X // Instant — Y" — check front face only
+  const frontType = typeLine.includes(' // ') ? typeLine.split(' // ')[0] : typeLine;
+  return frontType.includes('Instant');
 }
 
 export function isSorcery(card: GameCard): boolean {
-  return (card.type_line || '').includes('Sorcery');
+  const typeLine = card.type_line || '';
+  // Adventure cards have combined type_line "Creature — X // Sorcery — Y" — check front face only
+  const frontType = typeLine.includes(' // ') ? typeLine.split(' // ')[0] : typeLine;
+  return frontType.includes('Sorcery');
 }
 
 export function isEnchantment(card: GameCard): boolean {

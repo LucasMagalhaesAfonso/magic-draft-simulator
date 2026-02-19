@@ -1288,8 +1288,9 @@ export function _resolveItem(item, state) {
             break;
           }
 
-          // Remove from stack
-          gameState.stack = gameState.stack.filter(s => s.card._uid !== targetSpell._uid);
+          // Remove from stack (mark as countered — _resolveItem checks _countered flag)
+          const stackIdx = gameState.stack.items.findIndex((s: any) => s.card._uid === targetSpell._uid);
+          if (stackIdx !== -1) gameState.stack.items.splice(stackIdx, 1);
           log.push(`${targetSpell.name} foi anulado!`);
           break;
         }
@@ -1572,7 +1573,13 @@ export function _resolveItem(item, state) {
         if (targets && targets.length > 0) {
           const target = targets[0];
           const myBf = gameState.players[controller].zones.battlefield;
-          const ourCreature = myBf.get(card._uid);
+          // Use the spell's own card if it's a creature, otherwise pick best own creature
+          let ourCreature = myBf.get(card._uid);
+          if (!ourCreature || !Cards.isCreature(ourCreature)) {
+            const owned = myBf.cards.filter(c => Cards.isCreature(c))
+              .sort((a, b) => Cards.getPower(b) - Cards.getPower(a));
+            ourCreature = owned[0] || null;
+          }
           const theirBf = gameState.players[target.player].zones.battlefield;
           const theirCreature = theirBf.get(target.uid);
 

@@ -252,7 +252,7 @@ function _cardPower(card: Card): number {
     score += text.includes('draw two') || text.includes('draw 2') ? 4.0 : 3.0;
   }
   if (text.includes('scry') || text.includes('surveil')) score += 0.5;
-  if (text.includes('search your library for a basic land') || text.includes('add {')) score += 2.5;
+  if (text.includes('search your library for a basic land') || text.includes('add {')) score += 3.0; // ramp/fixing
   if (text.includes('create') && text.includes('token')) score += 2.5;
   if (text.includes('all creatures get') || text.includes('creatures you control get')) score += 2.0;
   // Bounce (tempo) — slightly weaker than hard removal
@@ -264,12 +264,27 @@ function _cardPower(card: Card): number {
 
   if (typeLine.includes('aura')) score = Math.max(score, POWER_FILLER) - 0.5;
   if (typeLine.includes('equipment')) score = Math.max(score, POWER_AGGRO);
-  if (typeLine.includes('saga')) score = Math.max(score, POWER_EVASION);
+  if (typeLine.includes('saga')) {
+    // Sagas vary hugely — score based on what chapters actually do
+    let sagaScore = POWER_EVASION; // 5.0 base
+    if (text.includes('draw')) sagaScore += 1.0;
+    if (text.includes('destroy') || text.includes('exile')) sagaScore += 1.5;
+    if (/deals \d+ damage to each/.test(text)) sagaScore += 2.5; // mass damage chapter
+    if (text.includes('double') && (text.includes('power') || text.includes('toughness'))) sagaScore += 2.5; // double stats
+    if (/create a [4-9]\/[4-9]/.test(text)) sagaScore += 2.0; // big token generator
+    if (/create a [2-3]\/[2-3]/.test(text)) sagaScore += 0.5;
+    score = Math.max(score, sagaScore);
+  }
 
   return Math.max(score, POWER_DREG);
 }
 
 function _isBomb(card: Card, text: string, rarity: string): boolean {
+  // Mass damage sweepers are bombs at ANY rarity — board wipes via damage
+  if (/deals \d+ damage to (each|all) (creature|planeswalker)/.test(text)) return true;
+  // Mass -X/-X debuffs to opponent creatures
+  if (/all creatures get -\d+\/-\d+/.test(text) && !text.includes('you control')) return true;
+
   if (rarity !== 'rare' && rarity !== 'mythic') return false;
 
   if (text.includes('you win the game')) return true;
@@ -277,6 +292,14 @@ function _isBomb(card: Card, text: string, rarity: string): boolean {
   if (text.includes('destroy all') && !text.includes('you control')) return true;
 
   const typeLine = (card.type_line || '').toLowerCase();
+
+  // Sagas that create big tokens or double stats are bombs
+  if (typeLine.includes('saga')) {
+    if (/create a [4-9]\/[4-9]/.test(text)) return true;
+    if (text.includes('double') && (text.includes('power') || text.includes('toughness'))) return true;
+    if (text.includes('create two') && text.includes('token') && text.includes('4')) return true;
+  }
+
   if (typeLine.includes('creature')) {
     const power = parseInt(card.power as string) || 0;
     const toughness = parseInt(card.toughness as string) || 0;
@@ -285,6 +308,8 @@ function _isBomb(card: Card, text: string, rarity: string): boolean {
     if (power + toughness >= 8 && keywords.length >= 1) return true;
     if (power >= 5 && keywords.includes('flying')) return true;
     if (power >= 4 && keywords.includes('trample') && keywords.includes('haste')) return true;
+    // Hexproof creature with 3+ keywords is almost always a bomb
+    if (keywords.includes('hexproof') && keywords.length >= 3) return true;
     if (text.includes('draw') && text.includes('card') && (text.includes('whenever') || text.includes('each'))) return true;
     if (text.includes('create') && text.includes('token') && text.includes('whenever')) return true;
   }
@@ -598,12 +623,32 @@ export function buildDeck(pool: Card[]): DeckBuildResult {
   return { deck, lands, sideboard };
 }
 
+function _countManaFixers(cards: Card[]): number {
+  let count = 0;
+  for (const card of cards) {
+    const text = (card.oracle_text || '').toLowerCase();
+    const tl = (card.type_line || '').toLowerCase();
+    // Non-basic lands that produce multiple colors
+    if (tl.includes('land') && !tl.includes('basic')) { count++; continue; }
+    // Ramp spells / creatures that search for basic lands
+    if (text.includes('search your library for a basic land')) { count++; continue; }
+    // Cards that add any color of mana
+    if (text.includes('add one mana of any color') || text.includes('add mana of any color')) { count++; continue; }
+    // Landcycling
+    if (/landcycling|land cycling/.test(text)) { count++; continue; }
+  }
+  return count;
+}
+
 function _findBestColorPair(pool: Card[]): string[] {
   const cardScores = pool.map(card => ({
     card,
     score: _cardPower(card),
     colors: _getCardColors(card),
   }));
+
+  // Count mana fixers once for the whole pool
+  const totalFixers = _countManaFixers(pool);
 
   // All 2-color pairs + all 10 3-color combinations (wedges/shards)
   const colorCombos: string[][] = [
@@ -659,8 +704,11 @@ function _findBestColorPair(pool: Card[]): string[] {
     if (twos >= 3) pairScore += 3;
     if (twos < 2) pairScore -= 3;
 
-    // 3-color penalty: mana is harder to fix, needs dual lands
-    if (is3Color) pairScore -= 8;
+    // 3-color penalty: reduced when pool has mana fixers (lands, ramp, etc.)
+    if (is3Color) {
+      const fixerDiscount = Math.min(6, totalFixers * 2); // 2pts discount per fixer, up to 6
+      pairScore -= Math.max(2, 8 - fixerDiscount);
+    }
 
     if (pairScore > bestPairScore) {
       bestPairScore = pairScore;

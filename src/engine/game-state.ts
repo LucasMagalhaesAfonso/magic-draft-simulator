@@ -813,6 +813,26 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
       }
       case 'damage': {
         const dmgN = resolveAmt(effect.amount);
+        const tgt = effect.target;
+        // Creature-targeting damage (activated abilities, ETBs, triggers)
+        if (tgt === 'creature_with_flying' || tgt === 'opponent_creature' || tgt === 'creature') {
+          const targetPid = opponentId;
+          const pool = state.players[targetPid].zones.battlefield.cards.filter((c: any) => {
+            if (!CardEngine.isCreature(c)) return false;
+            if (tgt === 'creature_with_flying') return CardEngine.hasKeyword(c, 'Flying');
+            return true;
+          }).sort((a: any, b: any) => CardEngine.getPower(b) - CardEngine.getPower(a));
+          if (pool.length > 0) {
+            const t = pool[0];
+            t._damage = (t._damage || 0) + dmgN;
+            if (t._damage >= CardEngine.getToughness(t)) {
+              creatureDies(state, t, targetPid);
+            }
+            return `${dmgN} dano a ${t.name}.`;
+          }
+          return `Sem criatura alvo para ${dmgN} dano.`;
+        }
+        // Default: damage to opponent player
         state.players[opponentId].life -= dmgN;
         _checkWinner(state);
         return `${dmgN} dano ao ${opponentId === 0 ? 'jogador' : 'oponente'}.`;
@@ -5384,8 +5404,9 @@ export function _canUseAbility(state, playerId, creature, ability) {
     // Check if creature is tapped
     if (creature._tapped) return false;
 
-    // Skip if requires sacrifice/discard (too complex for auto-tap)
-    if (ability.cost && (ability.cost.sacrifice || ability.cost.discard)) {
+    // Skip if requires sacrificing another creature/token (too complex for AI auto-tap)
+    // Note: ability.cost.sacrifice (self-sacrifice) IS handled, only skip sacrifice_creature/token
+    if (ability.cost && (ability.cost.sacrifice_creature || ability.cost.sacrifice_token || ability.cost.discard)) {
       return false;
     }
 
@@ -8096,6 +8117,13 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
     } else {
       state.log.push('Nenhuma token disponivel para sacrificar.');
     }
+  }
+
+  // Self-sacrifice cost (e.g. Sunset Strikemaster: "sacrifice this, deal 6 to flying creature")
+  if (ability.cost?.sacrifice) {
+    // Sacrifice the creature itself as part of paying the cost
+    creatureDies(state, creature, pid);
+    state.log.push(`${creature.name} se sacrifica como custo.`);
   }
 
   state.log.push(`${creature.name}: habilidade ativada!`);

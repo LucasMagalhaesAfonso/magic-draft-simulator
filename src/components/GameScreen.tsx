@@ -267,6 +267,12 @@ export function GameScreen() {
           if (snap?.phase === 'mulligan') break; // Mulligan uses K/M keys, not Space
           if (targeting) { setTargeting(null); break; }
           if (blockingWith) { setBlockingWith(null); break; }
+          {
+            // Block Space from skipping mandatory-input states
+            const blockingInputTypes = ['discard', 'sacrifice', 'scry', 'surveil', 'search_library', 'modal', 'order_blockers'];
+            const wiType = snap?.waitingForInput?.type;
+            if (wiType && blockingInputTypes.includes(wiType) && snap?.waitingForInput?.playerId === 0) break;
+          }
           if (snap?.waitingForInput?.type === 'declare_blockers' && snap.waitingForInput.playerId === 0) {
             actions.confirmBlockers();
           } else {
@@ -600,6 +606,22 @@ export function GameScreen() {
       // If card has adventure/omen mode (layout='adventure', data in back_face), show choice modal
       if (card.layout === 'adventure' && card.back_face?.name) {
         setAdventureModal({ card });
+        return;
+      }
+
+      // Counter spells: auto-target opponent's topmost stack spell
+      const cardText = (card.oracle_text || '').toLowerCase();
+      const isCounterSpell = cardText.includes('counter target spell') ||
+                              cardText.includes('counter target creature spell') ||
+                              cardText.includes('counter target instant') ||
+                              cardText.includes('counter target sorcery');
+      if (isCounterSpell) {
+        const gs = gsRef.current;
+        const stackItems: any[] = gs?.stack?.items || [];
+        const oppSpells = stackItems.filter((item: any) => item.controller !== 0);
+        if (oppSpells.length === 0) return; // Nothing to counter
+        const topOppSpell = oppSpells[oppSpells.length - 1];
+        actions.castSpell(card._uid, [topOppSpell.card]);
         return;
       }
 

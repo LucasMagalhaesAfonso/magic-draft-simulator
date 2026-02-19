@@ -120,6 +120,19 @@ export function DeckBuilderScreen() {
     .slice()
     .sort((a, b) => computeCardCmc(a) - computeCardCmc(b) || a.name.localeCompare(b.name));
 
+  // Count how many copies of each card id are in mainboard (to handle duplicates correctly)
+  const mainCountMap: Record<string, number> = {};
+  for (const c of mainboard) mainCountMap[c.id] = (mainCountMap[c.id] || 0) + 1;
+
+  // Build list with per-position inMain status — the N-th copy is "in main" only if ≥N copies are in mainboard
+  const seenInList: Record<string, number> = {};
+  const listWithMain = listSource.map(card => {
+    const seen = (seenInList[card.id] || 0) + 1;
+    seenInList[card.id] = seen;
+    const inMain = seen <= (mainCountMap[card.id] || 0);
+    return { card, inMain };
+  });
+
   return (
     <div className="db-screen animate-fade-in" onClick={() => setZoomCard(null)}>
       {/* ── Card Zoom Overlay ────────────────────────────────── */}
@@ -276,28 +289,25 @@ export function DeckBuilderScreen() {
               <div className="db-drop-hint-side">Drop here to sideboard</div>
             )}
             <div className="db-side-grid">
-              {listSource.map((card, idx) => {
-                const inMain = mainboard.some(c => c.id === card.id);
-                return (
-                  <div
-                    key={card.id + '-' + idx}
-                    className={`db-side-thumb ${inMain ? 'in-main' : ''}`}
-                    draggable={!inMain}
-                    onDragStart={() => !inMain && onDragStart(card, true)}
-                    onContextMenu={e => handleContextMenu(e, card)}
-                    onClick={() => !inMain ? moveToMain(card) : moveToSide(card)}
-                    title={card.name + (inMain ? ' — click to remove from deck' : ' — click to add to deck · right-click to zoom')}
-                  >
-                    <img
-                      src={card.image_normal || card.image_small}
-                      alt={card.name}
-                      loading="lazy"
-                    />
-                    {inMain && <div className="db-side-check">✓</div>}
-                    <div className="db-side-name">{card.name}</div>
-                  </div>
-                );
-              })}
+              {listWithMain.map(({ card, inMain }, idx) => (
+                <div
+                  key={card.id + '-' + idx}
+                  className={`db-side-thumb ${inMain ? 'in-main' : ''}`}
+                  draggable={!inMain}
+                  onDragStart={() => !inMain && onDragStart(card, true)}
+                  onContextMenu={e => handleContextMenu(e, card)}
+                  onClick={() => !inMain ? moveToMain(card) : moveToSide(card)}
+                  title={card.name + (inMain ? ' — click to remove from deck' : ' — click to add to deck · right-click to zoom')}
+                >
+                  <img
+                    src={card.image_normal || card.image_small}
+                    alt={card.name}
+                    loading="lazy"
+                  />
+                  {inMain && <div className="db-side-check">✓</div>}
+                  <div className="db-side-name">{card.name}</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>

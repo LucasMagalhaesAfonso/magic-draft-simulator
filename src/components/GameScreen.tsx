@@ -690,6 +690,12 @@ export function GameScreen() {
       snap.players[1].battlefield
         .filter((c: any) => c.type_line?.includes('Creature'))
         .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: 1, card: c }));
+      // Include planeswalkers if the spell can target them (e.g. "creature or planeswalker")
+      if (text.includes('planeswalker') || text.includes('or planeswalker')) {
+        snap.players[1].battlefield
+          .filter((c: any) => c.type_line?.includes('Planeswalker'))
+          .forEach((c: any) => targets.push({ type: 'permanent', uid: c._uid, player: 1, card: c }));
+      }
       return targets;
     }
 

@@ -314,8 +314,9 @@
   box-shadow: var(--shadow-lg);
 }
 
-/* ── Graveyard click zone on battlefield bars ── */
-.gy-click-zone {
+/* ── Graveyard / Exile click zones on battlefield bars ── */
+.gy-click-zone,
+.exile-click-zone {
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 8px;
@@ -326,6 +327,10 @@
 
 .gy-click-zone:hover {
   color: var(--gold);
+}
+
+.exile-click-zone:hover {
+  color: #b48fff; /* purple tint for exile */
 }
 
 /* ── Instant Priority / Blocker Banner ── */

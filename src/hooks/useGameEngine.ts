@@ -611,6 +611,26 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
         }
 
+        // Give AI a chance to react with removal/bounce/counter after human casts a spell.
+        // This runs only when: human cast succeeds, no ETB overlay is pending, AI has instants.
+        if (
+          result?.success !== false &&
+          !gs.waitingForInput &&
+          _GameAI &&
+          pid === 0
+        ) {
+          const hand = gs.players[pid].zones.hand.getAll();
+          const castCard = hand.find((c: any) => c._uid === cardUid);
+          if (!castCard || !castCard.type_line?.includes('Land')) {
+            (window as any).__aiStackReactTimer = setTimeout(() => {
+              const currentGs = gsRef.current;
+              if (!currentGs || currentGs.waitingForInput) return;
+              (_GameAI as any).playInstantPhase?.(currentGs, 1, 'stack_priority');
+              refresh();
+            }, 300);
+          }
+        }
+
         refresh();
       } catch (e) {
         console.warn('[castSpell] error:', e);

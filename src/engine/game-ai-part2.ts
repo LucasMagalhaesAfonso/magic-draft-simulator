@@ -1224,6 +1224,27 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
     }
   }
 
+  if (phase === 'stack_priority') {
+    // Human just cast a spell — AI reacts with removal/bounce on the newly cast permanent
+    // (True counter spells need the spell to still be on the stack; this handles the aftermath)
+    const hasCounter = effects.some(e => e.type === 'counter_spell');
+    if (hasCounter) {
+      // Counter spells: highest priority if opponent spell still on stack
+      if ((card as any)._pendingCastOnStack || oppCreatures.length > 0) {
+        score += 14; // Very high — countering is premium
+      }
+    }
+    if (hasRemoval && oppCreatures.length > 0) {
+      const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
+      score += 8 + biggestThreat * 0.6; // React immediately to new threat
+    }
+    if (hasBounce && oppCreatures.length > 0) {
+      const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
+      score += 6 + biggestThreat * 0.4;
+    }
+    if (hasTap && oppCreatures.filter(c => !c._tapped).length > 0) score += 5;
+  }
+
   if (phase === 'end_step') {
     // End of opponent's turn — use remaining mana efficiently
     if (hasDraw) {

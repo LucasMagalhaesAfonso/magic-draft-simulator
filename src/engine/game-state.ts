@@ -3971,7 +3971,14 @@ export function resolveETBExileTarget(state: any, targetUids: string[]): void {
 
       // Track until-leaves exiles (Static Snare, Stormplain Detainment, Mardu Siegebreaker)
       if (effect?.until_leaves || effect?.until_source_leaves) {
-        const sourceCard = pending.sourceCard;
+        // Find the source card on the battlefield by its uid
+        let sourceCard: any = null;
+        if (pending.cardUid) {
+          for (const p2 of state.players) {
+            const found = p2.zones.battlefield.get(pending.cardUid);
+            if (found) { sourceCard = found; break; }
+          }
+        }
         if (sourceCard) {
           if (!sourceCard._exiledUntilLeaves) sourceCard._exiledUntilLeaves = [];
           perm._owner = pid;

@@ -1456,6 +1456,50 @@ export function GameScreen() {
 
       {/* ── Opponent battlefield ── */}
       <div className="game-opp-bf">
+        {/* ── Zone cluster do oponente: Grimório + Cemitério ── */}
+        {(() => {
+          const CARD_BACK = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg';
+          const gyCards: any[] = p1.graveyard || [];
+          const topGyCard = gyCards.length > 0 ? gyCards[gyCards.length - 1] : null;
+          return (
+            <div className="zone-cluster zone-cluster-opp">
+              {/* Grimório do oponente — canto superior-esquerdo */}
+              <div className="library-zone-visual" title={`Grimório: ${p1.libraryCount} cartas`}>
+                <span className="zone-count-badge">{p1.libraryCount}</span>
+                <div className="library-card-stack">
+                  <img className="lib-card lib-card-3" src={CARD_BACK} alt="deck" />
+                  <img className="lib-card lib-card-2" src={CARD_BACK} alt="deck" />
+                  <img className="lib-card lib-card-1" src={CARD_BACK} alt="deck" />
+                  <div className="lib-shield-badge">🛡</div>
+                </div>
+              </div>
+              {/* Cemitério do oponente */}
+              <div
+                className="gy-zone-visual"
+                onClick={() => setGraveyardOpen({ pid: 1 })}
+                title={`Cemitério: ${gyCards.length} carta${gyCards.length !== 1 ? 's' : ''}`}
+              >
+                <span className="zone-count-badge">{gyCards.length}</span>
+                {topGyCard ? (
+                  <>
+                    <img
+                      className="gy-zone-card"
+                      src={topGyCard.image_normal || topGyCard.image_small}
+                      alt={topGyCard.name}
+                      onError={e => { (e.currentTarget as HTMLImageElement).src = CARD_BACK; }}
+                    />
+                    {gyCards.length > 1 && <div className="gy-zone-stack-hint" />}
+                  </>
+                ) : (
+                  <div className="gy-zone-empty">
+                    <span className="gy-zone-empty-icon">☠</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {p1.battlefield.length === 0
           ? <span className="game-bf-empty">Opponent battlefield</span>
           : (() => {

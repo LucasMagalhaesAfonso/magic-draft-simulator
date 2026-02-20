@@ -115,6 +115,19 @@
   z-index: 10;
 }
 
+/* Cluster do oponente: canto superior-esquerdo, badges em cima, invertido verticalmente */
+.zone-cluster-opp {
+  bottom: auto;
+  right: auto;
+  top: 8px;
+  left: 10px;
+  align-items: flex-start;
+}
+.zone-cluster-opp .library-zone-visual,
+.zone-cluster-opp .gy-zone-visual {
+  flex-direction: column-reverse;
+}
+
 /* ── Cemitério visual ── */
 .gy-zone-visual {
   display: flex;

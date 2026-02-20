@@ -1087,8 +1087,9 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
       score += 4 + biggestThreat * 0.5;
     }
     if (hasBounce && oppCreatures.length > 0) {
+      // Bounce before combat is almost as good as removal — prevents attack entirely
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
-      score += 3 + biggestThreat * 0.4;
+      score += 4 + biggestThreat * 0.5;
     }
   }
 

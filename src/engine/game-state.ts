@@ -3879,9 +3879,14 @@ export function resolveETBBounceTarget(state: any, targetUids: string[]): void {
       }
       vfxPlay('bounce', perm._uid);
       bf.remove(perm._uid);
-      const owner = perm._owner ?? perm._controller;
-      state.players[owner].zones.hand.add(perm);
-      state.log.push(`${perm.name} devolvida à mão.`);
+      GameState._unregisterCardTriggers(state, perm._uid);
+      if (perm._isToken) {
+        state.log.push(`${perm.name} token desaparece.`);
+      } else {
+        const owner = perm._owner ?? perm._controller;
+        state.players[owner].zones.hand.add(perm);
+        state.log.push(`${perm.name} devolvida à mão.`);
+      }
     }
   }
   _afterResolve(state);

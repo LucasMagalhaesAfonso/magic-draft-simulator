@@ -421,6 +421,49 @@ export function CreatureChoiceOverlay({ creatures, title, hint, optional, onConf
   );
 }
 
+// ─── Bounce Multi-Select Overlay (up_to: N bounce) ───────────────────────────
+interface BounceMultiOverlayProps {
+  permanents: any[]; maxBounce: number; title?: string;
+  onConfirm: (uids: string[]) => void;
+}
+export function BounceMultiOverlay({ permanents, maxBounce, title, onConfirm }: BounceMultiOverlayProps) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggle = (uid: string) => {
+    setSelected(prev =>
+      prev.includes(uid) ? prev.filter(u => u !== uid)
+      : prev.length >= maxBounce ? [...prev.slice(1), uid]
+      : [...prev, uid]
+    );
+  };
+  return (
+    <div className="overlay-backdrop">
+      <div className="overlay-panel glass">
+        <h3 className="overlay-title">{title || `↩ Bounce — Choose up to ${maxBounce} permanents`}</h3>
+        <p className="overlay-hint">Click to select. {selected.length}/{maxBounce} selected.</p>
+        <div className="scry-cards">
+          {permanents.map((c: any, i: number) => (
+            <div
+              key={c._uid || i}
+              className={`scry-card-slot${selected.includes(c._uid) ? ' scry-card-selected' : ''}`}
+              onClick={() => toggle(c._uid)}
+            >
+              <CardImage card={c} size="medium" />
+              <div className="scry-card-label">{c.name}</div>
+              {selected.includes(c._uid) && <div className="bounce-selected-badge">✓</div>}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(selected)} disabled={selected.length === 0}>
+            Bounce ({selected.length})
+          </button>
+          <button className="btn btn-muted" onClick={() => onConfirm([])}>Skip</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Look Top Overlay ─────────────────────────────────────────────────────────
 interface LookTopOverlayProps {
   cards: any[]; pickCount?: number; title?: string; hint?: string;

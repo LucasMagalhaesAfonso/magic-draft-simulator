@@ -13,6 +13,7 @@ import {
   LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
+  BounceMultiOverlay,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
 import { getLandManaColors, canPay } from '../engine/mana';
@@ -27,8 +28,23 @@ const TOKEN_ICONS: Record<string, string> = {
   Wolf:'🐺', Faerie:'🧚', Snake:'🐍',
 };
 
+// ── Color-aware gradient for token placeholders ─────────────────────────────
+const TOKEN_GRADIENTS: Record<string, string> = {
+  W: 'linear-gradient(160deg, #8a9aaa, #c8d8e8, #6a7a8a)',  // white/silver
+  U: 'linear-gradient(160deg, #1a3a6a, #2a5aaa, #0a2050)',  // blue
+  B: 'linear-gradient(160deg, #1a0a2a, #3a1a5a, #0a0a1a)',  // black/purple
+  R: 'linear-gradient(160deg, #6a1a0a, #c03020, #3a0a00)',  // red
+  G: 'linear-gradient(160deg, #0a3a1a, #2a6a2a, #003010)',  // green
+  GOLD: 'linear-gradient(160deg, #5a4a0a, #c8a020, #3a2a00)', // multicolor
+  C: 'linear-gradient(160deg, #3a3a3a, #5a5a5a, #1a1a1a)',  // colorless
+};
+function getTokenBg(colors: string[] | undefined): string {
+  if (!colors || colors.length === 0) return TOKEN_GRADIENTS.C;
+  if (colors.length > 1) return TOKEN_GRADIENTS.GOLD;
+  return TOKEN_GRADIENTS[colors[0]] || TOKEN_GRADIENTS.C;
+}
+
 // ── Battlefield token renderer (fetches real image from Scryfall) ─────────────
-// Returns whether this token has loaded a Scryfall image (via ref for parent access)
 function BfToken({ card, power, toughness }: { card: any; power: number | null; toughness: number | null }) {
   const [imgUrl, setImgUrl] = useState<string | null>(
     () => getTokenImageUrl(card.name),
@@ -45,7 +61,7 @@ function BfToken({ card, power, toughness }: { card: any; power: number | null; 
     return <img src={imgUrl} alt={card.name} loading="lazy" className="token-scryfall-img" />;
   }
   return (
-    <div className="bf-token-placeholder">
+    <div className="bf-token-placeholder" style={{ background: getTokenBg(card.colors) }}>
       <span className="bf-token-icon">
         {TOKEN_ICONS[card.name] || TOKEN_ICONS[(card.name || '').split(' ')[0]] || '★'}
       </span>
@@ -1924,9 +1940,20 @@ export function GameScreen() {
             );
           }
 
-          // ── ETB bounce target (Iceridge Serpent etc.) ─────────────────────
+          // ── ETB bounce target (Iceridge Serpent, Marang River Regent, etc.) ──
           case 'etb_bounce_target': {
             const choices = (wi as any).choices || [];
+            const maxBounce = (wi as any).maxBounce || 1;
+            if (maxBounce > 1) {
+              return (
+                <BounceMultiOverlay
+                  permanents={choices}
+                  maxBounce={maxBounce}
+                  title={`↩ Bounce — Choose up to ${maxBounce} permanents to return`}
+                  onConfirm={uids => actions.resolveETBBounceTarget(uids)}
+                />
+              );
+            }
             return (
               <CreatureChoiceOverlay
                 creatures={choices}

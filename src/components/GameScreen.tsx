@@ -1670,6 +1670,10 @@ export function GameScreen() {
               const isOmenMode = omenOnlyPlayable.has(card._uid);
               const advFace = card.back_face;
               const omenLabel = advFace?.type_line?.toLowerCase().includes('omen') ? 'Omen' : 'Adv';
+              const isHovered = hoveredHandCard === card._uid;
+              const isCreatureCard = card.type_line?.includes('Creature');
+              const cardPow = isCreatureCard ? parseInt(card.power) || 0 : null;
+              const cardTou = isCreatureCard ? parseInt(card.toughness) || 0 : null;
               return (
                 <div
                   key={card._uid}
@@ -1677,7 +1681,7 @@ export function GameScreen() {
                   className={`game-hand-card ${isPlayable ? 'hand-playable' : humanHasPriority ? 'hand-unplayable' : ''} ${newHandUids.has(card._uid) ? 'hand-draw-in' : ''}`}
                   onClick={() => handleCardClick(card, 0)}
                   onContextMenu={e => { e.preventDefault(); setZoom(card); }}
-                  onMouseEnter={() => isMainPhaseHuman && setHoveredHandCard(card._uid)}
+                  onMouseEnter={() => setHoveredHandCard(card._uid)}
                   onMouseLeave={() => setHoveredHandCard(null)}
                   style={{ position: 'relative' }}
                 >
@@ -1689,6 +1693,22 @@ export function GameScreen() {
                       fontWeight: 700, padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap',
                       pointerEvents: 'none',
                     }}>✦ {omenLabel}</div>
+                  )}
+                  {/* ── Hand card hover tooltip ── */}
+                  {isHovered && (
+                    <div className="hand-card-tooltip" onMouseEnter={() => setHoveredHandCard(card._uid)}>
+                      <div className="hct-name">{card.name}</div>
+                      {card.mana_cost && (
+                        <div className="hct-cost"><ManaCostPips cost={card.mana_cost} /></div>
+                      )}
+                      <div className="hct-type">{card.type_line}</div>
+                      {isCreatureCard && cardPow !== null && (
+                        <div className="hct-pt">{cardPow}/{cardTou}</div>
+                      )}
+                      {card.oracle_text && (
+                        <div className="hct-oracle">{card.oracle_text.slice(0, 120)}{card.oracle_text.length > 120 ? '…' : ''}</div>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -2073,6 +2093,20 @@ export function GameScreen() {
           }
 
           // ── tap_creature cost (Dragonbrood's Relic etc.) ──────────────────
+          // ── ETB clone target (Naga Fleshcrafter etc.) ────────────────────
+          case 'etb_clone_target': {
+            const choices = (wi as any).choices || [];
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="🐍 Clone — Choose a creature to copy"
+                hint="This creature becomes a copy of the chosen creature. Optional."
+                optional
+                onConfirm={uid => actions.resolveETBCloneTarget(uid ?? null)}
+              />
+            );
+          }
+
           case 'tap_creature_cost': {
             const choices = (wi as any).choices || [];
             return (

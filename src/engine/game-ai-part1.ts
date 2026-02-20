@@ -229,9 +229,6 @@ function _findBestSpellOrder(state: any, playerId: number): any {
 // ---------------------------------------------------------------------------
 
 export function playMainPhase(state: any, playerId: number): void {
-  console.log(`\n${'▓'.repeat(60)}`);
-  console.log(`[🎮 AI MAIN PHASE] Player ${playerId} starting main phase`);
-  console.log(`${'▓'.repeat(60)}\n`);
   const player = state.players[playerId];
   const hand = player.zones.hand;
   const bf = player.zones.battlefield;
@@ -260,14 +257,14 @@ export function playMainPhase(state: any, playerId: number): void {
 
   // 2. Cast spells strategically
   let playedSomething = true;
+  let _mainLoopGuard = 0;
   while (playedSomething) {
+    if (++_mainLoopGuard > 40) { break; } // Safety: max 40 spells per main phase
     playedSomething = false;
     const playable = GameState.getPlayableCards(state, playerId)
       .filter((c: any) => !CardEngine.isLand(c));
 
-    console.log(`[AI SPELL CASTING] Player ${playerId}: ${playable.length} playable spells`);
     if (playable.length === 0) {
-      console.log(`[AI SPELL CASTING] No more playable spells, ending main phase`);
       break;
     }
 
@@ -1011,10 +1008,11 @@ function _tryLoyaltyAbilities(state: any, playerId: number): void {
       }
 
       let score = 0;
+      const safeAmt = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 1; };
       for (const eff of ab.effects) {
-        if (eff.type === 'draw') score += 4 * (eff.amount || 1);
+        if (eff.type === 'draw') score += 4 * safeAmt(eff.amount);
         if (eff.type === 'create_token') score += 3;
-        if (eff.type === 'damage') score += 2 * (eff.amount || 1);
+        if (eff.type === 'damage') score += 2 * safeAmt(eff.amount);
         if (eff.type === 'destroy') score += 5;
         if (eff.type === 'counter_all') score += 3;
         if (eff.type === 'gain_life' || eff.type === 'gainLife') score += 1;

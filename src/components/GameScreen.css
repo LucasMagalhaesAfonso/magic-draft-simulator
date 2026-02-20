@@ -535,6 +535,65 @@
   opacity: 0.55;
 }
 
+/* Hand card hover tooltip */
+.game-hand-card {
+  position: relative;
+}
+
+.hand-card-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 200px;
+  background: rgba(10, 12, 20, 0.96);
+  border: 1px solid rgba(140, 120, 60, 0.6);
+  border-radius: 8px;
+  padding: 8px 10px;
+  z-index: 200;
+  pointer-events: none;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hct-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #f0e6c0;
+  line-height: 1.2;
+}
+
+.hct-cost {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.hct-type {
+  font-size: 10px;
+  color: #9a8a6a;
+  font-style: italic;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 3px;
+}
+
+.hct-pt {
+  font-size: 11px;
+  font-weight: 700;
+  color: #c0d0ff;
+  text-align: right;
+}
+
+.hct-oracle {
+  font-size: 10px;
+  color: #b0a080;
+  line-height: 1.4;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 3px;
+}
+
 /* Undo mana button */
 .btn-undo-mana {
   background: rgba(255, 100, 60, 0.85);

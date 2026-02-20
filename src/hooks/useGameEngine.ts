@@ -260,6 +260,9 @@ export interface GameActions {
   // ETB exile target choice
   resolveETBExileTarget(targetUids: string[]): void;
 
+  // ETB clone target choice (Naga Fleshcrafter)
+  resolveETBCloneTarget(targetUid: string | null): void;
+
   // tap_creature cost choice
   resolveActivationTapCreature(tappedUid: string | null): void;
 
@@ -1571,6 +1574,21 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveETBExileTarget]', e); }
+    },
+
+    // ── ETB clone target (human chose which creature to copy) ────────────────
+    resolveETBCloneTarget(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBCloneTarget === 'function') {
+          _GS.resolveETBCloneTarget(gs, targetUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBCloneTarget]', e); }
     },
 
     // ── tap_creature cost resolution (human chose which creature to tap) ─────

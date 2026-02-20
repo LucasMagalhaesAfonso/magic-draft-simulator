@@ -3105,6 +3105,39 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         lib.shuffle();
         return null;
       }
+      case 'clone_optional': {
+        // ETB effect: this card becomes a copy of target creature (optional)
+        const allCreatures = [
+          ...state.players[0].zones.battlefield.cards.filter(c => CardEngine.isCreature(c) && c._uid !== data.cardUid),
+          ...state.players[1].zones.battlefield.cards.filter(c => CardEngine.isCreature(c) && c._uid !== data.cardUid),
+        ];
+        if (allCreatures.length === 0) return `No creature to copy.`;
+        if (state.players[controllerId].isHuman) {
+          state._pendingETBClone = { effect, controller: controllerId, cardUid: data.cardUid };
+          state.waitingForInput = {
+            type: 'etb_clone_target',
+            playerId: controllerId,
+            choices: allCreatures.map(c => {
+              const pid = state.players[0].zones.battlefield.get(c._uid) ? 0 : 1;
+              return { ...c, _ownerPid: pid };
+            }),
+          };
+          return null;
+        }
+        // AI: copy the biggest creature on board
+        allCreatures.sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
+        const aiTarget = allCreatures[0];
+        const srcCard = state.players[controllerId].zones.battlefield.get(data.cardUid);
+        if (srcCard && aiTarget) {
+          srcCard.name = aiTarget.name; srcCard.power = aiTarget.power; srcCard.toughness = aiTarget.toughness;
+          srcCard.type_line = aiTarget.type_line; srcCard.keywords = aiTarget.keywords ? [...aiTarget.keywords] : [];
+          srcCard.oracle_text = aiTarget.oracle_text; srcCard.mana_cost = aiTarget.mana_cost; srcCard.cmc = aiTarget.cmc;
+          srcCard.image_normal = aiTarget.image_normal; srcCard.image_small = aiTarget.image_small;
+          srcCard._powerMod = 0; srcCard._toughnessMod = 0;
+          return `${srcCard.name} becomes a copy of ${aiTarget.name}.`;
+        }
+        return null;
+      }
       case 'create_token_copy':
       case 'clone':
       case 'copy_self': {
@@ -4033,6 +4066,43 @@ export function resolveETBDestroyTarget(state: any, targetUids: string | string[
       }
       break;
     }
+  }
+  _afterResolve(state);
+}
+
+// ── ETB Clone resolution (human chose which creature to copy) ────────────────
+export function resolveETBCloneTarget(state: any, targetUid: string | null): void {
+  const pending = state._pendingETBClone;
+  if (!pending) return;
+  state._pendingETBClone = null;
+  state.waitingForInput = null;
+
+  if (!targetUid) { _afterResolve(state); return; } // declined (optional)
+
+  const srcCard = state.players[pending.controller].zones.battlefield.get(pending.cardUid);
+  if (!srcCard) { _afterResolve(state); return; }
+
+  // Find target across all players
+  let targetCard: any = null;
+  for (const p of state.players) {
+    const c = p.zones.battlefield.get(targetUid);
+    if (c) { targetCard = c; break; }
+  }
+
+  if (targetCard) {
+    srcCard.name = targetCard.name;
+    srcCard.power = targetCard.power;
+    srcCard.toughness = targetCard.toughness;
+    srcCard.type_line = targetCard.type_line;
+    srcCard.keywords = targetCard.keywords ? [...targetCard.keywords] : [];
+    srcCard.oracle_text = targetCard.oracle_text;
+    srcCard.mana_cost = targetCard.mana_cost;
+    srcCard.cmc = targetCard.cmc;
+    srcCard.image_normal = targetCard.image_normal;
+    srcCard.image_small = targetCard.image_small;
+    srcCard._powerMod = 0;
+    srcCard._toughnessMod = 0;
+    state.log.push(`Naga Fleshcrafter becomes a copy of ${targetCard.name}.`);
   }
   _afterResolve(state);
 }
@@ -5767,7 +5837,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
 
         // If ETB set waitingForInput (search_library, scry, surveil, confirm_optional, etc.), pause here
         // The game will resume after the human player completes their input
-        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost', 'etb_tap_target', 'choose_gy_return', 'etb_exile_target'];
+        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost', 'etb_tap_target', 'choose_gy_return', 'etb_exile_target', 'etb_clone_target'];
         if (state.waitingForInput && _etbPauseTypes.includes(state.waitingForInput.type)) {
           return { success: true, waitForInput: true };
         }

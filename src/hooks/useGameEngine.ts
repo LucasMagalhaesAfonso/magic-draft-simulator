@@ -252,7 +252,7 @@ export interface GameActions {
   resolveETBBounceTarget(targetUids: string[]): void;
 
   // ETB destroy target choice
-  resolveETBDestroyTarget(targetUid: string | null): void;
+  resolveETBDestroyTarget(targetUids: string | string[] | null): void;
 
   // ETB tap target choice
   resolveETBTapTarget(targetUids: string[]): void;
@@ -612,22 +612,32 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         }
 
         // Give AI a chance to react with removal/bounce/counter after human casts a spell.
-        // This runs only when: human cast succeeds, no ETB overlay is pending, AI has instants.
+        // Only fires when: cast succeeded, no ETB overlay is immediately pending, not a land.
+        // The timer itself also guards against later-opening overlays (waitingForInput check).
         if (
           result?.success !== false &&
           !gs.waitingForInput &&
           _GameAI &&
           pid === 0
         ) {
+          // Cancel any previous pending AI reaction
+          if ((window as any).__aiStackReactTimer) {
+            clearTimeout((window as any).__aiStackReactTimer);
+          }
           const hand = gs.players[pid].zones.hand.getAll();
           const castCard = hand.find((c: any) => c._uid === cardUid);
           if (!castCard || !castCard.type_line?.includes('Land')) {
             (window as any).__aiStackReactTimer = setTimeout(() => {
+              (window as any).__aiStackReactTimer = null;
               const currentGs = gsRef.current;
+              // Guard: don't react if any overlay is open (ETB, targeting, etc.)
               if (!currentGs || currentGs.waitingForInput) return;
+              // Guard: only react during main phase (not already in a special priority window)
+              const ph = currentGs.phase;
+              if (ph !== 'main1' && ph !== 'main2') return;
               (_GameAI as any).playInstantPhase?.(currentGs, 1, 'stack_priority');
               refresh();
-            }, 300);
+            }, 400); // slightly longer to let ETB overlays open first
           }
         }
 
@@ -1324,6 +1334,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             if (!(gs as any)._beholding) (gs as any)._beholding = [null, null];
             (gs as any)._beholding[0] = card;
             gs.log.push(`${card.name} revelado (behold).`);
+            // Signal GameScreen to show a toast (card stays in hand)
+            (gs as any)._lastBeholdReveal = card.name;
           }
         }
         afterResolve(gs);
@@ -1497,12 +1509,12 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
     // ── ETB destroy target (human chose which permanent to destroy) ──────────
 
-    resolveETBDestroyTarget(targetUid: string | null) {
+    resolveETBDestroyTarget(targetUids: string | string[] | null) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
         if (typeof _GS.resolveETBDestroyTarget === 'function') {
-          _GS.resolveETBDestroyTarget(gs, targetUid);
+          _GS.resolveETBDestroyTarget(gs, targetUids);
         } else {
           gs.waitingForInput = null;
         }

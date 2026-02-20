@@ -297,6 +297,16 @@ export function GameScreen() {
     prevLifeRef.current = [p0life, p1life];
   }, [snap?.players[0].life, snap?.players[1].life]); // eslint-disable-line
 
+  // Behold reveal toast
+  const prevBeholdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const reveal = (snap as any)?._lastBeholdReveal;
+    if (reveal && reveal !== prevBeholdRef.current) {
+      prevBeholdRef.current = reveal;
+      addToast(`🐉 Revealed: ${reveal} (stays in hand)`, 'cast');
+    }
+  }, [(snap as any)?._lastBeholdReveal]); // eslint-disable-line
+
   // Turn banner
   useEffect(() => {
     if (!snap || snap.phase === 'mulligan') return;
@@ -1943,12 +1953,25 @@ export function GameScreen() {
           // ── ETB destroy target ────────────────────────────────────────────
           case 'etb_destroy_target': {
             const choices = (wi as any).choices || [];
+            const maxDestroy = (wi as any).maxDestroy || 1;
+            const isOptionalDestroy = !!(wi as any).optional;
+            if (maxDestroy > 1) {
+              return (
+                <BounceMultiOverlay
+                  permanents={choices}
+                  maxBounce={maxDestroy}
+                  title={`💀 Destroy — Choose up to ${maxDestroy} permanents`}
+                  onConfirm={uids => actions.resolveETBDestroyTarget(uids)}
+                />
+              );
+            }
             return (
               <CreatureChoiceOverlay
                 creatures={choices}
                 title="💀 Destroy — Choose a permanent"
-                hint="Click a permanent to destroy it."
-                onConfirm={uid => actions.resolveETBDestroyTarget(uid)}
+                hint={isOptionalDestroy ? 'Click a permanent to destroy it, or skip.' : 'Click a permanent to destroy it.'}
+                optional={isOptionalDestroy}
+                onConfirm={uid => actions.resolveETBDestroyTarget(uid ? [uid] : [])}
               />
             );
           }
@@ -2366,7 +2389,7 @@ export function GameScreen() {
               <SearchLibraryOverlay
                 candidates={pending.cards || []}
                 title="🐉 Behold — Reveal a Dragon from your hand"
-                hint="Choose which Dragon to reveal."
+                hint="Choose which Dragon to reveal. The card stays in your hand."
                 optional={pending.isOptional === true}
                 onConfirm={uid => actions.resolveBeholdChoice(uid ?? null)}
               />

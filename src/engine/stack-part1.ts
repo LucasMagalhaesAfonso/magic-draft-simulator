@@ -387,19 +387,25 @@ export function _resolveItem(item, state) {
 
           // Human player: pause and let them choose
           if (gameState.players[controller].isHuman) {
-            gameState._pendingETBDestroy = { effect, controller, cardUid: card?._uid };
+            const maxDestroy = (effect as any).up_to || 1;
+            gameState._pendingETBDestroy = { effect, controller, cardUid: card?._uid, maxDestroy };
             gameState.waitingForInput = {
               type: 'etb_destroy_target',
               playerId: controller,
               choices: validChoices.map(({ c, pid }) => ({ ...c, _ownerPid: pid })),
+              optional: !!(effect as any).optional,
+              maxDestroy,
             };
             break;
           }
 
+          // AI: if optional and no great target, skip
+          if ((effect as any).optional && validChoices.length === 0) break;
           // AI: auto-pick highest-power valid target (most threatening)
           validChoices.sort((a, b) => Cards.getPower(b.c) - Cards.getPower(a.c));
-          const pick = validChoices[0];
-          if (pick) effectTargets = [{ type: 'permanent', uid: pick.c._uid, player: pick.pid }];
+          const maxD = (effect as any).up_to || 1;
+          const picks = validChoices.slice(0, maxD);
+          if (picks.length) effectTargets = picks.map(p => ({ type: 'permanent', uid: p.c._uid, player: p.pid }));
         }
         if (effectTargets && effectTargets.length > 0) {
           const target = effectTargets[0];

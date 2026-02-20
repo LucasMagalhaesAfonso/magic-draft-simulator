@@ -384,7 +384,19 @@ export function _resolveItem(item, state) {
             log.push(`No valid target to destroy.`);
             break;
           }
-          // Auto-pick highest-power valid target (most threatening)
+
+          // Human player: pause and let them choose
+          if (gameState.players[controller].isHuman) {
+            gameState._pendingETBDestroy = { effect, controller, cardUid: card?._uid };
+            gameState.waitingForInput = {
+              type: 'etb_destroy_target',
+              playerId: controller,
+              choices: validChoices.map(({ c, pid }) => ({ ...c, _ownerPid: pid })),
+            };
+            break;
+          }
+
+          // AI: auto-pick highest-power valid target (most threatening)
           validChoices.sort((a, b) => Cards.getPower(b.c) - Cards.getPower(a.c));
           const pick = validChoices[0];
           if (pick) effectTargets = [{ type: 'permanent', uid: pick.c._uid, player: pick.pid }];

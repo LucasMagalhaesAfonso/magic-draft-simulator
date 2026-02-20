@@ -251,6 +251,9 @@ export interface GameActions {
   // ETB bounce target choice
   resolveETBBounceTarget(targetUids: string[]): void;
 
+  // ETB destroy target choice
+  resolveETBDestroyTarget(targetUid: string | null): void;
+
   // tap_creature cost choice
   resolveActivationTapCreature(tappedUid: string | null): void;
 
@@ -1464,6 +1467,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveHideaway]', e); }
+    },
+
+    // ── ETB destroy target (human chose which permanent to destroy) ──────────
+
+    resolveETBDestroyTarget(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBDestroyTarget === 'function') {
+          _GS.resolveETBDestroyTarget(gs, targetUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBDestroyTarget]', e); }
     },
 
     // ── ETB bounce target (human chose which permanent to bounce) ────────────

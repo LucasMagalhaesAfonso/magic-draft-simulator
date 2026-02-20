@@ -1911,6 +1911,19 @@ export function GameScreen() {
             );
           }
 
+          // ── ETB destroy target ────────────────────────────────────────────
+          case 'etb_destroy_target': {
+            const choices = (wi as any).choices || [];
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="💀 Destroy — Choose a permanent"
+                hint="Click a permanent to destroy it."
+                onConfirm={uid => actions.resolveETBDestroyTarget(uid)}
+              />
+            );
+          }
+
           // ── ETB bounce target (Iceridge Serpent etc.) ─────────────────────
           case 'etb_bounce_target': {
             const choices = (wi as any).choices || [];
@@ -2767,8 +2780,10 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
       ) : (
         <img src={overrideArtUrl || card.image_normal || card.image_small || undefined} alt={card.name} loading="lazy" />
       )}
-      {/* Tokens show P/T inside BfToken placeholder; real cards show badge here */}
-      {isCreature && power !== null && !card._isToken && (
+      {/* Real cards always show badge; token-copies (image_normal set) also show badge
+          since their card image has base P/T but actual P/T may differ due to buffs.
+          Regular tokens (no image) use BfToken placeholder which shows P/T internally. */}
+      {isCreature && power !== null && (!card._isToken || !!(overrideArtUrl || card.image_normal || card.image_small)) && (
         <div className="bf-pt">{power}/{toughness}</div>
       )}
       {card._damage > 0 && <div className="bf-damage">💥{card._damage}</div>}

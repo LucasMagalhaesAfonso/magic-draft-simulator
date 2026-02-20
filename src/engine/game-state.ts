@@ -3887,6 +3887,45 @@ export function resolveETBBounceTarget(state: any, targetUids: string[]): void {
   _afterResolve(state);
 }
 
+  // ── ETB Destroy target resolution (human chose which permanent to destroy) ──
+export function resolveETBDestroyTarget(state: any, targetUid: string | null): void {
+  const pending = state._pendingETBDestroy;
+  if (!pending) return;
+  state._pendingETBDestroy = null;
+  state.waitingForInput = null;
+
+  if (!targetUid) return; // human cancelled (no cancel button, but safety check)
+
+  const controller = pending.controller;
+
+  // Find the permanent across all players
+  for (const p of state.players) {
+    const bf = p.zones.battlefield;
+    const perm = bf.get(targetUid);
+    if (!perm) continue;
+    if (!CardEngine.canBeTargeted(perm, controller)) {
+      state.log.push(`${perm.name} can't be targeted (hexproof/shroud).`);
+      break;
+    }
+    if (CardEngine.hasIndestructible(perm)) {
+      state.log.push(`${perm.name} is indestructible!`);
+      break;
+    }
+    if (CardEngine.isCreature(perm)) {
+      const died = creatureDies(state, perm, p._pid ?? state.players.indexOf(p));
+      if (died) state.log.push(`${perm.name} is destroyed.`);
+    } else {
+      const ownerIdx = state.players.indexOf(p);
+      bf.remove(perm._uid);
+      _unregisterCardTriggers(state, perm._uid);
+      state.players[ownerIdx].zones.graveyard.add(perm);
+      state.log.push(`${perm.name} is destroyed.`);
+    }
+    break;
+  }
+  _afterResolve(state);
+}
+
   // ── Scry / Surveil resolution ────────────────────────────
 export function resolveScry(state, choices, topOrder?) {
     // choices: array of 'top' | 'bottom' | 'graveyard' for each card in _pendingScry.cards
@@ -5615,7 +5654,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
 
         // If ETB set waitingForInput (search_library, scry, surveil, confirm_optional, etc.), pause here
         // The game will resume after the human player completes their input
-        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'tap_creature_cost'];
+        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost'];
         if (state.waitingForInput && _etbPauseTypes.includes(state.waitingForInput.type)) {
           return { success: true, waitForInput: true };
         }

@@ -366,8 +366,8 @@ function _fireSelfCastTriggers(state: any, card: any, playerId: number): void {
       if (!condMet) continue;
     }
     if (trigger.effects && trigger.effects.length > 0) {
-      const logs = GameStack.resolveEffects(state, playerId, card, trigger.effects, []);
-      state.log.push(...logs);
+      // resolveEffects pushes to state.log internally and returns void
+      GameStack.resolveEffects(state, playerId, card, trigger.effects, []);
     }
   }
 }
@@ -3813,8 +3813,9 @@ export function resolveMultiBuffChoice(state) {
   }
 
   // ── Scry / Surveil resolution ────────────────────────────
-export function resolveScry(state, choices) {
+export function resolveScry(state, choices, topOrder?) {
     // choices: array of 'top' | 'bottom' | 'graveyard' for each card in _pendingScry.cards
+    // topOrder: optional array of original card indices specifying preferred library order (first = top)
     if (!state._pendingScry) return;
     const pending = state._pendingScry;
     const lib = state.players[pending.playerId].zones.library;
@@ -3822,10 +3823,20 @@ export function resolveScry(state, choices) {
 
     const keepCards = [];
     const awayCards = [];
-    pending.cards.forEach((card, i) => {
-      if ((choices[i] || 'top') === 'top') keepCards.push(card);
-      else awayCards.push(card);
-    });
+    if (topOrder && topOrder.length > 0) {
+      // Use user-specified order for top cards
+      topOrder.forEach(i => {
+        if (choices[i] === 'top') keepCards.push(pending.cards[i]);
+      });
+      pending.cards.forEach((card, i) => {
+        if (choices[i] !== 'top') awayCards.push(card);
+      });
+    } else {
+      pending.cards.forEach((card, i) => {
+        if ((choices[i] || 'top') === 'top') keepCards.push(card);
+        else awayCards.push(card);
+      });
+    }
 
     for (const c of keepCards.reverse()) lib.addToTop(c);
 
@@ -3845,8 +3856,8 @@ export function resolveScry(state, choices) {
     if (state._pendingStackEffects) {
       const pse = state._pendingStackEffects;
       state._pendingStackEffects = null;
-      const resumeLog = GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
-      state.log.push(...resumeLog);
+      // resolveEffects pushes to state.log internally and returns void
+      GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
     }
   }
 
@@ -5145,11 +5156,16 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
         return { success: false, msg: 'Mana insuficiente.' };
       }
 
-      // Double check: total mana in pool must be >= cmc (safety net)
-      const poolTotal = ManaSystem.poolTotal(state.manaPool[playerId]);
-      const requiredTotal = useCmc || ManaSystem.parseCost(useCost).total || 0;
-      if (poolTotal < requiredTotal) {
-        return { success: false, msg: 'Mana insuficiente.' };
+      // Double check: total mana in pool must be >= cmc (safety net).
+      // Skip for hybrid costs: player may pay less than Scryfall CMC by using colored mana.
+      // e.g. {2/W}{2/B}{2/G} has cmc=6 but costs only 3 mana if paying W+B+G.
+      const _parsedForHybridCheck = ManaSystem.parseCost(useCost);
+      if (!_parsedForHybridCheck.hybrids || _parsedForHybridCheck.hybrids.length === 0) {
+        const poolTotal = ManaSystem.poolTotal(state.manaPool[playerId]);
+        const requiredTotal = useCmc || _parsedForHybridCheck.total || 0;
+        if (poolTotal < requiredTotal) {
+          return { success: false, msg: 'Mana insuficiente.' };
+        }
       }
 
       // Pay mana
@@ -7718,21 +7734,29 @@ export function _oracleTextRequiresTargets(oracleText) {
   }
 
 export function _hasValidTargetsFromOracle(state, playerId, oracleText) {
-    // Check specific oracle text patterns for available targets
-    if (oracleText.includes('target creature')) {
-      const allCreatures = [
-        ...state.players[0].zones.battlefield.cards,
-        ...state.players[1].zones.battlefield.cards
-      ].filter(c => CardEngine.isCreature(c));
-      return allCreatures.length > 0;
+    // Check attacking/blocking targets first (more restrictive than generic "target creature")
+    if (oracleText.includes('target attacking') || oracleText.includes('attacking or blocking')) {
+      const attackers = state.combat?.attackers || [];
+      const blockerMap = state.combat?.blockers || {};
+      const anyBlockers = Object.values(blockerMap).some((arr: any) => Array.isArray(arr) && arr.length > 0);
+      return attackers.length > 0 || anyBlockers;
     }
 
+    // Check specific oracle text patterns for available targets
     if (oracleText.includes('target creature or planeswalker')) {
       const targets = [
         ...state.players[0].zones.battlefield.cards,
         ...state.players[1].zones.battlefield.cards
       ].filter(c => CardEngine.isCreature(c) || CardEngine.isPlaneswalker(c));
       return targets.length > 0;
+    }
+
+    if (oracleText.includes('target creature')) {
+      const allCreatures = [
+        ...state.players[0].zones.battlefield.cards,
+        ...state.players[1].zones.battlefield.cards
+      ].filter(c => CardEngine.isCreature(c));
+      return allCreatures.length > 0;
     }
 
     return true; // Default to allowing cast for other patterns
@@ -7927,9 +7951,13 @@ export function resolveSearchLibrary(state: any, cardUid: string | null): void {
         const bfCard = CardEngine.prepareForBattlefield(picked);
         bfCard._ownerId = pending.controllerId;
         if (pending.effect.tapped) bfCard._tapped = true;
+        if (pending.effect.stun_counter) {
+          if (!bfCard._stunCounters) bfCard._stunCounters = 0;
+          bfCard._stunCounters += (pending.effect.stun_counter || 1);
+        }
         bf.add(bfCard);
         lib.shuffle();
-        state.log.push(`Busca ${picked.name} e coloca no campo.`);
+        state.log.push(`Busca ${picked.name} e coloca no campo${pending.effect.tapped ? ' virado' : ''}.`);
       } else {
         state.players[pending.controllerId].zones.hand.add(picked);
         lib.shuffle();
@@ -8149,8 +8177,8 @@ export function resolveLookTop(state: any, choices: string[]): void {
   if (state._pendingStackEffects) {
     const pse = state._pendingStackEffects;
     state._pendingStackEffects = null;
-    const resumeLog = GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
-    state.log.push(...resumeLog);
+    // resolveEffects pushes to state.log internally and returns void
+    GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
   }
 
   _afterResolve(state);
@@ -8185,8 +8213,8 @@ export function resolveConfirmOptional(state: any, confirmed: boolean): void {
   if (state._pendingStackEffects) {
     const pse = state._pendingStackEffects;
     state._pendingStackEffects = null;
-    const resumeLog = GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
-    state.log.push(...resumeLog);
+    // resolveEffects pushes to state.log internally and returns void
+    GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
   }
 
   _afterResolve(state);
@@ -8255,8 +8283,8 @@ export function resolveSacrifice(state: any, cardUid: string | null): void {
   if (state._pendingStackEffects) {
     const pse = state._pendingStackEffects;
     state._pendingStackEffects = null;
-    const resumeLog = GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
-    state.log.push(...resumeLog);
+    // resolveEffects pushes to state.log internally and returns void
+    GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
   }
 
   _afterResolve(state);
@@ -8304,8 +8332,8 @@ export function resolveGYReturn(state: any, cardUids: string[]): void {
   if (state._pendingStackEffects) {
     const pse = state._pendingStackEffects;
     state._pendingStackEffects = null;
-    const resumeLog = GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
-    state.log.push(...resumeLog);
+    // resolveEffects pushes to state.log internally and returns void
+    GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
   }
 
   _afterResolve(state);
@@ -8457,8 +8485,8 @@ export function resolveMandatoryDiscard(state: any, cardUids: string[]): void {
   if (state._pendingStackEffects) {
     const pse = state._pendingStackEffects;
     state._pendingStackEffects = null;
-    const resumeLog = GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
-    state.log.push(...resumeLog);
+    // resolveEffects pushes to state.log internally and returns void
+    GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
   }
 
   _afterResolve(state);
@@ -8512,9 +8540,10 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
 
   state.log.push(`${card.name}: habilidade do cemiterio ativada!`);
 
-  // Remove from graveyard, exile if required
-  gy.remove(card._uid);
+  // If cost requires exile, remove from graveyard and add to exile now.
+  // Otherwise, leave card in graveyard so effects like return_to_hand can move it themselves.
   if (ability.cost?.exile) {
+    gy.remove(card._uid);
     state.players[pid].zones.exile.add(card);
   }
 

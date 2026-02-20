@@ -186,7 +186,7 @@ export interface GameActions {
   mulligan(): void;
   resolveChoice(type: string, value: any): void;
   // Interactive overlays
-  resolveScry(choices: ('top' | 'bottom' | 'graveyard')[]): void;
+  resolveScry(choices: ('top' | 'bottom' | 'graveyard')[], topOrder?: number[]): void;
   resolveModal(modeIndices: number[]): void;
   resolveChooseTarget(targets: any[]): void;
   resolvePostModalTarget(target: any): void;
@@ -372,12 +372,21 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
+  // Debounce: prevent rapid Space presses from advancing multiple phases
+  let _lastNextPhaseMs = 0;
+
   const actions: GameActions = {
     nextPhase() {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       // Don't advance during mulligan — handled by keepHand/mulligan actions
       if (gs.phase === 'mulligan') return;
+      // Guard: engine trampoline still running — skip
+      if ((gs as any)._processingPhases) return;
+      // Debounce: ignore if called within 250ms of last call
+      const now = Date.now();
+      if (now - _lastNextPhaseMs < 250) return;
+      _lastNextPhaseMs = now;
       clearManaUndo();
       try {
         const prevWaiting = gs.waitingForInput;
@@ -491,7 +500,15 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
         // Compute effective mana cost (conditional cost like Dragon's Prey +{2} for dragons)
         let tapCost = card.mana_cost;
+        // For hybrid costs, use the minimum viable CMC (parseCost.total) rather than Scryfall CMC.
+        // e.g. {2/W}{2/B}{2/G}: Scryfall cmc=6 but minimum payment is 3 (one colored per hybrid).
         let tapCmc = card.cmc;
+        if (_Mana && tapCost) {
+          const _parsedForHybrid = _Mana.parseCost(tapCost);
+          if (_parsedForHybrid.hybrids && _parsedForHybrid.hybrids.length > 0) {
+            tapCmc = _parsedForHybrid.total; // hybrid minimum
+          }
+        }
         if (_Cards && _Mana && targets && targets.length > 0) {
           const t0 = targets[0];
           const targetPlayer = gs.players[t0.player];
@@ -616,6 +633,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
     tapLand(cardUid: string) {
       const gs = gsRef.current;
       if (!gs || !_GS || !_Mana) return;
+      // Don't tap if any overlay is already waiting (e.g. mana_color_choice for another land)
+      if (gs.waitingForInput && gs.waitingForInput.type !== 'main_phase' && gs.waitingForInput.type !== 'declare_attackers') return;
       try {
         const card = gs.players[0].zones.battlefield.get(cardUid);
         if (!card || card._tapped) return;
@@ -757,11 +776,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       }
     },
 
-    resolveScry(choices: ('top' | 'bottom' | 'graveyard')[]) {
+    resolveScry(choices: ('top' | 'bottom' | 'graveyard')[], topOrder?: number[]) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
-        _GS.resolveScry(gs, choices);
+        _GS.resolveScry(gs, choices, topOrder);
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveScry] error:', e); }

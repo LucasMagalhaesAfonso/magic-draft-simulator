@@ -93,6 +93,35 @@
   color: var(--text-primary);
 }
 
+.scry-order-btns {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(0,0,0,0.7);
+}
+
+.scry-order-btn {
+  background: var(--glass-bg);
+  border: 1px solid var(--gold);
+  color: var(--gold);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scry-order-btn:hover:not(:disabled) {
+  background: var(--gold);
+  color: #000;
+}
+
+.scry-order-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .scry-card-slot.scry-away .scry-card-label {
   color: var(--danger);
 }

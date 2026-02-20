@@ -20,14 +20,40 @@ interface ScryOverlayProps {
 export function ScryOverlay({ pendingScry, onConfirm }: ScryOverlayProps) {
   const isSurveil = pendingScry.type === 'surveil';
   const [choices, setChoices] = useState<string[]>(pendingScry.cards.map(() => 'top'));
+  // topOrder tracks the desired library order for "top" cards (indices into pendingScry.cards)
+  const [topOrder, setTopOrder] = useState<number[]>(pendingScry.cards.map((_: any, i: number) => i));
 
-  function toggle(i: number) {
+  function toggle(originalIdx: number) {
     setChoices(prev => {
       const next = [...prev];
-      next[i] = prev[i] === 'top' ? (isSurveil ? 'graveyard' : 'bottom') : 'top';
+      next[originalIdx] = prev[originalIdx] === 'top' ? (isSurveil ? 'graveyard' : 'bottom') : 'top';
       return next;
     });
   }
+
+  // Move a top-card up (earlier = closer to top of library)
+  function moveUp(orderPos: number) {
+    if (orderPos === 0) return;
+    setTopOrder(prev => {
+      const next = [...prev];
+      [next[orderPos - 1], next[orderPos]] = [next[orderPos], next[orderPos - 1]];
+      return next;
+    });
+  }
+
+  // Move a top-card down
+  function moveDown(orderPos: number) {
+    setTopOrder(prev => {
+      if (orderPos >= prev.length - 1) return prev;
+      const next = [...prev];
+      [next[orderPos], next[orderPos + 1]] = [next[orderPos + 1], next[orderPos]];
+      return next;
+    });
+  }
+
+  // Only the indices that are staying on top, in user's preferred order
+  const topCardOrder = topOrder.filter(i => choices[i] === 'top');
+  const hasMultipleTop = topCardOrder.length > 1;
 
   return (
     <div className="overlay-backdrop">
@@ -37,25 +63,35 @@ export function ScryOverlay({ pendingScry, onConfirm }: ScryOverlayProps) {
         </h3>
         <p className="overlay-hint">
           Clique para {isSurveil ? 'enviar pro cemitério' : 'colocar no fundo'}.
-          Cartas sem clique ficam no topo.
+          {hasMultipleTop ? ' Use ↑↓ para ordenar o topo da biblioteca.' : ' Cartas sem clique ficam no topo.'}
         </p>
         <div className="scry-cards">
-          {pendingScry.cards.map((card: any, i: number) => (
-            <div
-              key={card._uid || i}
-              className={`scry-card-slot ${choices[i] !== 'top' ? 'scry-away' : ''}`}
-              onClick={() => toggle(i)}
-            >
-              <CardImage card={card} size="medium" />
-              <div className="scry-card-label">
-                {choices[i] === 'top' ? '⬆ Topo' : isSurveil ? '☠ Cemitério' : '⬇ Fundo'}
+          {topOrder.map((originalIdx: number, orderPos: number) => {
+            const card = pendingScry.cards[originalIdx];
+            const choice = choices[originalIdx];
+            return (
+              <div
+                key={card._uid || originalIdx}
+                className={`scry-card-slot ${choice !== 'top' ? 'scry-away' : ''}`}
+                onClick={() => toggle(originalIdx)}
+              >
+                <CardImage card={card} size="medium" />
+                <div className="scry-card-label">
+                  {choice === 'top' ? `⬆ Topo${hasMultipleTop ? ` #${orderPos + 1}` : ''}` : isSurveil ? '☠ Cemitério' : '⬇ Fundo'}
+                </div>
+                {choice === 'top' && hasMultipleTop && (
+                  <div className="scry-order-btns" onClick={e => e.stopPropagation()}>
+                    <button className="scry-order-btn" onClick={() => moveUp(orderPos)} disabled={orderPos === 0}>↑</button>
+                    <button className="scry-order-btn" onClick={() => moveDown(orderPos)} disabled={orderPos >= topCardOrder.length - 1}>↓</button>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         <button
           className="btn btn-gold overlay-confirm"
-          onClick={() => onConfirm(choices as any[])}
+          onClick={() => onConfirm(choices as any[], topCardOrder)}
         >
           Confirmar (Enter)
         </button>

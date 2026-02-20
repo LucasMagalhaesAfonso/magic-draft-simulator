@@ -173,7 +173,7 @@ export function DeckBuilderScreen() {
           >
             {totalCards}/40
           </span>
-          <span className="db-deck-lands">{mainboard.length} spells · {totalLands} lands</span>
+          <span className="db-deck-lands">{mainboard.length - nonBasicLandsInMain} spells · {totalLands} lands</span>
         </div>
         <div className="db-toolbar-hint">Right-click card to zoom · Drag to move</div>
         <div className="db-toolbar-right">

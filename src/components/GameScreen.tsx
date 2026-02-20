@@ -262,7 +262,9 @@ export function GameScreen() {
   // Keyboard shortcuts
   useEffect(() => {
     function handler(e: KeyboardEvent) {
+      // Don't fire game shortcuts when typing in input/textarea fields
       if (e.target instanceof HTMLInputElement) return;
+      if (e.target instanceof HTMLTextAreaElement) return;
       switch (e.key) {
         case ' ':
           e.preventDefault();
@@ -1082,7 +1084,7 @@ export function GameScreen() {
                   <BattlefieldCard
                     key={card._uid}
                     card={card}
-                    isAttacking={combat.attackers.some((a: any) => a.uid === card._uid)}
+                    isAttacking={combat.attackers.some((a: any) => (typeof a === 'string' ? a : a.uid) === card._uid)}
                     isAttacker={false}
                     isTargetable={isTargetable || isAttackTarget}
                     isBlockingTarget={isBlockingTarget}
@@ -1240,7 +1242,7 @@ export function GameScreen() {
                   <BattlefieldCard
                     key={card._uid}
                     card={card}
-                    isAttacking={combat.attackers.some((a: any) => a.uid === card._uid)}
+                    isAttacking={combat.attackers.some((a: any) => (typeof a === 'string' ? a : a.uid) === card._uid)}
                     isAttacker
                     isTargetable={isTargetable}
                     isAssignedBlocker={isAssignedBlocker}

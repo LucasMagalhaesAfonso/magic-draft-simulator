@@ -534,7 +534,8 @@ export const CardEffectsDB: Record<string, any> = {
         to_battlefield: true,
         tapped: true,
         stun_counter: 1,
-        controller: "opponent"
+        controller: "opponent",
+        allow_choice: true
       }
     ]
   },
@@ -1657,10 +1658,6 @@ export const CardEffectsDB: Record<string, any> = {
 
   "jeskai brushmaster": {
     static: [{ type: "has_keyword", keywords: ["double strike", "prowess"] }]
-  },
-
-  "defibrillating current": {
-    cast: [{ type: "damage", amount: 4, target: "creature_or_planeswalker" }, { type: "gainLife", amount: 2 }]
   },
 
   // =================== METADATA ===================

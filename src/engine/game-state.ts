@@ -3939,6 +3939,51 @@ export function resolveETBTapTarget(state: any, targetUids: string[]): void {
   _afterResolve(state);
 }
 
+  // ── ETB Exile target resolution (human chose which permanent(s) to exile) ───
+export function resolveETBExileTarget(state: any, targetUids: string[]): void {
+  const pending = state._pendingETBExile;
+  if (!pending) return;
+  state._pendingETBExile = null;
+  state.waitingForInput = null;
+
+  const { controller, effect } = pending;
+  const vfxPlay = (type: string, uid: string) => {
+    const evt = new CustomEvent('vfx:play', { detail: { type, uid } });
+    if (typeof window !== 'undefined') window.dispatchEvent(evt);
+  };
+
+  for (const uid of targetUids) {
+    for (let pid = 0; pid < state.players.length; pid++) {
+      const bf = state.players[pid].zones.battlefield;
+      const perm = bf.get(uid);
+      if (!perm) continue;
+      if (!CardEngine.canBeTargeted(perm, controller)) {
+        state.log.push(`${perm.name} can't be targeted (hexproof/shroud).`);
+        continue;
+      }
+      vfxPlay('exile', perm._uid);
+      bf.remove(perm._uid);
+      GameState._unregisterCardTriggers(state, perm._uid);
+      if (CardEngine.isCreature(perm)) {
+        GameState.fireTrigger(state, 'leaves_battlefield', { cardUid: perm._uid, card: perm, ownerId: pid });
+      }
+      state.players[pid].zones.exile.add(perm);
+
+      // Track until-leaves exiles (Static Snare, Stormplain Detainment, Mardu Siegebreaker)
+      if (effect?.until_leaves || effect?.until_source_leaves) {
+        const sourceCard = pending.sourceCard;
+        if (sourceCard) {
+          if (!sourceCard._exiledUntilLeaves) sourceCard._exiledUntilLeaves = [];
+          perm._owner = pid;
+          sourceCard._exiledUntilLeaves.push(perm);
+        }
+      }
+      state.log.push(`${perm.name} is exiled.`);
+    }
+  }
+  _afterResolve(state);
+}
+
   // ── ETB Destroy target resolution (human chose which permanent to destroy) ──
 export function resolveETBDestroyTarget(state: any, targetUid: string | null): void {
   const pending = state._pendingETBDestroy;
@@ -5706,7 +5751,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
 
         // If ETB set waitingForInput (search_library, scry, surveil, confirm_optional, etc.), pause here
         // The game will resume after the human player completes their input
-        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost', 'etb_tap_target'];
+        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost', 'etb_tap_target', 'choose_gy_return', 'etb_exile_target'];
         if (state.waitingForInput && _etbPauseTypes.includes(state.waitingForInput.type)) {
           return { success: true, waitForInput: true };
         }

@@ -557,6 +557,59 @@ export function _resolveItem(item, state) {
 
             log.push(`${permanent.name} is exiled.`);
           }
+        } else if (effect.target && effect.target !== 'all') {
+          // ETB exile with no pre-selected target — auto-target AI, pause for human
+          const opponentId = controller === 0 ? 1 : 0;
+          const isOwnTarget = effect.target?.startsWith('own_');
+          const targetPid = isOwnTarget ? controller : opponentId;
+          const bf = gameState.players[targetPid].zones.battlefield;
+
+          let filterFn = (c: any) => !Cards.isLand(c);
+          if (effect.target === 'opponent_artifact_or_creature') {
+            filterFn = (c: any) => Cards.isCreature(c) || (c.type_line || '').toLowerCase().includes('artifact');
+          } else if (effect.target === 'opponent_nonland') {
+            filterFn = (c: any) => !Cards.isLand(c);
+          } else if (effect.target === 'own_creature') {
+            filterFn = (c: any) => Cards.isCreature(c) && (!effect.other || c._uid !== card?._uid);
+          }
+
+          const candidates = bf.cards
+            .filter(filterFn)
+            .filter((c: any) => Cards.canBeTargeted(c, controller));
+
+          if (candidates.length === 0) break;
+
+          const maxExile = effect.up_to || 1;
+          if (gameState.players[controller].isHuman) {
+            gameState._pendingETBExile = { effect, controller, cardUid: card?._uid, targetPid, maxExile };
+            gameState.waitingForInput = {
+              type: 'etb_exile_target',
+              playerId: controller,
+              choices: candidates,
+              maxExile,
+            };
+            break;
+          }
+
+          // AI: pick highest-threat target(s)
+          candidates.sort((a: any, b: any) =>
+            (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a))
+          );
+          for (const perm of candidates.slice(0, maxExile)) {
+            vfxPlay('exile', perm._uid);
+            bf.remove(perm._uid);
+            GameState._unregisterCardTriggers(gameState, perm._uid);
+            if (Cards.isCreature(perm)) {
+              GameState.fireTrigger(gameState, 'leaves_battlefield', { cardUid: perm._uid, card: perm, ownerId: targetPid });
+            }
+            gameState.players[targetPid].zones.exile.add(perm);
+            if (effect.until_leaves || effect.until_source_leaves) {
+              if (!card._exiledUntilLeaves) card._exiledUntilLeaves = [];
+              perm._owner = targetPid;
+              card._exiledUntilLeaves.push(perm);
+            }
+            log.push(`${perm.name} is exiled.`);
+          }
         }
         break;
       }

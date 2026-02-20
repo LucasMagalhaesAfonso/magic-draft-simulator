@@ -257,6 +257,9 @@ export interface GameActions {
   // ETB tap target choice
   resolveETBTapTarget(targetUids: string[]): void;
 
+  // ETB exile target choice
+  resolveETBExileTarget(targetUids: string[]): void;
+
   // tap_creature cost choice
   resolveActivationTapCreature(tappedUid: string | null): void;
 
@@ -1518,6 +1521,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveETBTapTarget]', e); }
+    },
+
+    // ── ETB exile target (human chose which permanent(s) to exile) ───────────
+
+    resolveETBExileTarget(targetUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBExileTarget === 'function') {
+          _GS.resolveETBExileTarget(gs, targetUids);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBExileTarget]', e); }
     },
 
     // ── tap_creature cost resolution (human chose which creature to tap) ─────

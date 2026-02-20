@@ -642,7 +642,8 @@ export function GameScreen() {
     if (!text.includes('target creature you control')) return null;
 
     // Pattern A: ... then that creature fights target creature (Dragonclaw Strike)
-    if (text.includes('fights target creature') || text.includes('fight target creature')) {
+    // Oracle: "...then it fights up to one target creature an opponent controls."
+    if ((text.includes('fights') || text.includes('fight')) && text.includes('target creature') && !text.includes('deals damage')) {
       const buffVerb = text.includes('double') ? 'to double' : text.includes('counter') ? 'for the counter' : 'to buff';
       return [
         { side: 'own', prompt: `Choose a creature you control ${buffVerb}` },
@@ -1990,6 +1991,30 @@ export function GameScreen() {
                 title="⟳ Tap — Choose a creature to tap"
                 hint="Click a creature to tap it."
                 onConfirm={uid => actions.resolveETBTapTarget(uid ? [uid] : [])}
+              />
+            );
+          }
+
+          // ── ETB exile target (Static Snare, Stormplain Detainment, Mardu Siegebreaker) ──
+          case 'etb_exile_target': {
+            const choices = (wi as any).choices || [];
+            const maxExile = (wi as any).maxExile || 1;
+            if (maxExile > 1) {
+              return (
+                <BounceMultiOverlay
+                  permanents={choices}
+                  maxBounce={maxExile}
+                  title={`☄ Exile — Choose up to ${maxExile} permanents`}
+                  onConfirm={uids => actions.resolveETBExileTarget(uids)}
+                />
+              );
+            }
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="☄ Exile — Choose a permanent to exile"
+                hint="Click a permanent to exile it."
+                onConfirm={uid => actions.resolveETBExileTarget(uid ? [uid] : [])}
               />
             );
           }

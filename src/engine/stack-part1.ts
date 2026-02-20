@@ -266,7 +266,14 @@ export function _resolveItem(item, state) {
         // Damage divided among any number of targets (e.g., Twin Bolt, Ureni)
         const totalDamage = resolveAmount(effect.amount);
         if (targets && targets.length > 0) {
-          // For AI: divide evenly, for human: should use distribute UI (TODO)
+          const isHuman = gameState.players[controller].isHuman;
+          // Human with 2+ targets: show distribute UI
+          if (isHuman && targets.length > 1) {
+            gameState._pendingDistributeDamage = { totalDamage, targets, controller };
+            gameState.waitingForInput = { type: 'distribute_damage', playerId: controller, totalDamage, targets };
+            return null; // Pause for human input
+          }
+          // AI or single target: divide evenly
           const dmgPerTarget = Math.floor(totalDamage / targets.length);
           let remainingDmg = totalDamage;
 

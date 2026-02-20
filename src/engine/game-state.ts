@@ -1155,10 +1155,17 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         return `${endureCard.name} endure ${endureAmount}: +${endureAmount} counters +1/+1.`;
       }
       case 'stun_counter': {
-        // Add stun counters to a target creature
-        const targetCard = effect.target === 'self'
-          ? state.players[controllerId].zones.battlefield.get(data.cardUid)
-          : null; // TODO: handle targeted stun
+        // Add stun counters to a target creature (self or targeted)
+        let targetCard = null;
+        if (effect.target === 'self') {
+          targetCard = state.players[controllerId].zones.battlefield.get(data.cardUid);
+        } else {
+          // Targeted stun: find from data.targets
+          const tgt = (data.targets || [])[0];
+          if (tgt && tgt.type === 'creature') {
+            targetCard = state.players[tgt.player].zones.battlefield.get(tgt.uid);
+          }
+        }
         if (targetCard) {
           targetCard._stunCounters = (targetCard._stunCounters || 0) + (effect.amount || 1);
           return `${targetCard.name} receives ${effect.amount || 1} stun counter(s).`;
@@ -4103,6 +4110,40 @@ export function resolveETBCloneTarget(state: any, targetUid: string | null): voi
     srcCard._powerMod = 0;
     srcCard._toughnessMod = 0;
     state.log.push(`Naga Fleshcrafter becomes a copy of ${targetCard.name}.`);
+  }
+  _afterResolve(state);
+}
+
+// ── Distribute Damage resolution (human chose how to split damage) ───────────
+export function resolveDistributeDamage(state: any, distribution: Record<string, number>): void {
+  const pending = state._pendingDistributeDamage;
+  if (!pending) return;
+  state._pendingDistributeDamage = null;
+  state.waitingForInput = null;
+
+  const { vfxPlay } = (state as any)._vfxHandlers || {};
+  const log = state.log;
+
+  for (const target of pending.targets) {
+    const dmg = distribution[target.uid ?? `p${target.player}`] || 0;
+    if (dmg <= 0) continue;
+    if (target.type === 'creature') {
+      const creature = state.players[target.player].zones.battlefield.get(target.uid);
+      if (creature) {
+        if (vfxPlay) vfxPlay('damage', creature._uid);
+        creature._damage += dmg;
+        if (creature._damage >= getToughness(creature)) {
+          creatureDies(state, creature, target.player);
+          log.push(`${creature.name} takes ${dmg} damage and dies.`);
+        } else {
+          log.push(`${creature.name} takes ${dmg} damage.`);
+        }
+      }
+    } else if (target.type === 'player') {
+      state.players[target.player].life -= dmg;
+      if (vfxPlay) vfxPlay('playerDamage', 'p' + target.player);
+      log.push(`${dmg} damage to ${target.player === 0 ? 'you' : 'opponent'}.`);
+    }
   }
   _afterResolve(state);
 }

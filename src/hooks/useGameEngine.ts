@@ -263,6 +263,9 @@ export interface GameActions {
   // ETB clone target choice (Naga Fleshcrafter)
   resolveETBCloneTarget(targetUid: string | null): void;
 
+  // Distribute damage (damage_divided human choice)
+  resolveDistributeDamage(distribution: Record<string, number>): void;
+
   // tap_creature cost choice
   resolveActivationTapCreature(tappedUid: string | null): void;
 
@@ -1589,6 +1592,21 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveETBCloneTarget]', e); }
+    },
+
+    // ── Distribute damage (human chose how to split damage_divided) ──────────
+    resolveDistributeDamage(distribution: Record<string, number>) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveDistributeDamage === 'function') {
+          _GS.resolveDistributeDamage(gs, distribution);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveDistributeDamage]', e); }
     },
 
     // ── tap_creature cost resolution (human chose which creature to tap) ─────

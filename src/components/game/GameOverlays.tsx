@@ -245,15 +245,31 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
                 <CardImage card={card} size="small" />
                 <div className="gy-card-name">{card.name}</div>
                 {playerId === 0 && graveyardAbilities.length > 0 && onActivate && (
-                  graveyardAbilities.map((ab: any, idx: number) => (
-                    <button
-                      key={idx}
-                      className="btn btn-gold btn-sm gy-activate-btn"
-                      onClick={() => { onActivate(card._uid, idx); onClose(); }}
-                    >
-                      {ab.label || 'Activate'}
-                    </button>
-                  ))
+                  graveyardAbilities.map((ab: any, idx: number) => {
+                    // Format the activation cost for display
+                    const costLabel = ab.cost
+                      ? (() => {
+                          const c = ab.cost;
+                          if (c.zone === 'graveyard' || c.exile_self) return 'exile';
+                          if (c.generic !== undefined) return `{${c.generic}}`;
+                          if (c.sacrifice_creature) return 'sacrifice';
+                          if (c.tap) return 'tap';
+                          if (c.life) return `${c.life} life`;
+                          return null;
+                        })()
+                      : null;
+                    return (
+                      <button
+                        key={idx}
+                        className="btn btn-gold btn-sm gy-activate-btn"
+                        onClick={() => { onActivate(card._uid, idx); onClose(); }}
+                        title={costLabel ? `Cost: ${costLabel}` : undefined}
+                      >
+                        {ab.label || 'Activate'}
+                        {costLabel && <span className="gy-cost-hint"> · {costLabel}</span>}
+                      </button>
+                    );
+                  })
                 )}
               </div>
             );
@@ -961,5 +977,127 @@ export function CombatArrows({ blockers }: CombatArrowsProps) {
         />
       ))}
     </svg>
+  );
+}
+
+// ─── Keyboard Help Overlay ────────────────────────────────────────────────────
+export function KeyboardHelpOverlay({ onClose }: { onClose: () => void }) {
+  const shortcuts = [
+    { key: 'F', desc: 'Auto-pass até o End Step' },
+    { key: 'A', desc: 'Atacar com todas as criaturas' },
+    { key: 'Space', desc: 'Confirmar / Passar prioridade' },
+    { key: 'Enter', desc: 'Confirmar seleção atual' },
+    { key: 'Esc', desc: 'Cancelar / Fechar overlay' },
+    { key: 'L', desc: 'Abrir/fechar log de ações' },
+    { key: 'E', desc: 'Ver zona de exílio' },
+    { key: 'G', desc: 'Ver cemitério' },
+    { key: 'Tab', desc: 'Ver stack' },
+    { key: 'Ctrl', desc: 'Full Control Mode (pausa em toda fase)' },
+    { key: 'K / M', desc: 'Guardar mão / Mulligan' },
+    { key: '1–4', desc: 'Escolher modo (spell modal)' },
+    { key: '?', desc: 'Este menu de ajuda' },
+  ];
+  const kbdStyle: React.CSSProperties = {
+    display: 'inline-block', minWidth: 56, textAlign: 'center',
+    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
+    borderRadius: 6, padding: '2px 8px', fontFamily: 'monospace',
+    fontSize: 12, color: '#f0e6c0', flexShrink: 0,
+  };
+  return (
+    <div className="overlay-backdrop" onClick={onClose}>
+      <div className="overlay-panel glass" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>
+        <div className="overlay-header">
+          <h3 className="overlay-title">⌨ Atalhos de Teclado</h3>
+          <button className="btn btn-muted btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+          {shortcuts.map(s => (
+            <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <kbd style={kbdStyle}>{s.key}</kbd>
+              <span style={{ color: '#c0b080', fontSize: 13 }}>{s.desc}</span>
+            </div>
+          ))}
+        </div>
+        <p className="overlay-hint" style={{ marginTop: 12 }}>Clique fora ou pressione Esc para fechar</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Distribute Damage Overlay ────────────────────────────────────────────────
+interface DistributeDamageOverlayProps {
+  totalDamage: number;
+  targets: any[]; // { type: 'creature'|'player', uid?: string, player: number, name: string }
+  onConfirm: (distribution: Record<string, number>) => void;
+}
+export function DistributeDamageOverlay({ totalDamage, targets, onConfirm }: DistributeDamageOverlayProps) {
+  const getKey = (t: any) => t.uid ?? `p${t.player}`;
+  const [dist, setDist] = useState<Record<string, number>>(() => {
+    // Initialize with even split
+    const even = Math.floor(totalDamage / targets.length);
+    const init: Record<string, number> = {};
+    targets.forEach((t, i) => {
+      init[getKey(t)] = i === targets.length - 1 ? totalDamage - even * (targets.length - 1) : even;
+    });
+    return init;
+  });
+
+  const spent = Object.values(dist).reduce((a, b) => a + b, 0);
+  const remaining = totalDamage - spent;
+
+  const add = (key: string) => {
+    if (remaining <= 0) return;
+    setDist(prev => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
+  };
+  const remove = (key: string) => {
+    setDist(prev => {
+      const cur = prev[key] || 0;
+      if (cur <= 0) return prev;
+      return { ...prev, [key]: cur - 1 };
+    });
+  };
+
+  return (
+    <div className="overlay-backdrop">
+      <div className="overlay-panel glass">
+        <h3 className="overlay-title">💥 Distribuir {totalDamage} de Dano</h3>
+        <p className="overlay-hint">
+          Clique para adicionar · Clique direito para remover · Restante: <strong>{remaining}</strong>
+        </p>
+        <div className="scry-cards">
+          {targets.map((t: any) => {
+            const key = getKey(t);
+            const assigned = dist[key] || 0;
+            return (
+              <div
+                key={key}
+                className={`scry-card-slot${assigned > 0 ? ' scry-card-selected' : ''}`}
+                onClick={() => add(key)}
+                onContextMenu={e => { e.preventDefault(); remove(key); }}
+                style={{ cursor: 'pointer', userSelect: 'none' }}
+              >
+                {t.type === 'creature' && t.imageUrl
+                  ? <img src={t.imageUrl} alt={t.name} style={{ width: 60, height: 84, objectFit: 'cover', borderRadius: 4 }} />
+                  : <div style={{ width: 60, height: 84, background: 'rgba(255,80,80,0.2)', borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>
+                      {t.type === 'player' ? '🧙' : '🐉'}
+                    </div>
+                }
+                <div className="scry-card-label">{t.name}</div>
+                {assigned > 0 && <div className="bounce-selected-badge">💥{assigned}</div>}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button
+            className="btn btn-primary overlay-confirm"
+            onClick={() => onConfirm(dist)}
+            disabled={remaining !== 0}
+          >
+            Confirmar ({spent}/{totalDamage})
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

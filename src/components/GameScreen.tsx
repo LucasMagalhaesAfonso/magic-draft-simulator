@@ -14,6 +14,7 @@ import {
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
   BounceMultiOverlay, DistributeCountersOverlay, ManaCostPips,
+  KeyboardHelpOverlay, DistributeDamageOverlay,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
 import { getLandManaColors, canPay } from '../engine/mana';
@@ -197,6 +198,7 @@ export function GameScreen() {
   const [turnBanner, setTurnBanner] = useState<string | null>(null);
   const [autoPass, setAutoPass] = useState(false);
   const autoPassRef = useRef(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
   // Full Control Mode: pause at every phase transition (like Arena Ctrl)
   const [fullControl, setFullControl] = useState(false);
   const fullControlRef = useRef(false);
@@ -528,6 +530,7 @@ export function GameScreen() {
           }
           break;
         case 'Escape':
+          if (showHelpModal) { setShowHelpModal(false); break; }
           if (targeting) { setTargeting(null); break; }
           if (blockingWith) { setBlockingWith(null); break; }
           if (graveyardOpen) { setGraveyardOpen(null); break; }
@@ -579,8 +582,14 @@ export function GameScreen() {
           }
           break;
         }
-        case 'f': case 'F':
-          setAutoPass(v => !v);
+        case 'f': case 'F': {
+          const next = !autoPassRef.current;
+          setAutoPass(next);
+          addToast(next ? '⏩ Auto-pass ativado' : '⏹ Auto-pass desativado', next ? 'info' : 'cast');
+          break;
+        }
+        case '?':
+          setShowHelpModal(v => !v);
           break;
         case 'Tab':
           e.preventDefault();
@@ -599,7 +608,7 @@ export function GameScreen() {
     }
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [snap, actions, targeting, graveyardOpen, blockingWith, showStack, autoPass, exileOpen, abilityModal, equipModal, attackTargetPicker, adventureModal, conditionalCostConfirm]);
+  }, [snap, actions, targeting, graveyardOpen, blockingWith, showStack, autoPass, exileOpen, abilityModal, equipModal, attackTargetPicker, adventureModal, conditionalCostConfirm, showHelpModal]);
 
   // Helper: does this spell need interactive targeting?
   // Strips activated ability lines (e.g. "{1}, {T}: Target creature...") to avoid
@@ -1488,6 +1497,13 @@ export function GameScreen() {
             </div>
           )}
           <div className="game-actions">
+            {/* Keyboard help button */}
+            <button
+              className="btn btn-muted btn-sm"
+              style={{ fontSize: 11, padding: '1px 7px', opacity: 0.6 }}
+              onClick={() => setShowHelpModal(true)}
+              title="Atalhos de teclado (?)"
+            >?</button>
             {/* AI turn indicator */}
             {activePlayer === 1 && !snap.waitingForInput && (
               <span className="game-ai-thinking">⚙ Opponent playing...</span>
@@ -1707,6 +1723,11 @@ export function GameScreen() {
                       )}
                       {card.oracle_text && (
                         <div className="hct-oracle">{card.oracle_text.slice(0, 120)}{card.oracle_text.length > 120 ? '…' : ''}</div>
+                      )}
+                      {isOmenMode && (
+                        <div className="hct-oracle" style={{ color: '#4ecdc4', borderTop: '1px solid rgba(78,205,196,0.3)', paddingTop: 3 }}>
+                          ⬆ Criatura · Clique direito → Aventura
+                        </div>
                       )}
                     </div>
                   )}
@@ -1978,6 +1999,27 @@ export function GameScreen() {
                 onConfirm={dist => actions.resolveDistributeCountersAction(dist)}
               />
             ) : null;
+          }
+
+          // ── Distribute damage — human splits damage_divided spell ────────
+          case 'distribute_damage': {
+            const pending = gs?._pendingDistributeDamage;
+            if (!pending) return null;
+            // Enrich targets with name/imageUrl for display
+            const enriched = pending.targets.map((t: any) => {
+              if (t.type === 'creature') {
+                const c = snap.players[t.player].battlefield.find((x: any) => x._uid === t.uid);
+                return { ...t, name: c?.name || 'Creature', imageUrl: c?.image_small || c?.image_normal };
+              }
+              return { ...t, name: t.player === 0 ? 'You' : 'Opponent' };
+            });
+            return (
+              <DistributeDamageOverlay
+                totalDamage={pending.totalDamage}
+                targets={enriched}
+                onConfirm={dist => actions.resolveDistributeDamage(dist)}
+              />
+            );
           }
 
           // ── Sacrifice choice ─────────────────────────────────────────────
@@ -2792,10 +2834,13 @@ export function GameScreen() {
 
       {/* ── Auto-pass indicator ── */}
       {autoPass && (
-        <div className="auto-pass-indicator">
-          ⏩ Auto-pass (F to stop)
+        <div className="auto-pass-indicator" onClick={() => { setAutoPass(false); addToast('⏹ Auto-pass desativado', 'cast'); }} style={{ cursor: 'pointer', pointerEvents: 'auto' }}>
+          ⏩ Auto-pass — clique ou F para parar
         </div>
       )}
+
+      {/* ── Keyboard help modal ── */}
+      {showHelpModal && <KeyboardHelpOverlay onClose={() => setShowHelpModal(false)} />}
 
       {/* ── Full Control Mode indicator ── */}
       {fullControl && (

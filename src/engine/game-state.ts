@@ -2832,16 +2832,36 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           }
         }
 
-        if (target && CardEngine.isCreature(target)) {
-          if (!target._counters) target._counters = { '+1/+1': 0, '-1/-1': 0 };
-          const amt = effect.amount || 1;
+        // Collect all targets to apply counters to
+        const gcTargetCards: any[] = [];
+        if (data && data.targets && data.targets.length > 0) {
+          for (const ti of data.targets) {
+            if (ti.player !== undefined && ti.uid) {
+              const tc = state.players[ti.player].zones.battlefield.get(ti.uid);
+              if (tc && CardEngine.isCreature(tc)) gcTargetCards.push(tc);
+            }
+          }
+        } else if (target && CardEngine.isCreature(target)) {
+          gcTargetCards.push(target);
+        }
+
+        if (gcTargetCards.length > 0) {
+          const amt = effect.amount === 'X' ? (state._currentXValue || 1) : (effect.amount || 1);
           const cType = effect.counter || '+1/+1';
-          target._counters[cType] = (target._counters[cType] || 0) + amt;
-
-          // Fire counter_placed trigger
-          fireTrigger(state, 'counter_placed', { cardUid: target._uid, counter: cType, amount: amt });
-
-          return `${target.name} recebe ${amt} contador(es) ${cType}.`;
+          const names: string[] = [];
+          for (const tc of gcTargetCards) {
+            if (!tc._counters) tc._counters = { '+1/+1': 0, '-1/-1': 0 };
+            tc._counters[cType] = (tc._counters[cType] || 0) + amt;
+            // Keyword counter: add to keywords array too
+            if (cType !== '+1/+1' && cType !== '-1/-1') {
+              if (!tc.keywords) tc.keywords = [];
+              const kwCap = cType.charAt(0).toUpperCase() + cType.slice(1);
+              if (!tc.keywords.includes(kwCap)) tc.keywords.push(kwCap);
+            }
+            fireTrigger(state, 'counter_placed', { cardUid: tc._uid, counter: cType, amount: amt });
+            names.push(tc.name);
+          }
+          return `${names.join(', ')} recebe(m) ${amt} contador(es) ${cType}.`;
         }
         return null;
       }
@@ -8461,14 +8481,28 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
   // Pay mana cost
   if (ability.cost?.mana) {
     const costStr = ManaSystem.formatManaCost(ability.cost.mana);
-    const parsed = ManaSystem.parseCost(costStr);
-    const fakeCard = { mana_cost: costStr, cmc: parsed.total || 0 };
-    if (!ManaSystem.canAfford(state, pid, fakeCard)) {
-      state.log.push('Mana insuficiente para a habilidade.');
-      return;
+    // For X costs: compute X = total mana available - fixed portion
+    const hasX = costStr.includes('{X}') || (ability.cost.mana as string).toUpperCase().startsWith('X');
+    if (hasX) {
+      const fixedStr = costStr.replace(/\{X\}/g, '').replace(/^X/i, '');
+      const fixedParsed = ManaSystem.parseCost(fixedStr || '');
+      const fixedTotal = fixedParsed.total || 0;
+      autoTapForSpell(state, pid, fixedStr || '', fixedTotal);
+      const poolTotal = ManaSystem.poolTotal(state.manaPool[pid]);
+      state._currentXValue = Math.max(0, poolTotal - fixedTotal);
+      const totalCmc = poolTotal; // spend all mana
+      const fullCostStr = costStr.replace(/\{X\}/g, `{${state._currentXValue}}`);
+      state.manaPool[pid] = ManaSystem.payMana(state.manaPool[pid], fullCostStr, totalCmc);
+    } else {
+      const parsed = ManaSystem.parseCost(costStr);
+      const fakeCard = { mana_cost: costStr, cmc: parsed.total || 0 };
+      if (!ManaSystem.canAfford(state, pid, fakeCard)) {
+        state.log.push('Mana insuficiente para a habilidade.');
+        return;
+      }
+      autoTapForSpell(state, pid, costStr, fakeCard.cmc);
+      state.manaPool[pid] = ManaSystem.payMana(state.manaPool[pid], costStr, fakeCard.cmc);
     }
-    autoTapForSpell(state, pid, costStr, fakeCard.cmc);
-    state.manaPool[pid] = ManaSystem.payMana(state.manaPool[pid], costStr, fakeCard.cmc);
   }
 
   state.log.push(`${card.name}: habilidade do cemiterio ativada!`);
@@ -8480,11 +8514,20 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
   }
 
   // Resolve each effect
+  const opponent = pid === 0 ? 1 : 0;
   let sharedTargets: any[] | null = null;
   for (const effect of (ability.effects || [])) {
     let targets: any[] = [];
     if (effect.target === 'same' && sharedTargets) {
       targets = [...sharedTargets];
+    } else if (effect.target === 'creatures' && state._currentXValue) {
+      // X-target opponent creatures (e.g. Rot-Curse Rakshasa: put decayed counter on X creatures)
+      const oppCreatures = state.players[opponent].zones.battlefield.cards
+        .filter((c: any) => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, pid));
+      const xCount = Math.min(state._currentXValue, oppCreatures.length);
+      // AI: pick weakest creatures (maximize value of decayed since they can't block)
+      oppCreatures.sort((a: any, b: any) => CardEngine.getPower(a) - CardEngine.getPower(b));
+      targets = oppCreatures.slice(0, xCount).map((c: any) => ({ uid: c._uid, player: opponent }));
     }
     const result = _resolveSimpleEffect(state, pid, effect, {
       cardUid: card._uid, card, fromZone: 'graveyard', targets

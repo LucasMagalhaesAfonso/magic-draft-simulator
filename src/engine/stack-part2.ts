@@ -1248,12 +1248,13 @@ export function handleGrantCounters(
   log: string[]
 ): void {
   if (targets && targets.length > 0) {
-    const gcTarget = targets[0];
-    const gcCreature = state.players[gcTarget.player].zones.battlefield.get(gcTarget.uid);
-    if (gcCreature) {
+    // Iterate ALL targets (e.g. Rot-Curse Rakshasa: put decayed counter on each of X creatures)
+    for (const gcTarget of targets) {
+      const gcCreature = state.players[gcTarget.player].zones.battlefield.get(gcTarget.uid);
+      if (!gcCreature) continue;
       if (!CardEngine.canBeTargeted(gcCreature, controller)) {
         log.push(`${gcCreature.name} nao pode ser alvo (hexproof/shroud).`);
-        return;
+        continue;
       }
       if (!gcCreature._counters) gcCreature._counters = { '+1/+1': 0, '-1/-1': 0 };
 
@@ -1268,10 +1269,16 @@ export function handleGrantCounters(
         }
         log.push(`${gcCreature.name} recebe contadores: ${effect.counters.join(', ')}.`);
       } else {
-        // Standard numeric counter (+1/+1, -1/-1, etc.)
-        const gcAmt = effect.amount || 1;
+        // Standard numeric counter — resolve "X" dynamically
+        const gcAmt = effect.amount === 'X' ? (state._currentXValue || 1) : (effect.amount || 1);
         const gcType = effect.counter || '+1/+1';
         gcCreature._counters[gcType] = (gcCreature._counters[gcType] || 0) + gcAmt;
+        // Keyword counter (e.g. decayed): add to keywords array too
+        if (gcType !== '+1/+1' && gcType !== '-1/-1') {
+          if (!gcCreature.keywords) gcCreature.keywords = [];
+          const kwCap = gcType.charAt(0).toUpperCase() + gcType.slice(1);
+          if (!gcCreature.keywords.includes(kwCap)) gcCreature.keywords.push(kwCap);
+        }
         log.push(`${gcCreature.name} recebe ${gcAmt} contador(es) ${gcType}.`);
       }
     }

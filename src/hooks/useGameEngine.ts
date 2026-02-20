@@ -143,6 +143,18 @@ function snapshot(gs: any) {
 
     mulliganDone: gs.mulliganDone || [false, false],
     mulliganCount: gs.mulliganCount || [0, 0],
+
+    // Pre-computed set of UIDs for cards the human player can currently play.
+    // Uses the engine's getPlayableCards which accounts for cost reductions
+    // (e.g., Bell-Ringer's second_spell discount), convoke, adventures, etc.
+    // The UI uses this instead of re-computing affordability from raw CMC.
+    humanPlayableUids: (() => {
+      try {
+        if (!_GS || !gs.players[0]) return new Set<string>();
+        const playable = _GS.getPlayableCards(gs, 0);
+        return new Set<string>(playable.map((c: any) => c._uid));
+      } catch { return new Set<string>(); }
+    })(),
   };
 }
 
@@ -250,7 +262,10 @@ export interface GameActions {
   // GY return choice
   resolveGYReturn(cardUids: string[]): void;
 
-  // Graveyard card choice
+  // Graveyard choice (which player's GY to exile from)
+  resolveGraveyardChoice(pid: number): void;
+
+  // Graveyard card choice (which specific cards to exile)
   resolveGraveyardCardChoice(cardUids: string[]): void;
 
   // Restart game with same decks
@@ -289,6 +304,30 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
     await new Promise(r => setTimeout(r, delayMs));
     aiRunningRef.current = false;
     if (mountedRef.current) refresh();
+  }, [refresh]);
+
+  // After resolving an interactive overlay, continue phase processing.
+  // Replaces the pattern "if (!waitingForInput && !isHuman) runAI()" which
+  // only did a visual refresh without actually advancing game state.
+  // reprocessCurrentPhase re-runs _processPhase so:
+  //   - main1/main2 → restores main_phase waitingForInput for human, or runs AI
+  //   - upkeep (with _upkeepProcessed flag) → skips saga/triggers, gives priority, advances
+  //   - other phases → continues the current phase from where it paused
+  const afterResolve = useCallback((gs: any) => {
+    if (!gs.waitingForInput && !gs.winner && _GS) {
+      const ap = gs.activePlayer;
+      if (!gs.players[ap]?.isHuman) {
+        // AI's turn — brief visual delay then continue so "thinking..." shows
+        setTimeout(() => {
+          if (!gsRef.current || !_GS) return;
+          _GS.reprocessCurrentPhase(gsRef.current);
+          refresh();
+        }, 300);
+      } else {
+        // Human's turn — continue immediately (restores main_phase WFI, etc.)
+        _GS.reprocessCurrentPhase(gs);
+      }
+    }
   }, [refresh]);
 
   // Initialize
@@ -494,6 +533,29 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const result = _GS.castSpell(gs, pid, cardUid, targets);
         // Clear mana undo when spell successfully starts casting
         if (result?.success !== false) clearManaUndo();
+
+        // Auto-resolve stack priority after casting a counter spell.
+        // When the human casts a counter during stack_priority, the counter resolves
+        // immediately (marking _countered=true). Without this, the human would need to
+        // manually click "Let Resolve" — which is confusing and non-obvious.
+        const pending = (gs as any)._pendingCastOnStack;
+        if (
+          pending?.card?._countered === true &&
+          gs.waitingForInput?.type === 'stack_priority'
+        ) {
+          // Pop the temporary stack item and clear pending
+          if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
+          delete (gs as any)._pendingCastOnStack;
+          delete pending.card._countered;
+          // Send countered spell to graveyard
+          gs.players[pending.playerId].zones.graveyard.add(pending.card);
+          gs.log.push(`${pending.card.name} vai para o cemiterio (anulado).`);
+          // Continue game processing
+          if (typeof _GS.reprocessCurrentPhase === 'function') {
+            _GS.reprocessCurrentPhase(gs);
+          }
+        }
+
         refresh();
       } catch (e) {
         console.warn('[castSpell] error:', e);
@@ -688,6 +750,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           _GS.resolveHandExileChoice(gs, value);
         }
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
       } catch (e) {
         console.warn('[resolveChoice] error:', e);
@@ -699,11 +762,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveScry(gs, choices);
+        afterResolve(gs);
         refresh();
-        if (!gs.waitingForInput) {
-          const ap = gs.activePlayer;
-          if (!gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
-        }
       } catch (e) { console.warn('[resolveScry] error:', e); }
     },
 
@@ -712,11 +772,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveModal(gs, modeIndices);
+        afterResolve(gs);
         refresh();
-        if (!gs.waitingForInput) {
-          const ap = gs.activePlayer;
-          if (!gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
-        }
       } catch (e) { console.warn('[resolveModal] error:', e); }
     },
 
@@ -725,9 +782,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveChooseTarget(gs, targets);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveChooseTarget] error:', e); }
     },
 
@@ -736,9 +792,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolvePostModalTarget(gs, target);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolvePostModalTarget] error:', e); }
     },
 
@@ -748,9 +803,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         if (typeof _GS.activateGraveyardAbility === 'function') {
           _GS.activateGraveyardAbility(gs, 0, cardUid, abilityIdx);
+          afterResolve(gs);
           refresh();
-          const ap = gs.activePlayer;
-          if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
         }
       } catch (e) { console.warn('[activateGraveyardAbility] error:', e); }
     },
@@ -765,9 +819,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           // Fallback: use the same logic as AI activated abilities
           console.warn('[activateBattlefieldAbility] function not found in game-state');
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[activateBattlefieldAbility] error:', e); }
     },
 
@@ -902,9 +955,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.activateLoyaltyAbility(gs, 0, cardUid, abilityIdx);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[activateLoyaltyAbility]', e); }
     },
 
@@ -913,9 +965,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.activateCycling(gs, 0, cardUid);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[activateCycling]', e); }
     },
 
@@ -924,9 +975,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.castHarmonize(gs, 0, cardUid, targets, tappedCreatureUid || null);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[castHarmonize]', e); }
     },
 
@@ -935,9 +985,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.transformCreature(gs, 0, cardUid);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[transformCreature]', e); }
     },
 
@@ -947,9 +996,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         const result = _GS.activateHideaway(gs, 0, cardUid);
         if (!result?.success) console.warn('[activateHideaway] failed:', result?.msg);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[activateHideaway]', e); }
     },
 
@@ -984,9 +1032,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           setCanUndoMana(true);
         }
 
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveManaColor] error:', e); }
     },
 
@@ -996,9 +1043,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         _GS.resolveEndureChoice(gs, choice as 'counters' | 'tokens');
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveEndure] error:', e); }
     },
 
@@ -1008,9 +1054,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         _GS.resolveMillLandChoice(gs, choice as 'land' | 'counter');
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveMillLand] error:', e); }
     },
 
@@ -1020,9 +1065,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         _GS.resolveBlightChoice(gs, creatureUid);
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveBlight] error:', e); }
     },
 
@@ -1032,9 +1076,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         _GS.resolveBuffChoice(gs, creatureUid);
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveBuffChoiceAction] error:', e); }
     },
 
@@ -1043,9 +1086,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveDistributeCounters(gs, creatureUid);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveDistributeCounters] error:', e); }
     },
 
@@ -1055,9 +1097,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         _GS.resolveHandExileChoice(gs, cardUid);
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveHandExile] error:', e); }
     },
 
@@ -1067,9 +1108,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         _GS.resolveTriggerCost(gs, choice as 'pay' | 'skip');
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveTriggerCostAction] error:', e); }
     },
 
@@ -1079,9 +1119,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         _GS.resolveUnlessPay(gs, shouldPay);
         gs.waitingForInput = null;
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveUnlessPayAction] error:', e); }
     },
 
@@ -1121,9 +1160,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           gs.waitingForInput = null;
           if (typeof _GS?.reprocessCurrentPhase === 'function') _GS.reprocessCurrentPhase(gs);
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveExileChoice] error:', e); }
     },
 
@@ -1156,9 +1194,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.log.push(`Cancelou conjuração de ${pending.cardToCast?.name}.`);
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveLegendaryChoice]', e); }
     },
 
@@ -1180,10 +1217,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             gs.log.push(`Escolheu ${target.name}.`);
           }
         }
-        if (typeof _GS?.reprocessCurrentPhase === 'function') _GS.reprocessCurrentPhase(gs);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveTargetChoiceSingle]', e); }
     },
 
@@ -1204,10 +1239,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             gs.log.push(`${card.name} revelado (behold).`);
           }
         }
-        if (typeof _GS?.reprocessCurrentPhase === 'function') _GS.reprocessCurrentPhase(gs);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveBeholdChoice]', e); }
     },
 
@@ -1231,12 +1264,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs) return;
       try {
         gs.waitingForInput = null;
-        if (typeof _GS?.reprocessCurrentPhase === 'function') {
-          _GS.reprocessCurrentPhase(gs);
-        }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveUnknownInput] error:', e); }
     },
 
@@ -1248,7 +1277,10 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         const hand = gs.players[0].zones.hand;
         const gy = gs.players[0].zones.graveyard;
-        const drawOnDiscard = gs._pendingOptionalDiscard?.drawOnDiscard;
+        const pending = gs._pendingOptionalDiscard;
+        const drawOnDiscard = pending?.drawOnDiscard;
+        const returnFromGY = pending?.returnFromGY;
+        const returnTarget = pending?.returnTarget || 'creature_or_land';
         const discarded = cardUids.length > 0;
         cardUids.forEach((uid: string) => {
           const cards = hand.getAll();
@@ -1268,6 +1300,32 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
         }
         gs._pendingOptionalDiscard = null;
+        // Glacial Dragonhunt: after discarding a nonland, resolve bonus effects
+        const onNonlandDiscard = pending?.onNonlandDiscard;
+        if (discarded && onNonlandDiscard?.length > 0) {
+          const gy = gs.players[0].zones.graveyard;
+          const justDiscarded = cardUids.map((uid: string) => gy.getAll().find((c: any) => c._uid === uid)).filter(Boolean);
+          const anyNonland = justDiscarded.some((c: any) => !(c.type_line || '').includes('Land'));
+          if (anyNonland && typeof _GS?.resolveOnNonlandDiscard === 'function') {
+            _GS.resolveOnNonlandDiscard(gs, onNonlandDiscard, 0);
+          }
+        }
+        // Awaken the Honored Dead Chapter III: after discard, offer GY return choice
+        if (returnFromGY && discarded) {
+          const gyCards = gy.getAll ? gy.getAll() : [];
+          const candidates = gyCards.filter((c: any) => {
+            if (returnTarget === 'creature_or_land') {
+              return (c.type_line || '').includes('Creature') || (c.type_line || '').includes('Land');
+            }
+            return (c.type_line || '').includes('Creature');
+          });
+          if (candidates.length > 0) {
+            gs._pendingGYReturn = { candidates, amount: 1, toHand: true, controller: 0, effect: {} };
+            gs.waitingForInput = { type: 'choose_gy_return', playerId: 0, optional: false };
+            refresh();
+            return; // Wait for GY pick overlay
+          }
+        }
         gs.waitingForInput = null;
         // Re-run cleanup phase to call _endOfTurnCleanup + advance
         if (typeof _GS?.reprocessCurrentPhase === 'function') {
@@ -1285,6 +1343,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (typeof _GS?.resolveMandatoryDiscard === 'function') {
           _GS.resolveMandatoryDiscard(gs, cardUids);
         }
+        afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveMandatoryDiscard] error:', e); }
     },
@@ -1344,9 +1403,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveHideaway]', e); }
     },
 
@@ -1361,9 +1419,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveSearchLibrary]', e); }
     },
 
@@ -1378,9 +1435,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveRampChoice]', e); }
     },
 
@@ -1395,9 +1451,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveClash]', e); }
     },
 
@@ -1412,9 +1467,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveLookTop]', e); }
     },
 
@@ -1429,9 +1483,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveConfirmOptional]', e); }
     },
 
@@ -1445,9 +1498,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           gs._pendingMultiBuffChoice.selected = creatureUids;
         }
         _GS.resolveMultiBuffChoice(gs);
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveMultiBuffChoice]', e); }
     },
 
@@ -1462,9 +1514,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveSacrifice]', e); }
     },
 
@@ -1479,10 +1530,25 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveGYReturn]', e); }
+    },
+
+    // ── Graveyard choice (which GY to exile from) ───────────────────────────
+
+    resolveGraveyardChoice(pid: number) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveGraveyardChoice === 'function') {
+          _GS.resolveGraveyardChoice(gs, pid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGraveyardChoice]', e); }
     },
 
     // ── Graveyard card choice ───────────────────────────────────────────────
@@ -1496,9 +1562,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           gs.waitingForInput = null;
         }
+        afterResolve(gs);
         refresh();
-        const ap = gs.activePlayer;
-        if (!gs.waitingForInput && !gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
       } catch (e) { console.warn('[resolveGraveyardCardChoice]', e); }
     },
 

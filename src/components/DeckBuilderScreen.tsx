@@ -21,9 +21,17 @@ export function DeckBuilderScreen() {
   const { draftPool, deck, setDeck, setScreen } = useAppStore();
 
   const [mainboard, setMainboard] = useState<Card[]>(deck?.mainboard ?? []);
-  const [sideboard, setSideboard] = useState<Card[]>(
-    deck?.sideboard ?? draftPool.filter(c => !deck?.mainboard.find(d => d.id === c.id))
-  );
+  const [sideboard, setSideboard] = useState<Card[]>(() => {
+    if (deck?.sideboard) return deck.sideboard;
+    if (!deck?.mainboard || deck.mainboard.length === 0) return [...draftPool];
+    // Remove mainboard copies one-by-one (count-based, handles duplicates correctly)
+    const poolCopy = [...draftPool];
+    for (const mainCard of deck.mainboard) {
+      const idx = poolCopy.findIndex(c => c.id === mainCard.id);
+      if (idx !== -1) poolCopy.splice(idx, 1);
+    }
+    return poolCopy;
+  });
   const [lands, setLands] = useState<Record<string, number>>(deck?.lands ?? { W: 0, U: 0, B: 0, R: 0, G: 0 });
   const [zoomCard, setZoomCard] = useState<Card | null>(null);
   const [sideView, setSideView] = useState<'sideboard' | 'all'>('sideboard');
@@ -120,13 +128,18 @@ export function DeckBuilderScreen() {
     .slice()
     .sort((a, b) => computeCardCmc(a) - computeCardCmc(b) || a.name.localeCompare(b.name));
 
-  // Count how many copies of each card id are in mainboard (to handle duplicates correctly)
+  // Count how many copies of each card id are in mainboard
   const mainCountMap: Record<string, number> = {};
   for (const c of mainboard) mainCountMap[c.id] = (mainCountMap[c.id] || 0) + 1;
 
-  // Build list with per-position inMain status — the N-th copy is "in main" only if ≥N copies are in mainboard
+  // Build list with per-position inMain status.
+  // Sideboard view: cards shown ARE in the sideboard → inMain is always false (clicking moves to main).
+  // Pool view: the N-th occurrence is "in main" if ≥N copies are in mainboard (first N get checkmarks).
   const seenInList: Record<string, number> = {};
   const listWithMain = listSource.map(card => {
+    if (sideView === 'sideboard') {
+      return { card, inMain: false };
+    }
     const seen = (seenInList[card.id] || 0) + 1;
     seenInList[card.id] = seen;
     const inMain = seen <= (mainCountMap[card.id] || 0);

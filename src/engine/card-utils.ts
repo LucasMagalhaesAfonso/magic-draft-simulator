@@ -217,6 +217,12 @@ export function canBlock(card: GameCard, attacker: GameCard, gameState: EngineGa
   // Unblockable
   if (attacker._unblockable || hasKeyword(attacker, 'Unblockable', gameState)) return false;
 
+  // Cant be blocked by creatures with power less than attacker (Formation Breaker)
+  if ((attacker as any)._cantBeBlockedBySmaller && getPower(card) < getPower(attacker)) return false;
+
+  // Decayed creatures can't block
+  if (hasKeyword(card, 'Decayed', gameState) || ((card as any)._counters?.['decayed'] || 0) > 0) return false;
+
   // Flying — can only be blocked by flying or reach
   if (hasKeyword(attacker, 'Flying', gameState)) {
     if (!hasKeyword(card, 'Flying', gameState) && !hasKeyword(card, 'Reach', gameState)) {

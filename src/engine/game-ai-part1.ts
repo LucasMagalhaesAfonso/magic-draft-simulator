@@ -817,6 +817,12 @@ function _tryEquipment(state: any, playerId: number): void {
 }
 
 function _tryActivatedAbilities(state: any, playerId: number): void {
+  // Clarion Conqueror: if activated abilities of creatures/artifacts/planeswalkers are globally locked, skip
+  const globallyLocked = state.players.some((p: any) =>
+    p.zones.battlefield.cards.some((c: any) => c._preventActivatedAbilities)
+  );
+  if (globallyLocked) return;
+
   const bf = state.players[playerId].zones.battlefield;
   const creatures = bf.cards.filter((c: any) => CardEngine.isCreature(c));
 
@@ -902,6 +908,7 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
         if (eff.type === 'mill') useful = true;
         if (eff.type === 'grant_counter') useful = true;
         if (eff.type === 'grant_counters') useful = true;
+        if (eff.type === 'return_from_graveyard') useful = true;
         if (eff.type === 'double_counters') useful = true;
       }
       if (!useful) continue;

@@ -197,10 +197,46 @@
   display: block;
 }
 
+/* ── Token placeholder (no image available) ─── */
+.bf-token-placeholder {
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(160deg, #3a4a3e, #1e2e22);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
+.bf-token-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.bf-token-name {
+  font-size: 7px;
+  font-weight: 700;
+  color: #d4e8d0;
+  text-align: center;
+  padding: 0 2px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
 .bf-card.tapped {
   transform: rotate(90deg);
 }
 .bf-card.tapped:hover { transform: rotate(90deg) translateY(-4px); }
+
+/* ── Mana autopay preview: land that would be auto-tapped for hovered spell ── */
+.bf-card.auto-tap-preview {
+  box-shadow: 0 0 0 2px #ffd700, 0 0 14px rgba(255, 215, 0, 0.55);
+}
+.bf-card.tapped.auto-tap-preview {
+  box-shadow: 0 0 0 2px #ffd700, 0 0 14px rgba(255, 215, 0, 0.55);
+}
 
 .bf-card.attacking {
   box-shadow: 0 0 0 2px var(--gold), 0 4px 16px rgba(240,192,64,0.4);

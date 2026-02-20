@@ -653,9 +653,10 @@ export function _chooseTargets(state, playerId, card) {
             if (myCreatures.length > 0) {
               targets.push({ type: 'creature', player: playerId, uid: myCreatures[0]._uid, amount: effect.amount || 3 });
             }
-          } else if (effect.target === 'own_creature' || !effect.target || effect.target === 'creature') {
+          } else if (effect.target === 'own_creature' || effect.target === 'own_nonlegendary_creature' || !effect.target || effect.target === 'creature') {
+            const nonLegOnly = effect.target === 'own_nonlegendary_creature';
             const myCreatures = state.players[playerId].zones.battlefield.cards
-              .filter(c => CardEngine.isCreature(c))
+              .filter(c => CardEngine.isCreature(c) && (!nonLegOnly || !CardEngine.isLegendary(c)))
               .sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
             // For optional targeting, AI can choose not to target if no good options
             if (myCreatures.length > 0 && (!effect.optional || myCreatures.length > 0)) {
@@ -992,6 +993,12 @@ export function playInstantPhase(state, playerId, phase) {
 // =================== ACTIVATED ABILITIES IN COMBAT ===================
 // Try activated abilities during combat priority windows
 function _tryActivatedAbilitiesInCombat(state, playerId, phase) {
+  // Clarion Conqueror: if activated abilities of creatures/artifacts/planeswalkers are globally locked, skip
+  const globallyLocked = state.players.some((p: any) =>
+    p.zones.battlefield.cards.some((c: any) => c._preventActivatedAbilities)
+  );
+  if (globallyLocked) return;
+
   const bf = state.players[playerId].zones.battlefield;
   const opponentId = playerId === 0 ? 1 : 0;
   const oppCreatures = state.players[opponentId].zones.battlefield.cards

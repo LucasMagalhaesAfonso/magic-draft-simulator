@@ -287,6 +287,13 @@ export function handleCounterSpell(
   }
   console.log(`[COUNTER_SPELL] Targeting: ${targetSpell.name}`);
 
+  // Surrak, Elusive Hunter — "This spell can't be countered"
+  if (targetSpell.card?._uncounterable) {
+    log.push(`${targetSpell.card.name} nao pode ser anulado.`);
+    console.log(`[COUNTER_SPELL] FAILED: ${targetSpell.card.name} is uncounterable`);
+    return null;
+  }
+
   if (effect.max_mana_value !== undefined) {
     const spellCMC = targetSpell.cmc || 0;
     if (spellCMC > effect.max_mana_value) {
@@ -1104,40 +1111,82 @@ export function handleGrant(
   targets: any[],
   log: string[]
 ): void {
-  const grantKw = effect.keyword;
-  if (!grantKw) return;
+  // Support both singular (effect.keyword) and plural (effect.keywords) forms
+  const kwList: string[] = [];
+  if (effect.keyword) kwList.push(effect.keyword);
+  if (Array.isArray(effect.keywords)) kwList.push(...effect.keywords);
+  if (kwList.length === 0) return;
+
   const grantDuration = effect.duration || 'end_of_turn';
 
-  if (targets && targets.length > 0) {
-    const gTarget = targets[0];
-    const gCreature = state.players[gTarget.player].zones.battlefield.get(gTarget.uid);
-    if (gCreature) {
-      if (!CardEngine.canBeTargeted(gCreature, controller)) {
-        log.push(`${gCreature.name} nao pode ser alvo (hexproof/shroud).`);
-        return;
-      }
-      if (!gCreature.keywords) gCreature.keywords = [];
-      const kwCap = grantKw.charAt(0).toUpperCase() + grantKw.slice(1);
-      if (!gCreature.keywords.includes(kwCap)) gCreature.keywords.push(kwCap);
+  const applyGrant = (gCard: any) => {
+    if (!gCard.keywords) gCard.keywords = [];
+    if (!gCard._tempKeywords) gCard._tempKeywords = [];
+    const granted: string[] = [];
+    for (const kw of kwList) {
+      const kwCap = kw.charAt(0).toUpperCase() + kw.slice(1);
+      if (!gCard.keywords.includes(kwCap)) gCard.keywords.push(kwCap);
       if (grantDuration === 'end_of_turn') {
-        if (!gCreature._tempKeywords) gCreature._tempKeywords = [];
-        gCreature._tempKeywords.push(kwCap);
+        gCard._tempKeywords.push({ keyword: kwCap, appliedTurn: state.turn, duration: grantDuration });
       }
-      if (kwCap === 'Haste') gCreature._summoningSick = false;
-      log.push(`${gCreature.name} ganha ${kwCap} ate o fim do turno.`);
+      if (kwCap === 'Haste') gCard._summoningSick = false;
+      granted.push(kwCap);
     }
+    return granted.join(', ');
+  };
+
+  if (targets && targets.length > 0) {
+    // Apply to all provided targets (e.g., multi-target grants)
+    for (const gTarget of targets) {
+      const gCreature = state.players[gTarget.player].zones.battlefield.get(gTarget.uid);
+      if (gCreature) {
+        if (!CardEngine.canBeTargeted(gCreature, controller)) {
+          log.push(`${gCreature.name} nao pode ser alvo (hexproof/shroud).`);
+          continue;
+        }
+        const granted = applyGrant(gCreature);
+        log.push(`${gCreature.name} ganha ${granted}.`);
+      }
+    }
+  } else if (effect.target === 'creatures_with_counters') {
+    // Synchronized Charge: grant to all own creatures with +1/+1 counters
+    const bf = state.players[controller].zones.battlefield.cards;
+    const withCounters = bf.filter((c: any) =>
+      CardEngine.isCreature(c) && c._counters && (c._counters['+1/+1'] || 0) > 0
+    );
+    for (const c of withCounters) {
+      const granted = applyGrant(c);
+      log.push(`${c.name} ganha ${granted}.`);
+    }
+  } else if (effect.target === 'own_creatures' || effect.target === 'all_creatures') {
+    // Grant to all own creatures (or all creatures)
+    const bf = state.players[controller].zones.battlefield.cards;
+    const creatures = bf.filter((c: any) => CardEngine.isCreature(c));
+    for (const c of creatures) {
+      applyGrant(c);
+    }
+    if (creatures.length > 0) log.push(`Todas as criaturas ganham ${kwList.join(', ')}.`);
+  } else if (effect.target === 'opponent_creature' || effect.target === 'opponent_creatures') {
+    // Grant keyword(s) to an opponent's creature (e.g. Summit Intimidator: "can't block this turn")
+    const oppId = controller === 0 ? 1 : 0;
+    const oppBf = state.players[oppId].zones.battlefield.cards.filter((c: any) => CardEngine.isCreature(c));
+    if (oppBf.length > 0) {
+      // AI: pick strongest; human: pick weakest to be strategic (or first for simplicity)
+      oppBf.sort((a: any, b: any) => CardEngine.getPower(b) - CardEngine.getPower(a));
+      const gTarget = oppBf[0];
+      const granted = applyGrant(gTarget);
+      log.push(`${gTarget.name} ganha ${granted} (oponente).`);
+    }
+  } else if (effect.target === 'next_spell') {
+    // Grant uncounterable/etc. to next spell cast this turn
+    state._nextSpellGrant = kwList;
+    log.push(`Proximo feitico ganha ${kwList.join(', ')}.`);
   } else {
+    // Default: grant to self (the card itself on the battlefield)
     const gSelf = state.players[controller].zones.battlefield.get(card._uid);
     if (gSelf) {
-      if (!gSelf.keywords) gSelf.keywords = [];
-      const kwCap = grantKw.charAt(0).toUpperCase() + grantKw.slice(1);
-      if (!gSelf.keywords.includes(kwCap)) gSelf.keywords.push(kwCap);
-      if (grantDuration === 'end_of_turn') {
-        if (!gSelf._tempKeywords) gSelf._tempKeywords = [];
-        gSelf._tempKeywords.push(kwCap);
-      }
-      if (kwCap === 'Haste') gSelf._summoningSick = false;
-      log.push(`${gSelf.name} ganha ${kwCap}.`);
+      const granted = applyGrant(gSelf);
+      log.push(`${gSelf.name} ganha ${granted}.`);
     }
   }
 }
@@ -1207,10 +1256,24 @@ export function handleGrantCounters(
         return;
       }
       if (!gcCreature._counters) gcCreature._counters = { '+1/+1': 0, '-1/-1': 0 };
-      const gcAmt = effect.amount || 1;
-      const gcType = effect.counter || '+1/+1';
-      gcCreature._counters[gcType] = (gcCreature._counters[gcType] || 0) + gcAmt;
-      log.push(`${gcCreature.name} recebe ${gcAmt} contador(es) ${gcType}.`);
+
+      // Array of keyword counters (e.g. Qarsi Revenant: ["flying","deathtouch","lifelink"])
+      if (effect.counters && Array.isArray(effect.counters)) {
+        if (!gcCreature.keywords) gcCreature.keywords = [];
+        for (const kw of effect.counters) {
+          const kwCap = kw.charAt(0).toUpperCase() + kw.slice(1);
+          gcCreature._counters[kwCap] = (gcCreature._counters[kwCap] || 0) + 1;
+          if (!gcCreature.keywords.includes(kwCap)) gcCreature.keywords.push(kwCap);
+          if (kwCap === 'Haste') gcCreature._summoningSick = false;
+        }
+        log.push(`${gcCreature.name} recebe contadores: ${effect.counters.join(', ')}.`);
+      } else {
+        // Standard numeric counter (+1/+1, -1/-1, etc.)
+        const gcAmt = effect.amount || 1;
+        const gcType = effect.counter || '+1/+1';
+        gcCreature._counters[gcType] = (gcCreature._counters[gcType] || 0) + gcAmt;
+        log.push(`${gcCreature.name} recebe ${gcAmt} contador(es) ${gcType}.`);
+      }
     }
   }
 }
@@ -1221,13 +1284,24 @@ export function handleExileTopPlay(
   controller: number,
   log: string[]
 ): void {
+  const fromGraveyard = effect.from === 'graveyard';
   const etpLib = state.players[controller].zones.library;
+  const etpGY = state.players[controller].zones.graveyard;
   const etpAmt = effect.amount || 1;
 
   for (let i = 0; i < etpAmt; i++) {
     let cardFound: any = null;
 
-    if (effect.condition) {
+    if (fromGraveyard) {
+      // Tersa Lightshatter: exile a card from graveyard to play
+      const gyCands = etpGY.getAll().filter((c: any) => !CardEngine.isLand(c));
+      if (gyCands.length > 0) {
+        cardFound = effect.random
+          ? gyCands[Math.floor(Math.random() * gyCands.length)]
+          : gyCands[0];
+        etpGY.remove(cardFound._uid);
+      }
+    } else if (effect.condition) {
       let filter: (c: any) => boolean = () => true;
 
       if (effect.condition === 'nonland') {
@@ -1293,8 +1367,13 @@ export function handleSearchLibrary(
   log: string[]
 ): string[] | null {
   console.log('[SEARCH_LIBRARY] Starting search_library effect', effect);
-  const slLib = state.players[controller].zones.library;
-  const bf = state.players[controller].zones.battlefield;
+
+  // Support effect.controller: "opponent" (e.g., Magmatic Hellkite - opponent searches their library)
+  const opponent = controller === 0 ? 1 : 0;
+  const resolvedController = effect.controller === 'opponent' ? opponent : controller;
+
+  const slLib = state.players[resolvedController].zones.library;
+  const bf = state.players[resolvedController].zones.battlefield;
   console.log('[SEARCH_LIBRARY] Library size:', slLib.cards.length);
 
   let slFilter: (c: any) => boolean;
@@ -1348,9 +1427,9 @@ export function handleSearchLibrary(
     }
   }
 
-  console.log('[SEARCH_LIBRARY] Controller:', controller, 'isHuman:', state.players[controller].isHuman);
+  console.log('[SEARCH_LIBRARY] Controller:', resolvedController, 'isHuman:', state.players[resolvedController].isHuman);
 
-  if (state.players[controller].isHuman && slCandidates.length > 0) {
+  if (state.players[resolvedController].isHuman && slCandidates.length > 0) {
     const landOptions: any[] = [];
     const seenNames = new Set<string>();
     for (const c of slCandidates) {
@@ -1360,26 +1439,17 @@ export function handleSearchLibrary(
       }
     }
     console.log('[SEARCH_LIBRARY] Setting up human choice. Options:', landOptions.length);
-    console.log(
-      '[SEARCH_LIBRARY] Destination - toTop:',
-      toTop,
-      'toHand:',
-      toHand,
-      'toBattlefield:',
-      toBattlefield,
-      'tapped:',
-      tappedDest
-    );
     state._pendingSearch = {
       candidates: landOptions,
-      controller,
+      controller: resolvedController,
       toHand,
       toBattlefield,
       toTop,
       tapped: tappedDest,
+      stunCounter: effect.stun_counter || 0,
       optional: effect.optional || false,
     };
-    state.waitingForInput = { type: 'search_library', playerId: controller };
+    state.waitingForInput = { type: 'search_library', playerId: resolvedController };
     log.push(
       effect.optional
         ? 'Escolha uma carta da sua biblioteca (ou declinar).'
@@ -1395,7 +1465,7 @@ export function handleSearchLibrary(
     if (idx !== -1) slLib.cards.splice(idx, 1);
 
     if (toHand) {
-      state.players[controller].zones.hand.add(picked);
+      state.players[resolvedController].zones.hand.add(picked);
       slLib.shuffle();
       log.push(`Busca ${picked.name} da biblioteca para a mao.`);
     } else if (toTop) {
@@ -1405,13 +1475,18 @@ export function handleSearchLibrary(
       const bfCard = CardEngine.prepareForBattlefield(picked);
       bfCard._tapped = tappedDest;
       bfCard._summoningSick = false;
-      bfCard._ownerId = controller;
+      bfCard._ownerId = resolvedController;
+      // Apply stun counter if specified (e.g. Magmatic Hellkite)
+      if (effect.stun_counter) {
+        if (!bfCard._counters) bfCard._counters = {};
+        bfCard._counters['stun'] = (bfCard._counters['stun'] || 0) + effect.stun_counter;
+      }
       bf.add(bfCard);
-      GameState._registerCardTriggers(state, bfCard, controller);
+      GameState._registerCardTriggers(state, bfCard, resolvedController);
       slLib.shuffle();
       log.push(`Busca ${picked.name} e coloca no campo${tappedDest ? ' virado' : ''}.`);
     } else {
-      state.players[controller].zones.hand.add(picked);
+      state.players[resolvedController].zones.hand.add(picked);
       slLib.shuffle();
       log.push(`Busca ${picked.name} da biblioteca para a mao.`);
     }
@@ -1452,7 +1527,9 @@ export function handleCreateTokenCopy(
   let sourceCreature: any = null;
 
   if (effect.type === 'copy_self') {
-    sourceCreature = state.players[controller].zones.battlefield.get(card._uid);
+    // First try battlefield (normal case: already ETB'd)
+    // Fallback to the card object itself (cast trigger fires before ETB, e.g. Sage of the Skies)
+    sourceCreature = state.players[controller].zones.battlefield.get(card._uid) || card;
   } else if (effect.target === 'exiled_creature') {
     if (card._exiledUntilLeaves && card._exiledUntilLeaves.length > 0) {
       sourceCreature = card._exiledUntilLeaves[card._exiledUntilLeaves.length - 1];
@@ -1719,7 +1796,20 @@ export function handleDistributeCounters(
   controller: number,
   log: string[]
 ): string[] | null {
-  const dcAmt = effect.amount || 1;
+  // Resolve dynamic amounts (e.g. "lands_in_gy_count" for Lasyd Prowler)
+  let dcAmt: number = 1;
+  const rawAmt = effect.amount;
+  if (typeof rawAmt === 'number') {
+    dcAmt = rawAmt;
+  } else if (rawAmt === 'lands_in_gy_count') {
+    dcAmt = state.players[controller].zones.graveyard.getAll().filter((c: any) => CardEngine.isLand(c)).length;
+  } else if (rawAmt === 'lands_count') {
+    dcAmt = state.players[controller].zones.battlefield.cards.filter((c: any) => CardEngine.isLand(c)).length;
+  } else if (rawAmt === 'creature_count') {
+    dcAmt = state.players[controller].zones.battlefield.cards.filter((c: any) => CardEngine.isCreature(c)).length;
+  } else if (rawAmt) {
+    dcAmt = parseInt(rawAmt) || 1;
+  }
   const dcType = effect.counter || '+1/+1';
   const dcCreatures = state.players[controller].zones.battlefield.cards.filter((c: any) =>
     CardEngine.isCreature(c)
@@ -2121,6 +2211,25 @@ export function dispatch(
     case 'reveal_hand':
       handleRevealHand(state, effect, controller, log);
       return null;
+    case 'shuffle_gy_to_library': {
+      // Target player shuffles up to N cards from their GY into their library
+      // (Rite of Renewal: opponent shuffles up to 4)
+      const shuffleAmount = effect.amount || 4;
+      const shuffleTargetPid = effect.target === 'self' ? controller : (controller === 0 ? 1 : 0); // Default: opponent
+      const shuffleGY = state.players[shuffleTargetPid].zones.graveyard;
+      const shuffleLib = state.players[shuffleTargetPid].zones.library;
+      const gyAll = shuffleGY.getAll();
+      const toShuffle = gyAll.slice(0, shuffleAmount);
+      for (const sc of toShuffle) {
+        shuffleGY.remove(sc._uid);
+        shuffleLib.addToBottom(sc);
+      }
+      if (toShuffle.length > 0) {
+        shuffleLib.shuffle();
+        log.push(`${toShuffle.length} carta(s) do cemiterio embaralhadas na biblioteca.`);
+      }
+      return null;
+    }
     case 'exile_graveyard':
       handleExileGraveyard(state, effect, controller, log);
       return null;
@@ -2167,6 +2276,14 @@ export function dispatch(
     case 'exile_top_play':
       handleExileTopPlay(state, effect, controller, log);
       return null;
+    case 'exile_top_choose':
+    case 'behold_dragon':
+    case 'optional_discard_hand_draw': {
+      // Route to _resolveSimpleEffect which has the full implementation
+      const routedResult = GameState._resolveSimpleEffect(state, controller, effect, { cardUid: card?._uid });
+      if (routedResult) log.push(routedResult);
+      return null;
+    }
     case 'search_library':
       return handleSearchLibrary(state, effect, controller, log);
     case 'search_library_to_graveyard':
@@ -2220,8 +2337,14 @@ export function dispatch(
     case 'exile_graveyard_cast_copy':
       handleExileGraveyardCastCopy(state, effect, controller, effects, ei, log);
       return null;
-    default:
-      log.push(`[DEBUG] Efeito "${effect.type}" nao implementado em stack-part2.`);
+    default: {
+      // Fallback: route to _resolveSimpleEffect for any effect not explicitly handled here.
+      // This ensures saga chapters, spell copies, and other stack-pushed effects work
+      // even if the type is only implemented in _resolveSimpleEffect.
+      const fallbackResult = GameState._resolveSimpleEffect(state, controller, effect, { cardUid: card?._uid });
+      if (fallbackResult) log.push(fallbackResult);
+      else log.push(`[DEBUG] Efeito "${effect.type}" nao resolvido.`);
       return null;
+    }
   }
 }

@@ -12,7 +12,7 @@ import {
   DiscardOverlay, ManaColorOverlay, SearchLibraryOverlay, CreatureChoiceOverlay,
   LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
-  AbilityModal, ExileOverlay, CombatArrows,
+  AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
 import { getLandManaColors, canPay } from '../engine/mana';
@@ -123,6 +123,8 @@ export function GameScreen() {
   // London mulligan: phase 2 - selecting cards to put on bottom
   const [showingBottomSelect, setShowingBottomSelect] = useState(false);
   const [mulliganBottomSelected, setMulliganBottomSelected] = useState<string[]>([]);
+  // Mana autopay preview: which lands will be auto-tapped when this hand card is hovered
+  const [hoveredHandCard, setHoveredHandCard] = useState<string | null>(null);
 
   // Toast / banner / auto-pass states
   const [toasts, setToasts] = useState<{id: number; msg: string; type: string}[]>([]);
@@ -406,7 +408,11 @@ export function GameScreen() {
     const targets: any[] = [];
 
     const wantsCreature = text.includes('target creature') || text.includes('target permanent') || text.includes('target nonland');
-    const wantsPlayer = text.includes('target player') || text.includes('target opponent') || text.includes('deals') || text.includes('damage');
+    // "target player" / "target opponent" / "player or planeswalker" are explicitly player-targeting.
+    // Do NOT include generic 'damage'/'deals' here — that's too broad and wrongly targets players
+    // for cards like "deals 5 damage to target creature". 'any target' is handled via wantsAny below.
+    const wantsPlayer = text.includes('target player') || text.includes('target opponent') ||
+      text.includes('target player or planeswalker') || text.includes('target opponent or planeswalker');
     const wantsEnemy = text.includes('target opponent') || (text.includes('destroy') && text.includes('target'));
     const wantsAny = text.includes('target creature or player') || text.includes('any target');
     // Planeswalkers are valid targets for: "planeswalker", "target permanent", "target nonland permanent", "any target"
@@ -557,6 +563,8 @@ export function GameScreen() {
         isValid = tl.includes('creature');
       } else if (targetType === 'own_creature') {
         isValid = pid === 0 && tl.includes('creature');
+      } else if (targetType === 'own_nonlegendary_creature') {
+        isValid = pid === 0 && tl.includes('creature') && !tl.includes('legendary');
       } else if (targetType === 'opponent_creature') {
         isValid = pid === 1 && tl.includes('creature');
       } else if (targetType === 'creature_with_flying') {
@@ -704,6 +712,16 @@ export function GameScreen() {
     const gs = gsRef.current;
     if (!gs) return;
 
+    // Clarion Conqueror: block activation of artifacts/creatures/planeswalkers while lock is active
+    const tl = (card.type_line || '').toLowerCase();
+    const isLockableType = tl.includes('artifact') || tl.includes('creature') || tl.includes('planeswalker');
+    if (isLockableType) {
+      const locked = gs.players?.some((p: any) =>
+        p.zones.battlefield.cards.some((c: any) => c._preventActivatedAbilities)
+      );
+      if (locked) return; // silently block — UI shows no modal
+    }
+
     // Equipment: show creature picker to attach to
     if ((card.type_line || '').includes('Equipment')) {
       setEquipModal({ equipUid: card._uid, equipName: card.name });
@@ -794,6 +812,12 @@ export function GameScreen() {
     return false;
   }
 
+  // During main phase, use the engine's getPlayableCards (via humanPlayableUids in snapshot)
+  // so cost reductions (Bell-Ringer, etc.) are reflected correctly.
+  // During instant/stack priority, fall back to local CMC computation since that
+  // window is narrower and getPlayableCards isn't gated by phase there.
+  const enginePlayableUids: Set<string> = (snap as any).humanPlayableUids || new Set();
+
   const playableSet = new Set<string>(
     humanHasPriority
       ? p0.hand
@@ -806,12 +830,13 @@ export function GameScreen() {
               const cost = c.mana_cost || '';
               return !cost || canPay(colorPool as ManaPool, cost, c.cmc ?? 0);
             }
-            // Main phase: lands + affordable spells
+            // Main phase: defer to engine's getPlayableCards for accuracy
+            if (enginePlayableUids.size > 0) return enginePlayableUids.has(c._uid);
+            // Fallback if engine result unavailable
             if (isLand) return !landPlayedThisTurn;
             const cost = c.mana_cost || '';
             const mainAffordable = (c.cmc ?? 0) <= totalAvailableMana && (!cost || canPay(colorPool as ManaPool, cost, c.cmc ?? 0));
             if (mainAffordable) return true;
-            // Check omen/adventure side cost — if affordable, card is playable even if main isn't
             if (c.layout === 'adventure' && c.back_face?.mana_cost) {
               const advCost = c.back_face.mana_cost;
               const advCmc = (advCost.match(/\{[^}]+\}/g) || []).reduce((s: number, t: string) => {
@@ -841,6 +866,63 @@ export function GameScreen() {
           .map((c: any) => c._uid)
       : []
   );
+
+  // ── Mana autopay preview: compute which lands would be tapped for hovered card ──
+  // Pure computation based on hand card cost vs available lands + pool.
+  const autoTapPreviewUids = (() => {
+    if (!hoveredHandCard || !isMainPhaseHuman) return new Set<string>();
+    const card = p0.hand.find((c: any) => c._uid === hoveredHandCard);
+    if (!card || (card.type_line || '').toLowerCase().includes('land')) return new Set<string>();
+
+    const cost = card.mana_cost || '';
+    const cmc = card._effectiveCmc ?? card.cmc ?? 0;
+    if (!cost || cmc === 0) return new Set<string>();
+
+    // Build what's already in the pool
+    const pool: Record<string, number> = { ...(p0.manaPool || {}) };
+
+    // Parse colored and generic needs
+    const colorNeeds: Record<string, number> = {};
+    for (const m of cost.matchAll(/\{([WUBRG])\}/g)) {
+      colorNeeds[m[1]] = (colorNeeds[m[1]] || 0) + 1;
+    }
+    let genericNeeded = cmc - Object.values(colorNeeds).reduce((s, v) => s + v, 0);
+
+    // Subtract what pool already covers
+    for (const color of Object.keys(colorNeeds)) {
+      const fromPool = Math.min(pool[color] || 0, colorNeeds[color]);
+      colorNeeds[color] -= fromPool;
+      pool[color] = (pool[color] || 0) - fromPool;
+    }
+    const poolRemainder = Object.values(pool).reduce((s, v) => s + v, 0);
+    genericNeeded = Math.max(0, genericNeeded - poolRemainder);
+
+    const untapped = p0.battlefield.filter((c: any) =>
+      (c.type_line || '').toLowerCase().includes('land') && !c._tapped
+    );
+    const willTap = new Set<string>();
+
+    // First pass: tap for colored needs
+    for (const [color, needed] of Object.entries(colorNeeds)) {
+      let remaining = needed;
+      for (const land of untapped) {
+        if (remaining <= 0) break;
+        if (willTap.has(land._uid)) continue;
+        const colors = getLandManaColors(land);
+        if (colors.includes(color)) { willTap.add(land._uid); remaining--; }
+      }
+    }
+
+    // Second pass: tap for generic needs
+    for (const land of untapped) {
+      if (genericNeeded <= 0) break;
+      if (willTap.has(land._uid)) continue;
+      willTap.add(land._uid);
+      genericNeeded--;
+    }
+
+    return willTap;
+  })();
 
   // ── Game over ────────────────────────────────────────────────────────────────
 
@@ -1165,6 +1247,7 @@ export function GameScreen() {
                     isSelectedBlocker={isSelectedBlocker}
                     canActivate={canActivatePW}
                     overrideArtUrl={getLandArtUrl(card)}
+                    isAutoTapPreview={autoTapPreviewUids.has(card._uid)}
                     onClick={c => handleCardClick(c, 0)}
                     onDoubleClick={c => handleDoubleClick(c)}
                     onRightClick={c => setZoom(c)}
@@ -1215,6 +1298,8 @@ export function GameScreen() {
                   className={`game-hand-card ${isPlayable ? 'hand-playable' : humanHasPriority ? 'hand-unplayable' : ''}`}
                   onClick={() => handleCardClick(card, 0)}
                   onContextMenu={e => { e.preventDefault(); setZoom(card); }}
+                  onMouseEnter={() => isMainPhaseHuman && setHoveredHandCard(card._uid)}
+                  onMouseLeave={() => setHoveredHandCard(null)}
                   style={{ position: 'relative' }}
                 >
                   <CardImage card={card} size="small" overrideArtUrl={getLandArtUrl(card)} />
@@ -1311,6 +1396,7 @@ export function GameScreen() {
             const labelMap: Record<string, string> = {
               creature: 'qualquer criatura',
               own_creature: 'uma das suas criaturas',
+              own_nonlegendary_creature: 'uma criatura sua não-lendária',
               opponent_creature: 'uma criatura do oponente',
               creature_with_flying: 'uma criatura com voar',
               artifact: 'um artefato',
@@ -1483,10 +1569,11 @@ export function GameScreen() {
           // ── Sacrifice choice ─────────────────────────────────────────────
           case 'sacrifice': {
             const choices = (wi as any).choices || [];
+            const isForCast = !!(wi as any)._forCast;
             return (
               <CreatureChoiceOverlay
                 creatures={choices}
-                title="💀 Sacrifice — Choose Creature"
+                title={isForCast ? '💀 Additional Cost — Sacrifice a Creature' : '💀 Sacrifice — Choose Creature'}
                 optional={(wi as any).optional}
                 onConfirm={uid => actions.resolveSacrifice(uid)}
               />
@@ -1609,19 +1696,45 @@ export function GameScreen() {
             );
           }
 
-          // ── Graveyard card choice ────────────────────────────────────────
-          case 'graveyard_choice':
+          // ── Graveyard choice: pick which player's GY ─────────────────────
+          case 'graveyard_choice': {
+            const myGy = snap.players[0].graveyard;
+            const oppGy = snap.players[1].graveyard;
+            return (
+              <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 8000 }}>
+                <div className="glass overlay-panel" style={{ maxWidth: 380, padding: 24, textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 12, color: 'var(--gold)', fontSize: 16 }}>☠ Exile from Graveyard</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+                    Choose which graveyard to exile from:
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                    <button className="btn btn-gold" onClick={() => actions.resolveGraveyardChoice(0)}>
+                      Your GY ({myGy.length})
+                    </button>
+                    <button className="btn btn-muted" onClick={() => actions.resolveGraveyardChoice(1)}>
+                      Opponent's GY ({oppGy.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ── Graveyard card choice: pick specific cards ────────────────────
           case 'graveyard_card_choice': {
-            const pending = gs?._pendingGraveyardChoice || gs?._pendingGraveyardCardChoice;
-            const gy = snap.players[0].graveyard;
-            return gy.length > 0 ? (
-              <SearchLibraryOverlay
-                candidates={gy}
-                optional
-                title="☠ Choose from Graveyard"
-                onConfirm={uid => actions.resolveGraveyardCardChoice(uid ? [uid] : [])}
+            const pending = gs?._pendingGraveyardCardChoice;
+            if (!pending) return null;
+            const pid = pending.playerId ?? 0;
+            const gy = snap.players[pid].graveyard;
+            return (
+              <GraveyardMultiSelectOverlay
+                cards={gy}
+                amount={pending.amount ?? 1}
+                minAmount={pending.minAmount ?? 0}
+                title={`☠ Exile from ${pid === 0 ? 'Your' : "Opponent's"} Graveyard`}
+                onConfirm={uids => actions.resolveGraveyardCardChoice(uids)}
               />
-            ) : null;
+            );
           }
 
           // ── Choose GY return ─────────────────────────────────────────────
@@ -2141,12 +2254,13 @@ interface BFCardProps {
   isSelectedBlocker?: boolean;
   canActivate?: boolean; // planeswalker: can use loyalty ability this turn
   overrideArtUrl?: string; // For land art override
+  isAutoTapPreview?: boolean; // Highlight: would be auto-tapped for hovered hand card
   onClick?: (card: any) => void;
   onDoubleClick?: (card: any) => void;
   onRightClick: (card: any) => void;
 }
 
-function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, onClick, onDoubleClick, onRightClick }: BFCardProps) {
+function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, onClick, onDoubleClick, onRightClick }: BFCardProps) {
   const isLand = card.type_line?.includes('Land');
   const isCreature = card.type_line?.includes('Creature');
   const isPlaneswalkerCard = card.type_line?.includes('Planeswalker');
@@ -2174,12 +2288,24 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
         ${isBlockingTarget ? 'blocking-target' : ''}
         ${isAssignedBlocker ? 'assigned-blocker' : ''}
         ${isSelectedBlocker ? 'targetable' : ''}
+        ${isAutoTapPreview ? 'auto-tap-preview' : ''}
       `}
       onClick={() => onClick?.(card)}
       onDoubleClick={() => onDoubleClick?.(card)}
       onContextMenu={e => { e.preventDefault(); onRightClick(card); }}
     >
-      <img src={overrideArtUrl || card.image_normal || card.image_small || undefined} alt={card.name} loading="lazy" />
+      {card._isToken && !(overrideArtUrl || card.image_normal || card.image_small) ? (
+        <div className="bf-token-placeholder">
+          <span className="bf-token-icon">
+            {({'Dragon':'🐉','Spirit':'👻','Warrior':'⚔️','Treasure':'💎','Soldier':'🛡','Goblin':'👹','Zombie':'🧟','Monk':'🥋','Bird':'🦅','Elephant':'🐘','Wolf':'🐺','Faerie':'🧚','Snake':'🐍'} as any)[card.name]
+              || ({'Dragon':'🐉','Spirit':'👻','Warrior':'⚔️','Treasure':'💎','Soldier':'🛡','Goblin':'👹','Zombie':'🧟','Monk':'🥋','Bird':'🦅','Elephant':'🐘','Wolf':'🐺','Faerie':'🧚','Snake':'🐍'} as any)[(card.name || '').split(' ')[0]]
+              || '★'}
+          </span>
+          <span className="bf-token-name">{card.name}</span>
+        </div>
+      ) : (
+        <img src={overrideArtUrl || card.image_normal || card.image_small || undefined} alt={card.name} loading="lazy" />
+      )}
       {isCreature && power !== null && (
         <div className="bf-pt">{power}/{toughness}</div>
       )}

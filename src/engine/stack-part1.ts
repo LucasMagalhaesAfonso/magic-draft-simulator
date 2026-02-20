@@ -197,6 +197,7 @@ export function _resolveItem(item, state) {
           }
         } else if (effect.target === 'opponent' || effect.target === 'player') {
           gameState.players[opponent].life -= dmgAmt;
+          gameState._lastDamagedPlayer = opponent; // Track for "damaged_player" discard effects
           // Track damage dealt this turn (for Spinerock Knoll hideaway)
           if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
           gameState._damageDealtThisTurn[opponent] = (gameState._damageDealtThisTurn[opponent] || 0) + dmgAmt;
@@ -235,6 +236,7 @@ export function _resolveItem(item, state) {
             }
           } else if (target.type === 'player') {
             gameState.players[target.player].life -= dmgAmt;
+            gameState._lastDamagedPlayer = target.player; // Track for "damaged_player" discard effects
             log.push(`${dmgAmt} dano ao jogador. (Vida: ${gameState.players[target.player].life})`);
           }
         }
@@ -376,6 +378,7 @@ export function _resolveItem(item, state) {
           else if (tgt === 'enchantment') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Enchantment'));
           else if (tgt === 'creature_with_flying') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.hasKeyword(c, 'Flying') && Cards.canBeTargeted(c, controller));
           else if (tgt === 'noncreature_artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
+          else if (tgt === 'creature_power4+') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.isCreature(c) && Cards.getPower(c) >= 4 && Cards.canBeTargeted(c, controller));
 
           if (validChoices.length === 0) {
             log.push(`Sem alvo valido para destruir.`);
@@ -582,7 +585,8 @@ export function _resolveItem(item, state) {
           if (effect.target === 'opponent_creature' || effect.target === 'creature') {
             autoTargetPlayer = opponentId;
             filterFn = (c: any) => Cards.isCreature(c) && !c._isToken;
-          } else if (effect.target === 'nonland_permanent') {
+          } else if (effect.target === 'nonland_permanent' || effect.target === 'spell_or_permanent') {
+            // spell_or_permanent: ideally targets spells on stack too, but fall back to nonland permanent
             autoTargetPlayer = opponentId;
             filterFn = (c: any) => !Cards.isLand(c);
           } else if (effect.target === 'own_nonland') {
@@ -600,20 +604,26 @@ export function _resolveItem(item, state) {
             candidates.sort((a: any, b: any) =>
               (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a))
             );
-            const best = candidates[0];
-            resolvedBounceTargets = [{ type: 'creature', uid: best._uid, player: autoTargetPlayer }];
+            // Respect up_to: N for multi-bounce effects (e.g. Marang River Regent ETB up_to: 2)
+            const maxBounce = effect.up_to || 1;
+            resolvedBounceTargets = candidates.slice(0, maxBounce).map((c: any) =>
+              ({ type: 'creature', uid: c._uid, player: autoTargetPlayer })
+            );
           }
         }
-        if (resolvedBounceTargets && resolvedBounceTargets.length > 0) {
-          const target = resolvedBounceTargets[0];
+        // Process all bounce targets (handles up_to: N)
+        const bouncedUids = new Set<string>();
+        for (const target of (resolvedBounceTargets || [])) {
+          if (bouncedUids.has(target.uid)) continue; // skip duplicates
           const bf = gameState.players[target.player].zones.battlefield;
           const permanent = bf.get(target.uid);
           if (permanent) {
             if (!Cards.canBeTargeted(permanent, controller)) {
               log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
-              break;
+              continue;
             }
             vfxPlay('bounce', permanent._uid);
+            bouncedUids.add(permanent._uid);
 
             // If aura, remove effects from enchanted creature
             if (Cards.isAura(permanent) && permanent._attachedTo) {
@@ -798,6 +808,7 @@ export function _resolveItem(item, state) {
           log.push(`Oponente perde metade da vida (${halfLife}). (Vida: ${gameState.players[oppId].life})`);
           vfxPlay('playerDamage', 'p' + oppId);
         }
+        GameState._checkWinner(gameState);
         break;
       }
 
@@ -1143,6 +1154,8 @@ export function _resolveItem(item, state) {
             bf.add(bfLand);
             lib.shuffle();
             log.push(`Oponente busca ${land.name} e coloca no campo virado.`);
+            const lf1 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
+            log.push(...lf1);
           } else {
             console.log('[RAMP DEBUG] Adding to BATTLEFIELD (default case)');
             const bfLand = Cards.prepareForBattlefield(land);
@@ -1151,6 +1164,8 @@ export function _resolveItem(item, state) {
             bf.add(bfLand);
             lib.shuffle();
             log.push(`Oponente busca ${land.name} no grimorio e coloca no campo${effect.tapped ? ' virado' : ''}.`);
+            const lf2 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
+            log.push(...lf2);
           }
         }
         break;
@@ -1308,6 +1323,22 @@ export function _resolveItem(item, state) {
           }
           break;
         }
+        // Handle returned_creatures target: apply counters to creatures just returned from GY (Smile at Death)
+        if (effect.target === 'returned_creatures' && gameState._lastReturnedUIDs && gameState._lastReturnedUIDs.length > 0) {
+          const counterType = effect.counter || '+1/+1';
+          const counterAmt = resolveAmount(effect.amount) || 1;
+          for (const ref of gameState._lastReturnedUIDs) {
+            const retCreature = gameState.players[ref.player].zones.battlefield.get(ref.uid);
+            if (retCreature) {
+              if (!retCreature._counters) retCreature._counters = { '+1/+1': 0, '-1/-1': 0 };
+              retCreature._counters[counterType] = (retCreature._counters[counterType] || 0) + counterAmt;
+              log.push(`${retCreature.name} recebe ${counterAmt} ${counterType} counter(s).`);
+              GameState.fireTrigger(gameState, 'counter_placed', { cardUid: retCreature._uid, playerId: ref.player });
+            }
+          }
+          break;
+        }
+
         // Otherwise: add counters to a creature
         if (targets && targets.length > 0) {
           // Check for distribute_creatures (Armament Dragon)
@@ -1381,6 +1412,21 @@ export function _resolveItem(item, state) {
         break;
       }
 
+      case 'add_mana': {
+        // Add mana to caster's pool (e.g., Narset's Rebuke generates {U}{R}{W})
+        if (effect.colors && Array.isArray(effect.colors)) {
+          for (const c of effect.colors) {
+            gameState.manaPool[controller][c] = (gameState.manaPool[controller][c] || 0) + 1;
+          }
+          log.push(`+{${effect.colors.join('}{')}} mana.`);
+        } else if (effect.color) {
+          const c = effect.color;
+          gameState.manaPool[controller][c] = (gameState.manaPool[controller][c] || 0) + (effect.amount || 1);
+          log.push(`+{${c}} mana.`);
+        }
+        break;
+      }
+
       case 'mark_exile_on_death': {
         // Replacement effect: if target creature would die this turn, exile it instead
         const target = (targets || [])[0];
@@ -1407,7 +1453,9 @@ export function _resolveItem(item, state) {
       }
 
       case 'discard': {
-        const targetPlayer = effect.target === 'opponent' ? opponent : controller;
+        const targetPlayer = effect.target === 'opponent' ? opponent
+          : effect.target === 'damaged_player' ? (gameState._lastDamagedPlayer ?? opponent)
+          : controller;
         const hand = gameState.players[targetPlayer].zones.hand;
         const gy = gameState.players[targetPlayer].zones.graveyard;
 
@@ -1694,6 +1742,15 @@ export function _resolveItem(item, state) {
             const types = (c.type_line || '').toLowerCase();
             return types.includes('instant') || types.includes('sorcery');
           });
+        } else if (effect.target === 'creature_power2_or_less') {
+          // Smile at Death: creature with power 2 or less
+          candidates = candidates.filter(c => Cards.isCreature(c) && Cards.getPower(c) <= 2);
+        } else if (effect.target === 'creature_mv_plus1') {
+          // Sidisi, Regent of the Mire: creature with MV ≤ sacrificed_creature_mv + 1
+          // Without tracking the sacrificed creature's CMC, allow any creature as candidate
+          candidates = candidates.filter(c => Cards.isCreature(c));
+        } else if (effect.target === 'permanent') {
+          candidates = candidates.filter(c => Cards.isPermanent(c));
         }
 
         const amount = effect.amount || 1;
@@ -1717,6 +1774,7 @@ export function _resolveItem(item, state) {
 
         // Auto-pick best candidates
         candidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+        gameState._lastReturnedUIDs = []; // Track UIDs for "returned_creatures" counter target
         for (let i = 0; i < amount && i < candidates.length; i++) {
           const card = candidates[i];
           gy.remove(card._uid);
@@ -1749,6 +1807,7 @@ export function _resolveItem(item, state) {
 
             gameState.players[controller].zones.battlefield.add(bfCard);
             GameState._registerCardTriggers(gameState, bfCard, controller);
+            gameState._lastReturnedUIDs.push({ uid: bfCard._uid, player: controller });
             log.push(`${card.name} volta do cemiterio para o campo!`);
           }
         }
@@ -1765,7 +1824,7 @@ export function _resolveItem(item, state) {
           let powerMod = effect.power;
           let toughnessMod = effect.toughness;
           if (powerMod === "X" || toughnessMod === "X") {
-            const xValue = card._xValue || 3; // Default to 3 if X not set
+            const xValue = gameState._currentXValue !== undefined ? gameState._currentXValue : 0;
             if (powerMod === "X") powerMod = -xValue;
             if (toughnessMod === "X") toughnessMod = -xValue;
           }

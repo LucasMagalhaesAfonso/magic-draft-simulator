@@ -655,6 +655,70 @@ export function ExileOverlay({ cards, playerId, onClose }: ExileOverlayProps) {
   );
 }
 
+// ─── Graveyard Multi-Select Overlay ──────────────────────────────────────────
+// Used for graveyard_card_choice: select up to N cards from a single graveyard
+
+interface GraveyardMultiSelectOverlayProps {
+  cards: any[];
+  amount: number;     // max selectable
+  minAmount: number;  // min required (0 = optional)
+  title?: string;
+  onConfirm: (uids: string[]) => void;
+}
+
+export function GraveyardMultiSelectOverlay({ cards, amount, minAmount, title, onConfirm }: GraveyardMultiSelectOverlayProps) {
+  const [selected, setSelected] = useState<string[]>([]);
+
+  function toggle(uid: string) {
+    setSelected(prev =>
+      prev.includes(uid) ? prev.filter(x => x !== uid) :
+      prev.length < amount ? [...prev, uid] : [...prev.slice(1), uid]
+    );
+  }
+
+  const ready = selected.length >= minAmount;
+
+  return (
+    <div className="overlay-backdrop">
+      <div className="overlay-panel glass">
+        <h3 className="overlay-title">{title || `☠ Exile from Graveyard`}</h3>
+        <p className="overlay-hint">
+          {amount === 1
+            ? 'Click a card to exile.'
+            : `Select up to ${amount} card${amount !== 1 ? 's' : ''}. (${selected.length}/${amount} selected)`
+          }
+        </p>
+        <div className="scry-cards">
+          {cards.map((card: any, i: number) => (
+            <div
+              key={card._uid || i}
+              className={`scry-card-slot ${selected.includes(card._uid) ? 'scry-away' : ''}`}
+              onClick={() => toggle(card._uid)}
+            >
+              <CardImage card={card} size="medium" />
+              <div className="scry-card-label">
+                {selected.includes(card._uid) ? '✓ Exile' : card.name}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+          <button
+            className="btn btn-gold overlay-confirm"
+            disabled={!ready}
+            onClick={() => ready && onConfirm(selected)}
+          >
+            Exile {selected.length} card{selected.length !== 1 ? 's' : ''} (Enter)
+          </button>
+          {minAmount === 0 && (
+            <button className="btn btn-muted" onClick={() => onConfirm([])}>Skip</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Combat Arrows SVG ────────────────────────────────────────────────────────
 // Draws animated dashed arrows from each blocker to its assigned attacker
 interface CombatArrowsProps {

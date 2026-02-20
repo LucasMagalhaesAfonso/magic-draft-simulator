@@ -123,8 +123,12 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "desperate measures": {
-    cast: [{ type: "buff", power: 1, toughness: -1, target: "creature", duration: "end_of_turn" }],
-    triggered: [{ event: "target_dies", effects: [{ type: "draw", amount: 2 }] }]
+    // Oracle: target creature gets +1/-1 until EOT. When it dies this turn, draw 2.
+    // Implemented as: buff + register a once-per-turn temp trigger for own creature death this turn.
+    cast: [
+      { type: "buff", power: 1, toughness: -1, target: "creature", duration: "end_of_turn" },
+      { type: "register_temp_trigger", event: "any_creature_dies", condition: "own_creature", effects: [{ type: "draw", amount: 2 }], once: true }
+    ]
   },
 
   // =================== TARKIR DRAGONSTORM - CREATURES WITH ETB ===================
@@ -255,10 +259,12 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "furious forebear": {
+    // Oracle: while in GY, when a creature you control dies you may pay {1}{W} to return to hand.
+    // Graveyard-zone triggers aren't supported, so approximate as: when any own creature dies, draw 1 card.
     triggered: [{
       event: "any_creature_dies",
       condition: "own_creature",
-      effects: [{ type: "exile_top_play", amount: 1, duration: "next_turn", optional: true }]
+      effects: [{ type: "draw", amount: 1, optional: true }]
     }]
   },
 
@@ -341,7 +347,7 @@ export const CardEffectsDB: Record<string, any> = {
   "all-out assault": {
     static: [
       { type: "buff_all", power: 1, toughness: 1, target: "own_creatures" },
-      { type: "grant_all", keywords: ["deathtouch"], target: "own_creatures" }
+      { type: "grant_all", keyword: "deathtouch", target: "own_creatures" }
     ],
     etb: [
       { type: "extra_combat", condition: "main_phase" },
@@ -505,7 +511,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "flamehold grappler": {
     static: [{ type: "has_keyword", keywords: ["first strike"] }],
-    etb: [{ type: "copy_next_spell", optional: true }]
+    etb: [{ type: "copy_next_spell" }]
   },
 
   "lasyd prowler": {
@@ -544,8 +550,7 @@ export const CardEffectsDB: Record<string, any> = {
     static: [{ type: "has_keyword", keywords: ["deathtouch", "haste"] }],
     etb: [{ type: "exile", target: "own_creature", other: true, up_to: 1, until_leaves: true }],
     triggered: [
-      { event: "attacks", self: true, effects: [{ type: "create_token_copy", target: "exiled_creature", tapped: true, attacking: true, sacrificeAtEndStep: true, for_each_opponent: true }] },
-      { event: "enters_or_attacks", effects: [] }
+      { event: "attacks", self: true, effects: [{ type: "create_token_copy", target: "exiled_creature", tapped: true, attacking: true, sacrificeAtEndStep: true, for_each_opponent: true }] }
     ]
   },
 
@@ -554,7 +559,7 @@ export const CardEffectsDB: Record<string, any> = {
     graveyard: [{
       cost: { mana: "2U", exile: true },
       effects: [
-        { type: "grant_counter", target: "own_creature", amount: 1 },
+        { type: "grant_counter", target: "own_nonlegendary_creature", amount: 1 },
         { type: "mass_clone", duration: "end_of_turn" }
       ],
       sorcerySpeed: true
@@ -562,12 +567,12 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "narset, jeskai waymaster": {
-    triggered: [{ event: "end_step", effects: [{ type: "discard_hand", optional: true }, { type: "draw", amount: "spells_this_turn" }] }]
+    triggered: [{ event: "end_step", effects: [{ type: "optional_discard_hand_draw" }] }]
   },
 
   "qarsi revenant": {
     static: [{ type: "has_keyword", keywords: ["flying", "deathtouch", "lifelink"] }],
-    activated: [{ cost: { mana: "2BB", zone: "graveyard", exile: true }, effects: [{ type: "grant_counters", counters: ["flying", "deathtouch", "lifelink"], target: "creature" }], sorcerySpeed: true }]
+    activated: [{ cost: { mana: "2B", zone: "graveyard", exile: true }, effects: [{ type: "grant_counters", counters: ["flying", "deathtouch", "lifelink"], target: "creature" }], sorcerySpeed: true }]
   },
 
   "sage of the skies": {
@@ -578,8 +583,7 @@ export const CardEffectsDB: Record<string, any> = {
   "sarkhan, dragon ascendant": {
     etb: [{ type: "behold_dragon", optional: true }, { type: "create_token", name: "Treasure", power: 0, toughness: 1, condition: "if_beheld_dragon" }],
     triggered: [
-      { event: "creature_etb", self: true, effects: [] },
-      { event: "dragon_enters", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "become_dragon", keywords: ["flying"] }] }
+      { event: "dragon_enters", effects: [{ type: "counter_self", counter: "+1/+1", amount: 1 }, { type: "become_dragon", keyword: "flying", until_end_of_turn: true }] }
     ]
   },
 
@@ -603,7 +607,7 @@ export const CardEffectsDB: Record<string, any> = {
     static: [{ type: "token_doubling" }],
     activated: [
       { cost: { loyalty: 1 }, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Soldier" }] },
-      { cost: { loyalty: 0 }, effects: [{ type: "counter_all", counter: "+1/+1", amount: 1, target: "own_creatures" }, { type: "grant_all", keywords: ["flying"], target: "own_creatures", duration: "next_turn" }] },
+      { cost: { loyalty: 0 }, effects: [{ type: "counter_all", counter: "+1/+1", amount: 1, target: "own_creatures" }, { type: "grant_all", keyword: "flying", target: "own_creatures", duration: "next_turn" }] },
       { cost: { loyalty: -3 }, effects: [{ type: "destroy", target: "opponent_creature_mv3+" }] }
     ]
   },
@@ -640,8 +644,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "shiko, paragon of the way": {
     static: [{ type: "has_keyword", keywords: ["flying", "vigilance"] }],
-    etb: [{ type: "exile_graveyard_cast_copy", target: "nonland_mv3_or_less", free: true }],
-    triggered: [{ event: "creature_etb", self: true, effects: [] }]
+    etb: [{ type: "exile_graveyard_cast_copy", target: "nonland_mv3_or_less", free: true }]
   },
 
   "smile at death": {
@@ -653,14 +656,12 @@ export const CardEffectsDB: Record<string, any> = {
       { type: "has_keyword", keywords: ["flying"] },
       { type: "buff_all", power: 1, toughness: 1, target: "other_dragons" },
       { type: "has_keyword", keywords: ["storm"] }
-    ],
-    triggered: [{ event: "cast_spell", self: true, mechanic: "storm", effects: [] }]
+    ]
   },
 
   "taigam, master opportunist": {
     triggered: [
-      { event: "second_spell", mechanic: "flurry", effects: [{ type: "copy_spell" }, { type: "exile_with_suspend", counters: 4 }] },
-      { event: "cast_spell", self: true, mechanic: "flurry", effects: [], optional: true }
+      { event: "second_spell", mechanic: "flurry", effects: [{ type: "copy_spell" }] }
     ]
   },
 
@@ -669,7 +670,7 @@ export const CardEffectsDB: Record<string, any> = {
   "duty beyond death": {
     additional_costs: [{ type: "sacrifice", target: "creature" }],
     cast: [
-      { type: "grant_all", keywords: ["indestructible"], target: "own_creatures", duration: "end_of_turn" },
+      { type: "grant_all", keyword: "indestructible", target: "own_creatures", duration: "end_of_turn" },
       { type: "counter_all", counter: "+1/+1", amount: 1, target: "own_creatures" }
     ]
   },
@@ -678,7 +679,7 @@ export const CardEffectsDB: Record<string, any> = {
     cast: [{
       type: "modal",
       modes: [
-        { type: "create_token", power: 1, toughness: 1, name: "Goblin", count: 2 },
+        { type: "create_token", power: 1, toughness: 1, name: "Goblin", count: 2, colors: ["R"], type_line: "Creature — Goblin" },
         { type: "buff", power: "creature_count", toughness: "creature_count", target: "creature", duration: "end_of_turn" }
       ]
     }]
@@ -706,6 +707,7 @@ export const CardEffectsDB: Record<string, any> = {
   "overwhelming surge": {
     cast: [{
       type: "modal",
+      chooseTwo: true,
       modes: [
         { type: "damage", amount: 3, target: "creature" },
         { type: "destroy", target: "noncreature_artifact" }
@@ -725,7 +727,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "mammoth bellow": {
-    cast: [{ type: "create_token", power: 5, toughness: 5, name: "Elephant" }],
+    cast: [{ type: "create_token", power: 5, toughness: 5, name: "Elephant", colors: ["G"], type_line: "Creature — Elephant" }],
     harmonize: "{5}{G}{U}{R}",
     optional: true
   },
@@ -750,7 +752,11 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "rite of renewal": {
-    cast: [{ type: "return_from_graveyard", target: "any", amount: 2, to_hand: true }]
+    cast: [
+      { type: "return_from_graveyard", target: "permanent", amount: 2, to_hand: true },
+      { type: "shuffle_gy_to_library", amount: 4, target: "any_player", optional: true }
+    ],
+    exile_self: true
   },
 
   "riverwheel sweep": {
@@ -765,8 +771,7 @@ export const CardEffectsDB: Record<string, any> = {
     cast: [
       { type: "destroy", target: "creature" },
       { type: "create_token", power: 1, toughness: 1, name: "Warrior", keywords: ["haste"], count: 2, sacrificeAtEndStep: true }
-    ],
-    triggered: [{ event: "end_step", effects: [] }]
+    ]
   },
 
   // =================== TARKIR DRAGONSTORM - COMMON SPELLS ===================
@@ -941,8 +946,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "kishla trawlers": {
-    etb: [{ type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true, optional: true }],
-    triggered: [{ event: "enters_or_attacks", effects: [] }]
+    etb: [{ type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true, optional: true }]
   },
 
   "sibsig appraiser": {
@@ -967,7 +971,7 @@ export const CardEffectsDB: Record<string, any> = {
   // --- Blue spells & enchantments ---
 
   "essence anchor": {
-    triggered: [{ event: "upkeep", effects: [{ type: "surveil", amount: 1, optional: true }] }],
+    triggered: [{ event: "upkeep", effects: [{ type: "surveil", amount: 1 }] }],
     activated: [{ cost: { tap: true }, effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid" }], condition: "card_left_graveyard" }]
   },
 
@@ -995,7 +999,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "stillness in motion": {
-    triggered: [{ event: "upkeep", effects: [{ type: "mill", amount: 3, target: "self" }, { type: "return_from_graveyard", amount: 5, target: "any", to_library_top: true, condition: "if_library_empty" }] }]
+    triggered: [{ event: "upkeep", effects: [{ type: "mill", amount: 3, target: "self" }, { type: "return_from_graveyard", amount: 5, target: "any", to_top_library: true, condition: "if_library_empty" }] }]
   },
 
   "unending whisper": {
@@ -1179,7 +1183,7 @@ export const CardEffectsDB: Record<string, any> = {
     etb: [{ type: "grant", keywords: ["first_strike"], target: "enchanted", duration: "end_of_turn" }]
   },
   "reverberating summons": {
-    triggered: [{ event: "combat_begin", condition: "two_spells_this_turn", effects: [{ type: "become_creature", power: 3, toughness: 3, keywords: ["haste"] }] }],
+    triggered: [{ event: "combat_begin", condition: "two_spells_this_turn", effects: [{ type: "become_creature", power: 3, toughness: 3, keywords: ["haste"], until_end_of_turn: true }] }],
     activated: [{ cost: { mana: "1R", discard_hand: true, sacrifice: true }, effects: [{ type: "draw", amount: 2 }] }]
   },
   "war effort": {
@@ -1522,7 +1526,7 @@ export const CardEffectsDB: Record<string, any> = {
     activated: [{ cost: { tap: true }, effects: [{ type: "add_mana", color: "G", amount: "power" }] }]
   },
   "sidisi, regent of the mire": {
-    activated: [{ cost: { tap: true, sacrifice_creature: true }, effects: [{ type: "return_from_graveyard", target: "creature_mv_plus1", to_battlefield: true }] }]
+    activated: [{ cost: { tap: true, sacrifice_creature: true }, sorcerySpeed: true, effects: [{ type: "return_from_graveyard", target: "creature_mv_plus1", to_battlefield: true }] }]
   },
 
   // =================== TDM - MOBILIZE CREATURES ===================

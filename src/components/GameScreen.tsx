@@ -1641,15 +1641,52 @@ export function GameScreen() {
           backgroundPosition: 'center',
         } : undefined}
       >
-        {/* ── Library stack visual ── */}
-        <div className="library-stack-visual" title={`Library: ${p0.libraryCount} cards`}>
-          <div className="library-card-stack">
-            <img className="lib-card lib-card-3" src={sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'} alt="deck" />
-            <img className="lib-card lib-card-2" src={sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'} alt="deck" />
-            <img className="lib-card lib-card-1" src={sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'} alt="deck" />
-          </div>
-          <span className="library-count-badge">{p0.libraryCount}</span>
-        </div>
+        {/* ── Zone cluster: Cemitério + Grimório ── */}
+        {(() => {
+          const CARD_BACK = sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg';
+          const gyCards: any[] = p0.graveyard || [];
+          const topGyCard = gyCards.length > 0 ? gyCards[gyCards.length - 1] : null;
+          return (
+            <div className="zone-cluster">
+              {/* Cemitério — última carta face-up, clicável */}
+              <div
+                className="gy-zone-visual"
+                onClick={() => setGraveyardOpen({ pid: 0 })}
+                title={`Cemitério: ${gyCards.length} carta${gyCards.length !== 1 ? 's' : ''}`}
+              >
+                {topGyCard ? (
+                  <>
+                    <img
+                      className="gy-zone-card"
+                      src={topGyCard.image_normal || topGyCard.image_small}
+                      alt={topGyCard.name}
+                      onError={e => { (e.currentTarget as HTMLImageElement).src = CARD_BACK; }}
+                    />
+                    {gyCards.length > 1 && (
+                      <div className="gy-zone-stack-hint" />
+                    )}
+                    <span className="zone-count-badge">{gyCards.length}</span>
+                  </>
+                ) : (
+                  <div className="gy-zone-empty">
+                    <span className="gy-zone-empty-icon">☠</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Grimório — pilha face-down com escudo */}
+              <div className="library-zone-visual" title={`Grimório: ${p0.libraryCount} cartas`}>
+                <div className="library-card-stack">
+                  <img className="lib-card lib-card-3" src={CARD_BACK} alt="deck" />
+                  <img className="lib-card lib-card-2" src={CARD_BACK} alt="deck" />
+                  <img className="lib-card lib-card-1" src={CARD_BACK} alt="deck" />
+                  <div className="lib-shield-badge">🛡</div>
+                </div>
+                <span className="zone-count-badge">{p0.libraryCount}</span>
+              </div>
+            </div>
+          );
+        })()}
 
         {p0.battlefield.length === 0
           ? <span className="game-bf-empty">Your battlefield</span>

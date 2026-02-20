@@ -103,16 +103,79 @@
   position: relative;
 }
 
-/* ── Library stack visual ── */
-.library-stack-visual {
+/* ── Zone cluster: Cemitério + Grimório — bottom-right of battlefield ── */
+.zone-cluster {
   position: absolute;
   bottom: 8px;
   right: 10px;
   display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 8px;
+  z-index: 10;
+}
+
+/* ── Cemitério visual ── */
+.gy-zone-visual {
+  display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  z-index: 10;
+  gap: 3px;
+  cursor: pointer;
+  position: relative;
+}
+.gy-zone-card {
+  width: 52px;
+  height: 72px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid rgba(180, 120, 120, 0.6);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.7);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  display: block;
+}
+.gy-zone-visual:hover .gy-zone-card {
+  transform: translateY(-4px) scale(1.04);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.85);
+  border-color: rgba(220, 150, 150, 0.8);
+}
+/* Subtle second-card hint behind top card */
+.gy-zone-stack-hint {
+  position: absolute;
+  top: 2px;
+  left: -2px;
+  width: 52px;
+  height: 72px;
+  border-radius: 4px;
+  background: rgba(120, 80, 80, 0.4);
+  border: 1px solid rgba(180,120,120,0.3);
+  z-index: -1;
+}
+.gy-zone-empty {
+  width: 52px;
+  height: 72px;
+  border-radius: 4px;
+  border: 1px dashed rgba(255,255,255,0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.15);
+  transition: border-color 0.15s;
+}
+.gy-zone-visual:hover .gy-zone-empty {
+  border-color: rgba(255,255,255,0.25);
+}
+.gy-zone-empty-icon {
+  font-size: 22px;
+  opacity: 0.2;
+}
+
+/* ── Grimório (Library) visual ── */
+.library-zone-visual {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
   cursor: default;
 }
 .library-card-stack {
@@ -131,13 +194,28 @@
 .lib-card-3 { transform: rotate(-4deg) translate(-2px, -2px); }
 .lib-card-2 { transform: rotate(-2deg) translate(-1px, -1px); }
 .lib-card-1 { transform: rotate(0deg); }
-.library-count-badge {
+
+/* Shield badge centered on library pile */
+.lib-shield-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 22px;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 4px rgba(0,0,0,0.9));
+  z-index: 2;
+}
+
+/* Shared zone count badge */
+.zone-count-badge {
   font-size: 11px;
   font-weight: 700;
   color: #fff;
-  background: rgba(0,0,0,0.7);
+  background: rgba(0,0,0,0.75);
   border-radius: 10px;
-  padding: 1px 6px;
+  padding: 1px 7px;
+  pointer-events: none;
 }
 
 /* ── Battlefield rows: creatures top, lands bottom ── */

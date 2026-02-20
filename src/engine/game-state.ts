@@ -603,6 +603,11 @@ export function fireTrigger(state, eventType, data) {
         }
       }
 
+      // Desperate Measures: specific targeted creature dies
+      if (tempTrigger.event === 'dies' && tempTrigger.targetCardUid && data.cardUid === tempTrigger.targetCardUid) {
+        shouldFireTemp = true;
+      }
+
       if (shouldFireTemp) {
         // Fire temp trigger effects
         for (const effect of tempTrigger.effects) {

@@ -1183,12 +1183,17 @@ export function _resolveItem(item, state) {
         const creatures = bf.cards.filter(c => Cards.isCreature(c));
         if (creatures.length === 0) {
           log.push(`${gameState.players[targetPlayer].isHuman ? 'Voce' : 'Oponente'} nao tem criaturas para exilar.`);
-        } else if (creatures.length === 1 || !gameState.players[targetPlayer].isHuman) {
-          // Auto-pick strongest creature or only option
-          const creature = creatures.length === 1 ? creatures[0] : creatures.reduce((a, b) => (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a)) > 0 ? b : a);
+        } else {
+          // The targeted player chooses which of their creatures to exile.
+          // Since no interactive overlay exists for "exile your own creature", auto-pick:
+          //   - Weakest (player would choose their least valuable creature)
+          const creature = creatures.reduce((a, b) =>
+            (Cards.getPower(a) + Cards.getToughness(a)) <= (Cards.getPower(b) + Cards.getToughness(b)) ? a : b
+          );
           bf.remove(creature._uid);
           exile.add(creature);
-          log.push(`${creature.name} e exilado da criatura do oponente.`);
+          GameState._unregisterCardTriggers(gameState, creature._uid);
+          log.push(`${creature.name} e exilado.`);
         }
 
         // Exile opponent's graveyard
@@ -1914,6 +1919,29 @@ export function _resolveItem(item, state) {
 
     } // end switch
   } // end for effects loop
+
+  // Register target_dies triggered abilities for spell cards (e.g. Desperate Measures)
+  // These can't use normal _registerCardTriggers since spells don't enter the battlefield.
+  // Register as one-shot temp triggers tied to the specific targeted card's UID.
+  const spellDb = Cards.getPreprocessedEffects ? Cards.getPreprocessedEffects(card) : null;
+  if (spellDb?.triggered && targets && targets.length > 0) {
+    for (const dbTrigger of spellDb.triggered) {
+      if (dbTrigger.event === 'target_dies') {
+        if (!gameState._tempTriggers) gameState._tempTriggers = [];
+        gameState._tempTriggers.push({
+          cardUid: card._uid,
+          cardName: card.name,
+          controller: controller,
+          event: 'dies',
+          targetCardUid: targets[0].uid, // Only fires when this specific creature dies
+          effects: dbTrigger.effects,
+          expiresAt: 'end_of_turn',
+          once: true,
+          _tempId: Date.now() + Math.random()
+        });
+      }
+    }
+  }
 
   return log;
 }

@@ -1619,10 +1619,21 @@ export function _resolveItem(item, state) {
 
       case 'fight': {
         if (targets && targets.length > 0) {
-          const target = targets[0];
+          // For multi-effect spells (e.g. Knockout Maneuver: counter own + fight opp),
+          // targets may contain both own creature (targets[0]) and opp creature (targets[1]).
+          // Find the opponent's creature target (first target belonging to opponent).
+          const oppTarget = targets.find((t: any) => t.player !== undefined && t.player !== controller)
+            ?? targets[targets.length - 1];
+          const target = oppTarget;
+
           const myBf = gameState.players[controller].zones.battlefield;
-          // Use the spell's own card if it's a creature, otherwise pick best own creature
-          let ourCreature = myBf.get(card._uid);
+          // Use own-side target if available (e.g. Knockout Maneuver: the buffed creature fights)
+          const ownTarget = targets.find((t: any) => t.player === controller);
+          let ourCreature = ownTarget ? myBf.get(ownTarget.uid) : null;
+          if (!ourCreature || !Cards.isCreature(ourCreature)) {
+            // Fall back to the spell's own card (creature with fight ability) or strongest own creature
+            ourCreature = myBf.get(card._uid);
+          }
           if (!ourCreature || !Cards.isCreature(ourCreature)) {
             const owned = myBf.cards.filter(c => Cards.isCreature(c))
               .sort((a, b) => Cards.getPower(b) - Cards.getPower(a));

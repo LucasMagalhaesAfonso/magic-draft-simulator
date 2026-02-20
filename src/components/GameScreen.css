@@ -317,6 +317,9 @@
   border-radius: 3px;
   line-height: 1.4;
 }
+/* Buff/debuff tinting on P/T badge */
+.bf-pt.buffed  { color: #7eff7e; background: rgba(0,0,0,0.9); }
+.bf-pt.debuffed { color: #ff7e7e; background: rgba(0,0,0,0.9); }
 
 .bf-damage {
   position: absolute;
@@ -772,6 +775,42 @@
   padding: 1px 3px;
   border-radius: 3px;
   line-height: 1.2;
+}
+
+/* ── Temp-granted keyword badge (until EOT) ── */
+.kw-badge.kw-temp {
+  border: 1px solid #f0c040;
+  color: #f0c040;
+  opacity: 0.85;
+  background: rgba(60,40,0,0.85);
+}
+
+/* ── Equipment: attached indicator (on equipment card) ── */
+.bf-equip-attached {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  font-size: 11px;
+  background: rgba(0,0,0,0.75);
+  border-radius: 4px;
+  padding: 1px 3px;
+  z-index: 5;
+  line-height: 1;
+}
+
+/* ── Creature: equipment count badge ── */
+.bf-equip-count {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(240,192,64,0.85);
+  color: #000;
+  border-radius: 4px;
+  padding: 1px 4px;
+  z-index: 5;
+  line-height: 1.3;
 }
 
 /* ── Saga badge ── */

@@ -605,6 +605,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           // Send countered spell to graveyard
           gs.players[pending.playerId].zones.graveyard.add(pending.card);
           gs.log.push(`${pending.card.name} vai para o cemiterio (anulado).`);
+          // Signal GameScreen to show a counter-spell toast
+          (gs as any)._lastCounteredSpell = pending.card.name;
           // Continue game processing
           if (typeof _GS.reprocessCurrentPhase === 'function') {
             _GS.reprocessCurrentPhase(gs);

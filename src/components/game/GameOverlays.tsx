@@ -290,12 +290,48 @@ export function InstantPriorityBanner({ phase, onPass }: InstantPriorityBannerPr
   );
 }
 
+// ─── Mana cost pip renderer (for banners / tooltips) ─────────────────────────
+const MANA_PIP_COLORS: Record<string, string> = {
+  W: '#f8f4e8', U: '#1a5fa8', B: '#2a1a3a', R: '#c0392b', G: '#1e7c3a',
+  C: '#8a8a8a', X: '#555',
+};
+const MANA_PIP_TEXT: Record<string, string> = {
+  W: 'W', U: 'U', B: 'B', R: 'R', G: 'G', C: 'C', X: 'X',
+};
+export function ManaCostPips({ cost }: { cost: string }) {
+  if (!cost) return null;
+  const tokens = (cost.match(/\{[^}]+\}/g) || []);
+  return (
+    <span style={{ display: 'inline-flex', gap: 2, alignItems: 'center', marginLeft: 6 }}>
+      {tokens.map((t, i) => {
+        const sym = t.slice(1, -1);
+        const bg = MANA_PIP_COLORS[sym] ?? '#444';
+        const txt = MANA_PIP_TEXT[sym] ?? sym;
+        const isNum = /^\d+$/.test(sym);
+        return (
+          <span key={i} style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 18, height: 18, borderRadius: '50%',
+            background: bg, color: isNum || sym === 'C' ? '#eee' : (sym === 'W' ? '#333' : '#fff'),
+            fontSize: 10, fontWeight: 700, flexShrink: 0,
+            border: '1px solid rgba(255,255,255,0.2)',
+          }}>{txt}</span>
+        );
+      })}
+    </span>
+  );
+}
+
 // ─── Stack Priority Banner ───────────────────────────────────────────────────
-interface StackPriorityBannerProps { spellName: string; onPass: () => void; }
-export function StackPriorityBanner({ spellName, onPass }: StackPriorityBannerProps) {
+interface StackPriorityBannerProps { spellName: string; spellCost?: string; spellType?: string; onPass: () => void; }
+export function StackPriorityBanner({ spellName, spellCost, spellType, onPass }: StackPriorityBannerProps) {
   return (
     <div className="instant-priority-banner stack-priority-banner glass">
-      <span>📚 Stack: <strong>{spellName}</strong></span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        📚 Stack: <strong>{spellName}</strong>
+        {spellCost && <ManaCostPips cost={spellCost} />}
+        {spellType && <span className="ip-hint" style={{ marginLeft: 6 }}>({spellType})</span>}
+      </span>
       <span className="ip-hint">You can respond</span>
       <button className="btn btn-gold btn-sm" onClick={onPass}>Let Resolve (Space)</button>
     </div>

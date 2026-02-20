@@ -13,7 +13,7 @@ import {
   LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
-  BounceMultiOverlay, DistributeCountersOverlay,
+  BounceMultiOverlay, DistributeCountersOverlay, ManaCostPips,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
 import { getLandManaColors, canPay } from '../engine/mana';
@@ -296,6 +296,16 @@ export function GameScreen() {
     }
     prevLifeRef.current = [p0life, p1life];
   }, [snap?.players[0].life, snap?.players[1].life]); // eslint-disable-line
+
+  // Counter spell feedback toast
+  const prevCounterRef = useRef<string | null>(null);
+  useEffect(() => {
+    const countered = (snap as any)?._lastCounteredSpell;
+    if (countered && countered !== prevCounterRef.current) {
+      prevCounterRef.current = countered;
+      addToast(`✨ Countered: ${countered}`, 'cast');
+    }
+  }, [(snap as any)?._lastCounteredSpell]); // eslint-disable-line
 
   // Behold reveal toast
   const prevBeholdRef = useRef<string | null>(null);
@@ -1808,13 +1818,18 @@ export function GameScreen() {
             );
 
           // ── Stack priority (opponent can respond) ───────────────────────
-          case 'stack_priority':
+          case 'stack_priority': {
+            const pendingCard = gs?._pendingCastOnStack?.card;
+            const spType = pendingCard?.type_line?.replace(/—.*/, '').trim() || '';
             return (
               <StackPriorityBanner
-                spellName={gs?._pendingCastOnStack?.card?.name || 'Spell'}
+                spellName={pendingCard?.name || 'Spell'}
+                spellCost={pendingCard?.mana_cost || ''}
+                spellType={spType}
                 onPass={actions.nextPhase}
               />
             );
+          }
 
           // ── Mana color choice ───────────────────────────────────────────
           case 'mana_color_choice':
@@ -1882,11 +1897,20 @@ export function GameScreen() {
           case 'search_library_choice': {
             const pending = gs?._pendingRamp || gs?._pendingSearch || gs?._pendingSearchChoice;
             const candidates = pending?.lands || pending?.candidates || [];
+            const searchTarget = pending?.effect?.target || pending?.target || '';
+            const searchTypeLabel: Record<string, string> = {
+              creature: 'a Creature', land: 'a Land', basic_land: 'a Basic Land',
+              instant: 'an Instant', sorcery: 'a Sorcery', artifact: 'an Artifact',
+              enchantment: 'an Enchantment', dragon: 'a Dragon', permanent: 'a Permanent',
+            };
+            const typeHint = searchTypeLabel[searchTarget] || '';
+            const titleBase = pending?.tapped ? '🌳 Search — Put Land into Play (Tapped)' : '📚 Search Library';
+            const title = typeHint ? `${titleBase} — Choose ${typeHint}` : titleBase;
             return candidates.length > 0 ? (
               <SearchLibraryOverlay
                 candidates={candidates}
                 optional={pending?.optional}
-                title={pending?.tapped ? '🌳 Search — Put Land into Play (Tapped)' : '📚 Search Library'}
+                title={title}
                 onConfirm={actions.resolveSearchLibrary}
               />
             ) : null;
@@ -2895,7 +2919,7 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
           since their card image has base P/T but actual P/T may differ due to buffs.
           Regular tokens (no image) use BfToken placeholder which shows P/T internally. */}
       {isCreature && power !== null && (!card._isToken || !!(overrideArtUrl || card.image_normal || card.image_small)) && (
-        <div className="bf-pt">{power}/{toughness}</div>
+        <div className={`bf-pt${(card._powerMod || 0) > 0 || (card._toughnessMod || 0) > 0 ? ' buffed' : (card._powerMod || 0) < 0 || (card._toughnessMod || 0) < 0 ? ' debuffed' : ''}`}>{power}/{toughness}</div>
       )}
       {card._damage > 0 && <div className="bf-damage">💥{card._damage}</div>}
       {counters.map(([type, n]) => (
@@ -2909,27 +2933,45 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
       {isCreature && (() => {
         const kws = card.keywords || [];
         const text = (card.oracle_text || '').toLowerCase();
-        const badges: string[] = [];
-        if (kws.includes('Flying') || text.includes('flying')) badges.push('✈');
-        if (kws.includes('First Strike') || text.includes('first strike')) badges.push('FS');
-        if (kws.includes('Double Strike') || text.includes('double strike')) badges.push('DS');
-        if (kws.includes('Deathtouch') || text.includes('deathtouch')) badges.push('☠');
-        if (kws.includes('Lifelink') || text.includes('lifelink')) badges.push('♥');
-        if (kws.includes('Trample') || text.includes('trample')) badges.push('Tpl');
-        if (kws.includes('Haste') || text.includes('haste')) badges.push('H');
-        if (kws.includes('Reach') || text.includes('reach')) badges.push('Rch');
-        if (kws.includes('Hexproof') || text.includes('hexproof')) badges.push('Hex');
-        if (kws.includes('Indestructible') || text.includes('indestructible')) badges.push('Ind');
-        if (kws.includes('Menace') || text.includes('menace')) badges.push('Men');
-        if (kws.includes('Vigilance') || text.includes('vigilance')) badges.push('Vig');
-        if (kws.includes('Flash') || text.includes('flash')) badges.push('⚡');
+        // Build set of temp-granted keyword names for styling
+        const tempKwNames = new Set<string>(
+          (card._tempKeywords || []).map((t: any) => typeof t === 'string' ? t : t.keyword)
+        );
+        type KwEntry = { label: string; key: string };
+        const badges: KwEntry[] = [];
+        const push = (label: string, key: string) => badges.push({ label, key });
+        if (kws.includes('Flying') || text.includes('flying')) push('✈', 'Flying');
+        if (kws.includes('First Strike') || text.includes('first strike')) push('FS', 'First Strike');
+        if (kws.includes('Double Strike') || text.includes('double strike')) push('DS', 'Double Strike');
+        if (kws.includes('Deathtouch') || text.includes('deathtouch')) push('☠', 'Deathtouch');
+        if (kws.includes('Lifelink') || text.includes('lifelink')) push('♥', 'Lifelink');
+        if (kws.includes('Trample') || text.includes('trample')) push('Tpl', 'Trample');
+        if (kws.includes('Haste') || text.includes('haste')) push('H', 'Haste');
+        if (kws.includes('Reach') || text.includes('reach')) push('Rch', 'Reach');
+        if (kws.includes('Hexproof') || text.includes('hexproof')) push('Hex', 'Hexproof');
+        if (kws.includes('Indestructible') || text.includes('indestructible')) push('Ind', 'Indestructible');
+        if (kws.includes('Menace') || text.includes('menace')) push('Men', 'Menace');
+        if (kws.includes('Vigilance') || text.includes('vigilance')) push('Vig', 'Vigilance');
+        if (kws.includes('Flash') || text.includes('flash')) push('⚡', 'Flash');
         if (badges.length === 0) return null;
         return (
           <div className="bf-keyword-badges">
-            {badges.map(b => <span key={b} className="kw-badge">{b}</span>)}
+            {badges.map(({ label, key }) => (
+              <span key={key} className={`kw-badge${tempKwNames.has(key) ? ' kw-temp' : ''}`} title={tempKwNames.has(key) ? `${key} (until end of turn)` : key}>{label}</span>
+            ))}
           </div>
         );
       })()}
+      {/* ── Equipment: attached badge (on equipment/aura card) ── */}
+      {card._attachedTo && (
+        <div className="bf-equip-attached" title="Equipped/Enchanting a creature">🔗</div>
+      )}
+      {/* ── Creature: equipment count badge (on creature) ── */}
+      {isCreature && card._attachments && card._attachments.length > 0 && (
+        <div className="bf-equip-count" title={`Equipped (${card._attachments.length})`}>
+          ⚔{card._attachments.length > 1 ? `×${card._attachments.length}` : ''}
+        </div>
+      )}
       {/* ── Saga badge ── */}
       {card._isSaga && (
         <div className="bf-saga-badge">

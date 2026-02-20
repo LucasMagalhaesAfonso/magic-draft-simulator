@@ -385,6 +385,36 @@ export const CardEffectsDB: Record<string, any> = {
     activated: [{ cost: { mana: "3U", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 2, target: "creature" }], sorcerySpeed: true }]
   },
 
+  "constrictor sage": {
+    etb: [{ type: "tap", target: "opponent_creature" }],
+    activated: [{ cost: { mana: "2U", zone: "graveyard", exile: true }, effects: [{ type: "tap", target: "opponent_creature" }, { type: "stun", amount: 1, target: "opponent_creature" }], sorcerySpeed: true }]
+  },
+
+  "naga fleshcrafter": {
+    etb: [{ type: "clone_optional", target: "creature" }],
+    activated: [{ cost: { mana: "2U", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_nonlegendary_creature" }], sorcerySpeed: true }]
+  },
+
+  "champion of dusan": {
+    static: [{ type: "has_keyword", keywords: ["trample"] }],
+    activated: [{ cost: { mana: "1G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "grant_counter", counter: "trample", target: "own_creature" }], sorcerySpeed: true }]
+  },
+
+  "lasyd prowler": {
+    etb: [{ type: "mill", amount: "lands_count", optional: true }],
+    activated: [{ cost: { mana: "1G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: "lands_in_gy_count", target: "creature" }], sorcerySpeed: true }]
+  },
+
+  "sage of the fang": {
+    etb: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }],
+    activated: [{ cost: { mana: "3G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "double_counters", target: "own_creature" }], sorcerySpeed: true }]
+  },
+
+  "sagu pummeler": {
+    static: [{ type: "has_keyword", keywords: ["reach"] }],
+    activated: [{ cost: { mana: "4G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 2, target: "creature" }, { type: "grant_counter", counter: "reach", target: "own_creature" }], sorcerySpeed: true }]
+  },
+
   // =================== TARKIR DRAGONSTORM - MOBILIZE ===================
 
   "avenger of the fallen": {
@@ -493,7 +523,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "eshki dragonclaw": {
     static: [{ type: "has_keyword", keywords: ["vigilance", "trample", "ward"] }],
-    triggered: [{ event: "combat_begin", condition: "cast_creature_and_noncreature", effects: [{ type: "draw", amount: 1 }, { type: "counter_self", counter: "+1/+1", amount: 1 }] }]
+    triggered: [{ event: "combat_begin", condition: "cast_creature_and_noncreature", effects: [{ type: "draw", amount: 1 }, { type: "counter_self", counter: "+1/+1", amount: 2 }] }]
   },
 
   "fangkeeper's familiar": {
@@ -955,7 +985,10 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "snowmelt stag": {
-    static: [{ type: "has_keyword", keywords: ["vigilance"] }],
+    static: [
+      { type: "has_keyword", keywords: ["vigilance"] },
+      { type: "conditional_buff", power: 3, toughness: -3, condition: "your_turn" }
+    ],
     activated: [{ cost: { mana: "5UU" }, effects: [{ type: "grant", keywords: ["unblockable"], target: "self", duration: "end_of_turn" }] }]
   },
 

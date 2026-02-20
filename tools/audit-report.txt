@@ -1,6 +1,9 @@
-Audit run: 2026-02-20T03:53:20.568Z
-Cards: 275, Issues: 0, Warnings: 0
+Audit run: 2026-02-20T19:40:26.166Z
+Cards: 275, Issues: 0, Warnings: 3
 
 === CRITICAL ISSUES ===
 
 === WARNINGS ===
+knockout maneuver: ⚠️  [CHECK-B] Cast tem alvos em lados opostos (own_creature + fight). UI single-step vai aplicar buff/efeito no alvo errado. Verificar se getMultiTargetSteps() cobre este card.
+dragonclaw strike: ⚠️  [CHECK-B] Cast tem alvos em lados opostos (own_creature + fight). UI single-step vai aplicar buff/efeito no alvo errado. Verificar se getMultiTargetSteps() cobre este card.
+piercing exhale: ⚠️  [CHECK-B] Cast tem alvos em lados opostos (own_creature + fight). UI single-step vai aplicar buff/efeito no alvo errado. Verificar se getMultiTargetSteps() cobre este card.

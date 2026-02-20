@@ -62,8 +62,9 @@ export function ScryOverlay({ pendingScry, onConfirm }: ScryOverlayProps) {
           {isSurveil ? '🔍 Surveil' : '🔭 Scry'} {pendingScry.cards.length}
         </h3>
         <p className="overlay-hint">
-          Clique para {isSurveil ? 'enviar pro cemitério' : 'colocar no fundo'}.
-          {hasMultipleTop ? ' Use ↑↓ para ordenar o topo da biblioteca.' : ' Cartas sem clique ficam no topo.'}
+          Click to {isSurveil ? 'send to graveyard' : 'put on the bottom'}.
+          {hasMultipleTop ? ' Use ↑↓ to reorder the top of the library.' : ' Unclicked cards stay on top.'}
+          <span className="overlay-keys">Enter = Confirm · Esc = Cancel</span>
         </p>
         <div className="scry-cards">
           {topOrder.map((originalIdx: number, orderPos: number) => {
@@ -77,7 +78,7 @@ export function ScryOverlay({ pendingScry, onConfirm }: ScryOverlayProps) {
               >
                 <CardImage card={card} size="medium" />
                 <div className="scry-card-label">
-                  {choice === 'top' ? `⬆ Topo${hasMultipleTop ? ` #${orderPos + 1}` : ''}` : isSurveil ? '☠ Cemitério' : '⬇ Fundo'}
+                  {choice === 'top' ? `⬆ Top${hasMultipleTop ? ` #${orderPos + 1}` : ''}` : isSurveil ? '☠ Graveyard' : '⬇ Bottom'}
                 </div>
                 {choice === 'top' && hasMultipleTop && (
                   <div className="scry-order-btns" onClick={e => e.stopPropagation()}>
@@ -93,7 +94,7 @@ export function ScryOverlay({ pendingScry, onConfirm }: ScryOverlayProps) {
           className="btn btn-gold overlay-confirm"
           onClick={() => onConfirm(choices as any[], topCardOrder)}
         >
-          Confirmar (Enter)
+          Confirm (Enter)
         </button>
       </div>
     </div>
@@ -109,22 +110,26 @@ interface ModalOverlayProps {
 
 function describeMode(mode: any): string {
   if (!mode) return '?';
+  if (Array.isArray(mode)) {
+    if (mode[0]?.description) return mode[0].description;
+    return mode.map((m: any) => describeMode(m)).filter(Boolean).join('. ');
+  }
   if (mode.description) return mode.description;
   const t = mode.type;
   const amt = mode.amount;
   const tgt = mode.target;
-  if (t === 'damage') return `${amt} dano${tgt ? ` ao ${tgt}` : ''}`;
-  if (t === 'draw') return `Comprar ${amt} carta(s)`;
-  if (t === 'destroy') return `Destruir ${tgt || 'permanente'}`;
-  if (t === 'exile') return `Exilar ${tgt || 'permanente'}`;
-  if (t === 'bounce') return `Devolver ${tgt || 'permanente'} à mão`;
-  if (t === 'gainLife') return `Ganhar ${amt} vida`;
-  if (t === 'counter_self') return `+${mode.power || 0}/+${mode.toughness || 0} até fim do turno`;
-  if (t === 'buff') return `Criatura ganha +${mode.power || 0}/+${mode.toughness || 0}`;
-  if (t === 'tap') return `Virar ${tgt || 'permanente'}`;
+  if (t === 'damage') return `${amt} damage${tgt ? ` to ${tgt}` : ''}`;
+  if (t === 'draw') return `Draw ${amt} card(s)`;
+  if (t === 'destroy') return `Destroy ${tgt || 'permanent'}`;
+  if (t === 'exile') return `Exile ${tgt || 'permanent'}`;
+  if (t === 'bounce') return `Return ${tgt || 'permanent'} to hand`;
+  if (t === 'gainLife') return `Gain ${amt} life`;
+  if (t === 'counter_self') return `+${mode.power || 0}/+${mode.toughness || 0} until end of turn`;
+  if (t === 'buff') return `Creature gets +${mode.power || 0}/+${mode.toughness || 0}`;
+  if (t === 'tap') return `Tap ${tgt || 'permanent'}`;
   if (t === 'scry') return `Scry ${amt}`;
   if (t === 'mill') return `Mill ${amt}`;
-  if (t === 'discard') return `Oponente descarta ${amt}`;
+  if (t === 'discard') return `Opponent discards ${amt}`;
   return `${t}${amt ? ` ${amt}` : ''}${tgt ? ` (${tgt})` : ''}`;
 }
 
@@ -152,7 +157,8 @@ export function ModalOverlay({ pendingModal, onConfirm }: ModalOverlayProps) {
           {pendingModal.cardName}
         </h3>
         <p className="overlay-hint">
-          Escolha {chooseCount === 1 ? 'um modo' : `${chooseCount} modos`}:
+          Choose {chooseCount === 1 ? 'a mode' : `${chooseCount} modes`}:
+          <span className="overlay-keys">Press 1–{pendingModal.modes?.length || 4} to select · Enter = Confirm</span>
         </p>
         <div className="modal-modes">
           {(pendingModal.modes || []).map((mode: any, i: number) => (
@@ -171,7 +177,7 @@ export function ModalOverlay({ pendingModal, onConfirm }: ModalOverlayProps) {
           disabled={!ready}
           onClick={() => ready && onConfirm(selected)}
         >
-          Confirmar {selected.length}/{chooseCount} (Enter)
+          Confirm {selected.length}/{chooseCount} (Enter)
         </button>
       </div>
     </div>
@@ -194,8 +200,8 @@ export function TargetingPrompt({
 }: TargetingOverlayProps) {
   return (
     <div className="targeting-prompt glass">
-      <span>🎯 <strong>{spell?._isAdventure ? (spell.back_face?.name || spell.adventure?.name || spell.name) : (spell?.name || 'Spell')}</strong> — escolha um alvo</span>
-      <button className="btn btn-muted btn-sm" onClick={onCancel}>Cancelar (Esc)</button>
+      <span>🎯 <strong>{spell?._targetPromptOverride || (spell?._isAdventure ? (spell.back_face?.name || spell.adventure?.name || spell.name) : (spell?.name || 'Spell'))}</strong>{spell?._targetPromptOverride ? '' : ' — choose a target'}</span>
+      <button className="btn btn-muted btn-sm" onClick={onCancel}>Cancel (Esc)</button>
     </div>
   );
 }
@@ -217,13 +223,13 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
       <div className="overlay-panel glass gy-panel" onClick={e => e.stopPropagation()}>
         <div className="overlay-header">
           <h3 className="overlay-title">
-            ☠ Cemitério {playerId === 0 ? '(Você)' : '(Oponente)'}
+            ☠ Graveyard {playerId === 0 ? '(You)' : '(Opponent)'}
           </h3>
           <button className="btn btn-muted btn-sm" onClick={onClose}>✕</button>
         </div>
 
         {cards.length === 0 && (
-          <p className="overlay-hint">Cemitério vazio.</p>
+          <p className="overlay-hint">Graveyard is empty.</p>
         )}
 
         <div className="gy-grid">
@@ -245,7 +251,7 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
                       className="btn btn-gold btn-sm gy-activate-btn"
                       onClick={() => { onActivate(card._uid, idx); onClose(); }}
                     >
-                      {ab.label || 'Ativar'}
+                      {ab.label || 'Activate'}
                     </button>
                   ))
                 )}
@@ -256,7 +262,8 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
 
         {zoomed && (
           <div className="gy-zoom">
-            <img src={zoomed.image_normal || zoomed.image_small} alt={zoomed.name} className="gy-zoom-img" />
+            <img src={zoomed.image_normal || zoomed.image_small} alt={zoomed.name} className="gy-zoom-img"
+              onError={e => { e.currentTarget.src = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'; }} />
           </div>
         )}
       </div>
@@ -444,7 +451,7 @@ export function LookTopOverlay({ cards, pickCount, title, hint, onConfirm }: Loo
             </div>
           ))}
         </div>
-        <button className="btn btn-gold overlay-confirm" onClick={() => onConfirm(choices)}>Confirmar (Enter)</button>
+        <button className="btn btn-gold overlay-confirm" onClick={() => onConfirm(choices)}>Confirm (Enter)</button>
       </div>
     </div>
   );
@@ -674,6 +681,7 @@ export function ExileOverlay({ cards, playerId, onClose }: ExileOverlayProps) {
                     src={card.image_small || card.image_normal}
                     alt={card.name}
                     style={{ width: 80, borderRadius: 6, opacity: 0.85, border: '1px solid #8a2be2' }}
+                    onError={e => { e.currentTarget.src = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'; }}
                   />
                   <div className="gy-card-name">{card.name}</div>
                 </div>
@@ -683,7 +691,8 @@ export function ExileOverlay({ cards, playerId, onClose }: ExileOverlayProps) {
         }
         {zoomed && (
           <div className="gy-zoom">
-            <img src={zoomed.image_normal} alt={zoomed.name} className="gy-zoom-img" />
+            <img src={zoomed.image_normal} alt={zoomed.name} className="gy-zoom-img"
+              onError={e => { e.currentTarget.src = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'; }} />
           </div>
         )}
       </div>

@@ -66,7 +66,7 @@ export function _resolveItem(item, state) {
 
   // Check if spell was countered
   if (card._countered) {
-    log.push(`${card.name} foi anulado e nao resolve.`);
+    log.push(`${card.name} was countered and does not resolve.`);
     return log;
   }
 
@@ -147,14 +147,14 @@ export function _resolveItem(item, state) {
             remainingEffects: effects.slice(ei + 1)
           };
           gameState.waitingForInput = { type: 'modal_choice', playerId: controller };
-          log.push(`${card.name}: escolha ${chooseCount === 1 ? 'um modo' : chooseCount + ' modos'}.`);
+          log.push(`${card.name}: choose ${chooseCount === 1 ? 'a mode' : chooseCount + ' modes'}.`);
           return log; // Stop resolving — will continue after human picks
         } else {
           // AI picks best mode(s)
           const chosen = _aiChooseModes(modes, chooseCount, gameState, controller, opponent, targets);
           const modeEffects = chosen.flatMap(m => Array.isArray(m) ? m : [m]);
           effects.splice(ei + 1, 0, ...modeEffects);
-          log.push(`Modo(s) escolhido(s): ${modeEffects.map(e => e.type).join(', ')}.`);
+          log.push(`Mode(s) chosen: ${modeEffects.map(e => e.type).join(', ')}.`);
         }
         break;
       }
@@ -170,21 +170,21 @@ export function _resolveItem(item, state) {
               const creature = bf.get(target.uid);
               if (creature) {
                 if (!Cards.canBeTargeted(creature, controller)) {
-                  log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                  log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
                   continue;
                 }
                 if (!_payWardCost(creature, controller, gameState, log)) continue;
                 vfxPlay('damage', creature._uid);
                 creature._damage += dividedDmg;
                 creature._damagedThisTurn = true;
-                log.push(`${creature.name} recebe ${dividedDmg} dano.`);
+                log.push(`${creature.name} takes ${dividedDmg} damage.`);
                 GameState._checkCreatureDeath(gameState, creature, target.player);
               }
             } else if (target.type === 'player') {
               gameState.players[target.player].life -= dividedDmg;
               if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
               gameState._damageDealtThisTurn[target.player] = (gameState._damageDealtThisTurn[target.player] || 0) + dividedDmg;
-              log.push(`${dividedDmg} dano ao jogador ${target.player}. (Vida: ${gameState.players[target.player].life})`);
+              log.push(`${dividedDmg} damage to player ${target.player}. (Life: ${gameState.players[target.player].life})`);
               vfxPlay('playerDamage', 'p' + target.player);
             }
           }
@@ -192,7 +192,7 @@ export function _resolveItem(item, state) {
           if (card && Cards.isCreature(card) && Cards.hasLifelink(card)) {
             const totalDmg = targets.reduce((sum, t) => sum + (t.dividedAmount || 0), 0);
             gameState.players[controller].life += totalDmg;
-            log.push(`Lifelink: +${totalDmg} vida.`);
+            log.push(`Lifelink: +${totalDmg} life.`);
             vfxPlay('heal', 'p' + controller);
           }
         } else if (effect.target === 'opponent' || effect.target === 'player') {
@@ -201,12 +201,12 @@ export function _resolveItem(item, state) {
           // Track damage dealt this turn (for Spinerock Knoll hideaway)
           if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
           gameState._damageDealtThisTurn[opponent] = (gameState._damageDealtThisTurn[opponent] || 0) + dmgAmt;
-          log.push(`${dmgAmt} dano ao oponente. (Vida: ${gameState.players[opponent].life})`);
+          log.push(`${dmgAmt} damage to opponent. (Life: ${gameState.players[opponent].life})`);
           vfxPlay('playerDamage', 'p' + opponent);
           // Lifelink on spell damage from source creature
           if (card && Cards.isCreature(card) && Cards.hasLifelink(card)) {
             gameState.players[controller].life += dmgAmt;
-            log.push(`Lifelink: +${dmgAmt} vida.`);
+            log.push(`Lifelink: +${dmgAmt} life.`);
             vfxPlay('heal', 'p' + controller);
           }
         } else if (targets && targets.length > 0) {
@@ -217,7 +217,7 @@ export function _resolveItem(item, state) {
             const creature = bf.get(target.uid);
             if (creature) {
               if (!Cards.canBeTargeted(creature, controller)) {
-                log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
                 break;
               }
               if (!_payWardCost(creature, controller, gameState, log)) break;
@@ -228,16 +228,16 @@ export function _resolveItem(item, state) {
               if (creature._damage >= Cards.getToughness(creature)) {
                 const died = GameState.creatureDies(gameState, creature, target.player);
                 log.push(died !== false
-                  ? `${creature.name} recebe ${dmgAmt} dano e morre.`
-                  : `${creature.name} recebe ${dmgAmt} dano (indestruivel/regenera).`);
+                  ? `${creature.name} takes ${dmgAmt} damage and dies.`
+                  : `${creature.name} takes ${dmgAmt} damage (indestructible/regenerate).`);
               } else {
-                log.push(`${creature.name} recebe ${dmgAmt} dano.`);
+                log.push(`${creature.name} takes ${dmgAmt} damage.`);
               }
             }
           } else if (target.type === 'player') {
             gameState.players[target.player].life -= dmgAmt;
             gameState._lastDamagedPlayer = target.player; // Track for "damaged_player" discard effects
-            log.push(`${dmgAmt} dano ao jogador. (Vida: ${gameState.players[target.player].life})`);
+            log.push(`${dmgAmt} damage to player. (Life: ${gameState.players[target.player].life})`);
           }
         }
         break;
@@ -252,9 +252,9 @@ export function _resolveItem(item, state) {
             creature._damage += effect.amount;
             if (creature._damage >= Cards.getToughness(creature)) {
               dying.push(creature);
-              log.push(`${creature.name} recebe ${effect.amount} dano e morre.`);
+              log.push(`${creature.name} takes ${effect.amount} damage and dies.`);
             } else {
-              log.push(`${creature.name} recebe ${effect.amount} dano.`);
+              log.push(`${creature.name} takes ${effect.amount} damage.`);
             }
           }
           dying.forEach(c => GameState.creatureDies(gameState, c, pid));
@@ -282,14 +282,14 @@ export function _resolveItem(item, state) {
                 creature._damage += dmg;
                 if (creature._damage >= Cards.getToughness(creature)) {
                   GameState.creatureDies(gameState, creature, target.player);
-                  log.push(`${creature.name} recebe ${dmg} dano e morre.`);
+                  log.push(`${creature.name} takes ${dmg} damage and dies.`);
                 } else {
-                  log.push(`${creature.name} recebe ${dmg} dano.`);
+                  log.push(`${creature.name} takes ${dmg} damage.`);
                 }
               }
             } else if (target.type === 'player') {
               gameState.players[target.player].life -= dmg;
-              log.push(`${dmg} dano ao ${target.player === 0 ? 'jogador' : 'oponente'}. (Vida: ${gameState.players[target.player].life})`);
+              log.push(`${dmg} damage to ${target.player === 0 ? 'you' : 'opponent'}. (Life: ${gameState.players[target.player].life})`);
               vfxPlay('playerDamage', 'p' + target.player);
             }
           });
@@ -307,7 +307,7 @@ export function _resolveItem(item, state) {
           const target = targets[0];
           GameState.sacrifice(gameState, target.uid, target.player);
           vfxPlay('death', target.uid);
-          log.push(`Permanente sacrificada.`);
+          log.push(`Permanent sacrificed.`);
         } else {
           // Mode 2: Controller sacrifices their own permanent
           const targetPlayerId = controller;
@@ -322,7 +322,7 @@ export function _resolveItem(item, state) {
           });
 
           if (sacrificeable.length === 0) {
-            if (!effect.optional) log.push('Nenhuma permanente valida para sacrificar.');
+            if (!effect.optional) log.push('No valid permanent to sacrifice.');
             break;
           }
 
@@ -333,7 +333,7 @@ export function _resolveItem(item, state) {
               Cards.getPower(c) <= 1 // Sacrifice weak creatures
             );
             if (!shouldSacrifice) {
-              log.push('IA escolhe nao sacrificar.');
+              log.push('AI chooses not to sacrifice.');
               break;
             }
           }
@@ -347,7 +347,7 @@ export function _resolveItem(item, state) {
               optional: effect.optional || false,
               cardUid: card._uid
             };
-            log.push(`${effect.optional ? 'Pode' : 'Deve'} sacrificar ${effect.target === 'nonland_permanent' ? 'uma permanente nao-terreno' : 'uma criatura'}.`);
+            log.push(`${effect.optional ? 'You may' : 'You must'} sacrifice ${effect.target === 'nonland_permanent' ? 'a nonland permanent' : 'a creature'}.`);
           } else {
             // AI player: auto-pick worst permanent
             // Prefer tokens > weak creatures > other permanents
@@ -360,7 +360,7 @@ export function _resolveItem(item, state) {
             });
             const toSacrifice = sacrificeable[0];
             GameState.sacrifice(gameState, toSacrifice._uid, targetPlayerId);
-            log.push(`IA sacrifica ${toSacrifice.name}.`);
+            log.push(`AI sacrifices ${toSacrifice.name}.`);
           }
         }
         break;
@@ -381,7 +381,7 @@ export function _resolveItem(item, state) {
           else if (tgt === 'creature_power4+') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.isCreature(c) && Cards.getPower(c) >= 4 && Cards.canBeTargeted(c, controller));
 
           if (validChoices.length === 0) {
-            log.push(`Sem alvo valido para destruir.`);
+            log.push(`No valid target to destroy.`);
             break;
           }
           // Auto-pick highest-power valid target (most threatening)
@@ -396,23 +396,23 @@ export function _resolveItem(item, state) {
           if (permanent) {
             // Check targeting
             if (!Cards.canBeTargeted(permanent, controller)) {
-              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              log.push(`${permanent.name} can't be targeted (hexproof/shroud).`);
               break;
             }
             // Check indestructible
             if (Cards.hasIndestructible(permanent)) {
-              log.push(`${permanent.name} e indestruivel!`);
+              log.push(`${permanent.name} is indestructible!`);
               break;
             }
             if (Cards.isCreature(permanent)) {
               const died = GameState.creatureDies(gameState, permanent, target.player);
-              if (died) log.push(`${permanent.name} e destruido.`);
+              if (died) log.push(`${permanent.name} is destroyed.`);
             } else {
               // Non-creature permanent (enchantment, artifact, planeswalker)
               bf.remove(permanent._uid);
               GameState._unregisterCardTriggers(gameState, permanent._uid);
               gameState.players[target.player].zones.graveyard.add(permanent);
-              log.push(`${permanent.name} e destruido.`);
+              log.push(`${permanent.name} is destroyed.`);
               vfxPlay('destroy', permanent._uid);
             }
           }
@@ -434,10 +434,10 @@ export function _resolveItem(item, state) {
           });
           const dying = toDestroy.filter(c => !Cards.hasIndestructible(c));
           const surviving = toDestroy.filter(c => Cards.hasIndestructible(c));
-          surviving.forEach(c => log.push(`${c.name} e indestruivel!`));
+          surviving.forEach(c => log.push(`${c.name} is indestructible!`));
           dying.forEach(c => {
             GameState.creatureDies(gameState, c, pid);
-            log.push(`${c.name} e destruido.`);
+            log.push(`${c.name} is destroyed.`);
             totalDestroyed++; // Count each destroyed permanent
           });
         }
@@ -455,21 +455,21 @@ export function _resolveItem(item, state) {
           const nonlandCards = hand.getAll().filter(c => !Cards.isLand(c));
 
           if (nonlandCards.length === 0) {
-            log.push('Oponente nao tem cartas nao-terreno na mao.');
+            log.push('Opponent has no nonland cards in hand.');
             break;
           }
 
           if (gameState.players[controller].isHuman) {
             // Human player: show hand and let them choose which card to exile
             gameState._pendingHandExile = {
+              controllerId: controller,
               targetPlayerId: opponentId,
               cardToExile: card, // The card doing the exiling (for storing exiled card)
-              choices: nonlandCards,
+              cards: nonlandCards,
               selected: null,
-              controller
             };
             gameState.waitingForInput = { type: 'opponent_hand_exile', playerId: controller };
-            log.push(`Escolha uma carta nao-terreno da mao do oponente para exilar.`);
+            log.push(`Choose a nonland card from opponent's hand to exile.`);
             return log;
           } else {
             // AI player: pick best card to exile
@@ -481,7 +481,7 @@ export function _resolveItem(item, state) {
             // Store exiled card on the source card for LtB trigger
             if (!card._exiledByPriest) card._exiledByPriest = [];
             card._exiledByPriest.push({ card: exiledCard, cmc: exiledCard.cmc || 0 });
-            log.push(`${exiledCard.name} e exilado da mao do oponente.`);
+            log.push(`${exiledCard.name} is exiled from opponent's hand.`);
           }
         } else if (effect.target === 'nonland_from_hand') {
           // Special case: exile from your own hand (Aggressive Negotiations)
@@ -490,7 +490,7 @@ export function _resolveItem(item, state) {
           const nonlandCards = hand.getAll().filter(c => !Cards.isLand(c));
 
           if (nonlandCards.length === 0) {
-            log.push('Nenhuma carta nao-terreno na sua mao para exilar.');
+            log.push('No nonland cards in your hand to exile.');
             // Continue to next effect - spell still resolves partially
             break;
           }
@@ -504,9 +504,9 @@ export function _resolveItem(item, state) {
             if (cardToExile) {
               hand.remove(cardToExile._uid);
               gameState.players[targetPlayerId].zones.exile.add(cardToExile);
-              log.push(`${cardToExile.name} e exilado da sua mao.`);
+              log.push(`${cardToExile.name} is exiled from your hand.`);
             } else {
-              log.push('Erro: nenhuma carta valida encontrada para exilar.');
+              log.push('Error: no valid card found to exile.');
             }
           } else {
             // Human with multiple options: need choice overlay
@@ -521,7 +521,7 @@ export function _resolveItem(item, state) {
           const permanent = bf.get(target.uid);
           if (permanent) {
             if (!Cards.canBeTargeted(permanent, controller)) {
-              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              log.push(`${permanent.name} can't be targeted (hexproof/shroud).`);
               break;
             }
             // Exile bypasses indestructible
@@ -543,7 +543,7 @@ export function _resolveItem(item, state) {
               card._exiledUntilLeaves.push(permanent);
             }
 
-            log.push(`${permanent.name} e exilado.`);
+            log.push(`${permanent.name} is exiled.`);
           }
         }
         break;
@@ -569,7 +569,7 @@ export function _resolveItem(item, state) {
             bf.remove(c._uid);
             GameState._unregisterCardTriggers(gameState, c._uid);
             exile.add(c);
-            log.push(`${c.name} e exilado.`);
+            log.push(`${c.name} is exiled.`);
           }
         }
         break;
@@ -619,7 +619,7 @@ export function _resolveItem(item, state) {
           const permanent = bf.get(target.uid);
           if (permanent) {
             if (!Cards.canBeTargeted(permanent, controller)) {
-              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              log.push(`${permanent.name} can't be targeted (hexproof/shroud).`);
               continue;
             }
             vfxPlay('bounce', permanent._uid);
@@ -645,10 +645,10 @@ export function _resolveItem(item, state) {
             }
             // Tokens disappear, non-tokens return to hand
             if (permanent._isToken) {
-              log.push(`${permanent.name} token desaparece.`);
+              log.push(`${permanent.name} token vanishes.`);
             } else {
               gameState.players[target.player].zones.hand.add(permanent);
-              log.push(`${permanent.name} volta para a mao.`);
+              log.push(`${permanent.name} returns to hand.`);
             }
           }
         }
@@ -663,7 +663,7 @@ export function _resolveItem(item, state) {
           const permanent = bf.get(target.uid);
           if (permanent) {
             if (!Cards.canBeTargeted(permanent, controller)) {
-              log.push(`${permanent.name} nao pode ser alvo (hexproof/shroud).`);
+              log.push(`${permanent.name} can't be targeted (hexproof/shroud).`);
               break;
             }
             vfxPlay('bounce', permanent._uid);
@@ -678,17 +678,17 @@ export function _resolveItem(item, state) {
             // Owner chooses top or bottom
             const position = effect.position || 'top'; // default to top
             if (permanent._isToken) {
-              log.push(`${permanent.name} token desaparece.`);
+              log.push(`${permanent.name} token vanishes.`);
             } else {
               // AI always chooses bottom (to avoid redrawing it immediately)
               // Human would get UI choice (not implemented yet - defaults to top)
               const chosenPosition = target.player === 0 ? 'top' : 'bottom'; // player 0 = human (top), player 1 = AI (bottom)
               if (chosenPosition === 'top') {
                 gameState.players[target.player].zones.library.putOnTop(permanent);
-                log.push(`${permanent.name} volta para o topo do grimorio.`);
+                log.push(`${permanent.name} is put on top of library.`);
               } else {
                 gameState.players[target.player].zones.library.putOnBottom(permanent);
-                log.push(`${permanent.name} volta para o fundo do grimorio.`);
+                log.push(`${permanent.name} is put on the bottom of library.`);
               }
             }
           }
@@ -706,12 +706,12 @@ export function _resolveItem(item, state) {
           gameState._damageDealtThisTurn[oppId] = (gameState._damageDealtThisTurn[oppId] || 0) + dmgAmt;
           vfxPlay('playerDamage', 'p' + oppId);
         }
-        log.push(`${dmgAmt} dano a cada oponente.`);
+        log.push(`${dmgAmt} damage to each opponent.`);
         // Lifelink check (if source creature has lifelink)
         if (card && Cards.isCreature(card) && Cards.hasLifelink(card)) {
           const totalDamage = dmgAmt * opponents.length;
           gameState.players[controller].life += totalDamage;
-          log.push(`Lifelink: +${totalDamage} vida.`);
+          log.push(`Lifelink: +${totalDamage} life.`);
           vfxPlay('heal', 'p' + controller);
         }
         break;
@@ -721,14 +721,15 @@ export function _resolveItem(item, state) {
         // Rescue Leopard: "you may discard a card. If you do, draw a card"
         // For AI: auto-discard worst card if hand size > 4
         // For Human: show UI to choose
-        if (controller === 0) {
-          // Human player - set up interactive choice
-          gameState.waitingForInput = {
-            type: 'optional_discard_draw',
-            playerId: controller,
-            cardUid: card._uid
+        if (gameState.players[controller].isHuman && controller === 0) {
+          // Human player - reuse optional_discard_choice overlay
+          gameState._pendingOptionalDiscard = {
+            controller: controller,
+            amount: 1,
+            drawOnDiscard: true
           };
-          log.push(`${card.name}: Pode descartar uma carta para comprar.`);
+          gameState.waitingForInput = { type: 'optional_discard_choice', playerId: controller };
+          log.push(`${card.name}: You may discard a card to draw.`);
         } else {
           // AI player - auto-decide
           const hand = gameState.players[controller].zones.hand.getAll();
@@ -745,16 +746,16 @@ export function _resolveItem(item, state) {
             if (worstCard) {
               gameState.players[controller].zones.hand.remove(worstCard._uid);
               gameState.players[controller].zones.graveyard.add(worstCard);
-              log.push(`IA descarta ${worstCard.name}.`);
+              log.push(`AI discards ${worstCard.name}.`);
               // Draw card
               const drawn = gameState.players[controller].zones.library.drawFromTop();
               if (drawn) {
                 gameState.players[controller].zones.hand.add(drawn);
-                log.push(`IA compra 1 carta.`);
+                log.push(`AI draws 1 card.`);
               }
             }
           } else {
-            log.push(`IA escolhe nao descartar.`);
+            log.push(`AI chooses not to discard.`);
           }
         }
         break;
@@ -767,9 +768,9 @@ export function _resolveItem(item, state) {
           if (drawn) {
             gameState.players[controller].zones.hand.add(drawn);
             if (gameState.players[controller].isHuman) {
-              log.push(`Voce compra ${drawn.name}.`);
+              log.push(`You draw ${drawn.name}.`);
             } else {
-              log.push(`Oponente compra uma carta.`);
+              log.push(`Opponent draws a card.`);
             }
           }
         }
@@ -780,7 +781,7 @@ export function _resolveItem(item, state) {
       case 'gainLife': {
         const gainAmt = resolveAmount(effect.amount);
         gameState.players[controller].life += gainAmt;
-        log.push(`+${gainAmt} vida. (Vida: ${gameState.players[controller].life})`);
+        log.push(`+${gainAmt} life. (Life: ${gameState.players[controller].life})`);
         vfxPlay('heal', 'p' + controller);
         // Fire gain_life triggers
         const gainLogs = GameState.fireTrigger(gameState, 'gain_life', { playerId: controller });
@@ -794,7 +795,7 @@ export function _resolveItem(item, state) {
         const loseLifeTarget = (effect.target === 'opponent' || effect.target === 'each_opponent') ? opponent : controller;
         const loseAmt = resolveAmount(effect.amount);
         gameState.players[loseLifeTarget].life -= loseAmt;
-        log.push(`${loseLifeTarget === controller ? 'Voce perde' : 'Oponente perde'} ${loseAmt} vida. (Vida: ${gameState.players[loseLifeTarget].life})`);
+        log.push(`${loseLifeTarget === controller ? 'You lose' : 'Opponent loses'} ${loseAmt} life. (Life: ${gameState.players[loseLifeTarget].life})`);
         break;
       }
 
@@ -805,7 +806,7 @@ export function _resolveItem(item, state) {
           const currentLife = gameState.players[oppId].life;
           const halfLife = Math.ceil(currentLife / 2); // Rounded up
           gameState.players[oppId].life -= halfLife;
-          log.push(`Oponente perde metade da vida (${halfLife}). (Vida: ${gameState.players[oppId].life})`);
+          log.push(`Opponent loses half their life (${halfLife}). (Life: ${gameState.players[oppId].life})`);
           vfxPlay('playerDamage', 'p' + oppId);
         }
         GameState._checkWinner(gameState);
@@ -854,7 +855,7 @@ export function _resolveItem(item, state) {
               bp = r.p; bt = r.t;
             }
           });
-          log.push(`Todas as criaturas recebem ${bp >= 0 ? '+' : ''}${bp}/${bt >= 0 ? '+' : ''}${bt}.`);
+          log.push(`All creatures get ${bp >= 0 ? '+' : ''}${bp}/${bt >= 0 ? '+' : ''}${bt}.`);
         } else if (effect.type === 'multi_buff_up_to' && targets && targets.length > 0) {
           // Rally the Monastery: buff multiple targets
           for (const target of targets) {
@@ -862,29 +863,48 @@ export function _resolveItem(item, state) {
             const creature = bf.get(target.uid);
             if (creature && Cards.canBeTargeted(creature, controller)) {
               const r = applyBuff(creature);
-              log.push(`${creature.name} recebe ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
+              log.push(`${creature.name} gets ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
             }
           }
         } else if (targets && targets.length > 0 || (!targets?.length && (effect.target === 'creature' || effect.target === 'own_creature' || effect.target === 'opponent_creature'))) {
           // Auto-pick target if no pre-selected target (e.g. modal spell)
           let buffTarget = targets?.[0];
+          // If effect expects own_creature but user selected an opponent creature (e.g. Dragonclaw Strike),
+          // or expects opponent_creature but user selected own creature, auto-pick from correct side
+          if (buffTarget && effect.target === 'own_creature' && buffTarget.player !== controller) {
+            buffTarget = null; // force auto-pick from own side
+          }
+          if (buffTarget && effect.target === 'opponent_creature' && buffTarget.player === controller) {
+            buffTarget = null; // force auto-pick from opponent side
+          }
+          // Try to pick an own creature that matches fight target if available (multi-target coordination)
           if (!buffTarget) {
             const targetPid = effect.target === 'opponent_creature' ? opponent : controller;
             const bf2 = gameState.players[targetPid].zones.battlefield;
-            const best = bf2.cards.filter(c => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
-              .sort((a, b) => Cards.getPower(b) - Cards.getPower(a))[0];
-            if (best) buffTarget = { type: 'creature', uid: best._uid, player: targetPid };
+            // For own_creature buff: prefer the own creature that is also a fight candidate
+            const ownFightTarget = targets?.find((t: any) => t.player === controller);
+            if (ownFightTarget && effect.target === 'own_creature') {
+              const candidate = bf2.get(ownFightTarget.uid);
+              if (candidate && Cards.isCreature(candidate)) {
+                buffTarget = ownFightTarget;
+              }
+            }
+            if (!buffTarget) {
+              const best = bf2.cards.filter(c => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
+                .sort((a, b) => Cards.getPower(b) - Cards.getPower(a))[0];
+              if (best) buffTarget = { type: 'creature', uid: best._uid, player: targetPid };
+            }
           }
           const target = buffTarget;
           const bf = target ? gameState.players[target.player].zones.battlefield : null;
           const creature = bf?.get(target?.uid);
           if (creature) {
             if (!Cards.canBeTargeted(creature, controller)) {
-              log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+              log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
               break;
             }
             const r = applyBuff(creature);
-            log.push(`${creature.name} recebe ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
+            log.push(`${creature.name} gets ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
             // Apply keywords from buff effect (e.g. Alesha's Legacy grants deathtouch+indestructible)
             if (effect.keywords && effect.keywords.length > 0) {
               if (!creature.keywords) creature.keywords = [];
@@ -894,11 +914,11 @@ export function _resolveItem(item, state) {
                 if (!creature._tempKeywords) creature._tempKeywords = [];
                 creature._tempKeywords.push(kwCap);
               });
-              log.push(`${creature.name} ganha ${effect.keywords.join(', ')} ate o fim do turno.`);
+              log.push(`${creature.name} gains ${effect.keywords.join(', ')} until end of turn.`);
             }
             if (Cards.getToughness(creature) <= 0) {
               GameState.creatureDies(gameState, creature, target.player);
-              log.push(`${creature.name} morre.`);
+              log.push(`${creature.name} dies.`);
             }
           }
         }
@@ -923,7 +943,7 @@ export function _resolveItem(item, state) {
             choices: top.map(() => 'top')
           };
           gameState.waitingForInput = { type: 'scry', playerId: controller };
-          log.push(`Scry ${effect.amount} - escolha quais ficam no topo.`);
+          log.push(`Scry ${effect.amount} - choose which to keep on top.`);
         } else {
           const keep = [];
           const bottom = [];
@@ -942,7 +962,7 @@ export function _resolveItem(item, state) {
           }
           for (const c of keep.reverse()) lib.addToTop(c);
           for (const c of bottom) lib.addToBottom(c);
-          log.push(`Oponente faz scry ${effect.amount}.`);
+          log.push(`Opponent scries ${effect.amount}.`);
         }
         break;
       }
@@ -965,7 +985,7 @@ export function _resolveItem(item, state) {
             choices: top.map(() => 'top')
           };
           gameState.waitingForInput = { type: 'surveil', playerId: controller };
-          log.push(`Surveil ${effect.amount} - escolha quais vao pro cemiterio.`);
+          log.push(`Surveil ${effect.amount} - choose which to put in the graveyard.`);
         } else {
           const gy = gameState.players[controller].zones.graveyard;
           const keep = [];
@@ -985,7 +1005,7 @@ export function _resolveItem(item, state) {
 
           for (const c of keep.reverse()) lib.addToTop(c);
           for (const c of toGY) gy.add(c);
-          log.push(`Oponente faz surveil ${effect.amount}.`);
+          log.push(`Opponent surveils ${effect.amount}.`);
         }
         break;
       }
@@ -1005,7 +1025,7 @@ export function _resolveItem(item, state) {
               targets: targets
             };
             gameState.waitingForInput = { type: 'player_choice', playerId: controller };
-            log.push(`Escolha quem sera millado (${millAmt} cartas).`);
+            log.push(`Choose who to mill (${millAmt} cards).`);
             return log;
           } else {
             // AI: mill opponent by default
@@ -1023,8 +1043,8 @@ export function _resolveItem(item, state) {
           milled.push(c.name);
         }
         if (milled.length > 0) {
-          const who = targetPlayer === 0 ? 'Voce' : 'Oponente';
-          log.push(`${who} coloca ${milled.length} carta(s) no cemiterio: ${milled.slice(0, 3).join(', ')}${milled.length > 3 ? '...' : ''}`);
+          const who = targetPlayer === 0 ? 'You' : 'Opponent';
+          log.push(`${who} mill${targetPlayer === 0 ? '' : 's'} ${milled.length} card(s): ${milled.slice(0, 3).join(', ')}${milled.length > 3 ? '...' : ''}`);
           vfxPlay('mill', 'p' + targetPlayer);
         }
         break;
@@ -1042,7 +1062,7 @@ export function _resolveItem(item, state) {
           if (targetCard) {
             if (!targetCard._counters) targetCard._counters = { '+1/+1': 0, '-1/-1': 0 };
             targetCard._counters['+1/+1']++;
-            log.push(`${targetCard.name} recebe +1/+1 (nenhum terreno millado).`);
+            log.push(`${targetCard.name} gets +1/+1 (no land milled).`);
           }
         } else if (gameState.players[controller].isHuman) {
           // Human: choice between land to hand or +1/+1 counter
@@ -1052,20 +1072,19 @@ export function _resolveItem(item, state) {
             controller: controller
           };
           gameState.waitingForInput = { type: 'mill_land_choice', playerId: controller };
-          log.push(`Escolha: colocar terreno na mao ou +1/+1 counter.`);
+          log.push(`Choose: put a land into hand or +1/+1 counter.`);
           return log;
         } else {
           // AI: always take land if available
           const landToTake = milledLands[0];
           gy.remove(landToTake._uid);
           gameState.players[controller].zones.hand.add(landToTake);
-          log.push(`${landToTake.name} volta para a mao.`);
+          log.push(`${landToTake.name} returns to hand.`);
         }
         break;
       }
 
       case 'ramp': {
-        console.log('[RAMP DEBUG] Stack.js ramp effect called:', effect);
         const lib = gameState.players[controller].zones.library;
         const bf = gameState.players[controller].zones.battlefield;
         const isBasicOnly = effect.landType === 'basic' || !effect.landType;
@@ -1073,7 +1092,7 @@ export function _resolveItem(item, state) {
 
         if (availableLands.length === 0) {
           lib.shuffle();
-          log.push(`Nenhum terreno encontrado no grimorio.`);
+          log.push(`No land found in library.`);
           break;
         }
 
@@ -1108,7 +1127,7 @@ export function _resolveItem(item, state) {
             playerId: controller
           };
           gameState.waitingForInput = { type: 'ramp_choice', playerId: controller };
-          log.push(`Escolha um terreno da sua biblioteca.`);
+          log.push(`Choose a land from your library.`);
         } else {
           // AI: always search if available (optional or not)
           let land = null;
@@ -1137,33 +1156,30 @@ export function _resolveItem(item, state) {
           land = bestLand;
           const idx = lib.cards.indexOf(land);
           if (idx !== -1) lib.cards.splice(idx, 1);
-          console.log(`[RAMP DEBUG] to_hand: ${effect.to_hand}, toTop: ${toTop}, toBattlefield: ${toBattlefield}`);
           if (effect.to_hand) {
-            console.log('[RAMP DEBUG] Adding to HAND');
             gameState.players[controller].zones.hand.add(land);
             lib.shuffle();
-            log.push(`Oponente busca ${land.name} no grimorio e coloca na mao.`);
+            log.push(`Opponent searches for ${land.name} and puts it into hand.`);
           } else if (toTop) {
             lib.cards.unshift(land);
             // Don't shuffle - card goes on top
-            log.push(`Oponente busca ${land.name} e coloca no topo do grimorio.`);
+            log.push(`Opponent searches for ${land.name} and puts it on top of library.`);
           } else if (toBattlefield) {
             const bfLand = Cards.prepareForBattlefield(land);
             bfLand._tapped = true;
             bfLand._summoningSick = false;
             bf.add(bfLand);
             lib.shuffle();
-            log.push(`Oponente busca ${land.name} e coloca no campo virado.`);
+            log.push(`Opponent searches for ${land.name} and puts it onto the battlefield tapped.`);
             const lf1 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
             log.push(...lf1);
           } else {
-            console.log('[RAMP DEBUG] Adding to BATTLEFIELD (default case)');
             const bfLand = Cards.prepareForBattlefield(land);
             bfLand._tapped = effect.tapped ? true : false;
             bfLand._summoningSick = false;
             bf.add(bfLand);
             lib.shuffle();
-            log.push(`Oponente busca ${land.name} no grimorio e coloca no campo${effect.tapped ? ' virado' : ''}.`);
+            log.push(`Opponent searches for ${land.name} and puts it onto the battlefield${effect.tapped ? ' tapped' : ''}.`);
             const lf2 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
             log.push(...lf2);
           }
@@ -1182,7 +1198,7 @@ export function _resolveItem(item, state) {
         // Get opponent's creatures
         const creatures = bf.cards.filter(c => Cards.isCreature(c));
         if (creatures.length === 0) {
-          log.push(`${gameState.players[targetPlayer].isHuman ? 'Voce' : 'Oponente'} nao tem criaturas para exilar.`);
+          log.push(`${gameState.players[targetPlayer].isHuman ? 'You have' : 'Opponent has'} no creatures to exile.`);
         } else {
           // The targeted player chooses which of their creatures to exile.
           // Since no interactive overlay exists for "exile your own creature", auto-pick:
@@ -1193,7 +1209,7 @@ export function _resolveItem(item, state) {
           bf.remove(creature._uid);
           exile.add(creature);
           GameState._unregisterCardTriggers(gameState, creature._uid);
-          log.push(`${creature.name} e exilado.`);
+          log.push(`${creature.name} is exiled.`);
         }
 
         // Exile opponent's graveyard
@@ -1203,7 +1219,7 @@ export function _resolveItem(item, state) {
           exile.add(c);
         });
         if (gyCards.length > 0) {
-          log.push(`${gyCards.length} carta(s) do cemiterio do oponente foram exiladas.`);
+          log.push(`${gyCards.length} card(s) from opponent's graveyard exiled.`);
         }
         break;
       }
@@ -1211,7 +1227,7 @@ export function _resolveItem(item, state) {
       case 'severance_priest_token': {
         // Create Spirit token equal to CMC of exiled card (from Severance Priest)
         if (!card._exiledByPriest || card._exiledByPriest.length === 0) {
-          log.push('Nenhuma carta foi exilada por Severance Priest.');
+          log.push('No card was exiled by Severance Priest.');
           break;
         }
 
@@ -1228,7 +1244,7 @@ export function _resolveItem(item, state) {
         bf.add(token);
         GameState._registerCardTriggers(gameState, token, controller);
 
-        log.push(`${controller === 0 ? 'Voce' : 'Oponente'} cria um token ${cmc}/${cmc} branco Spirit.`);
+        log.push(`${controller === 0 ? 'You create' : 'Opponent creates'} a ${cmc}/${cmc} white Spirit token.`);
         break;
       }
 
@@ -1277,8 +1293,8 @@ export function _resolveItem(item, state) {
           bf.add(token);
           GameState._registerCardTriggers(gameState, token, tokenOwner);
         }
-        const who = gameState.players[tokenOwner].isHuman ? 'Voce' : 'Oponente';
-        log.push(`${who} cria ${count} token(s) ${effect.power}/${effect.toughness} ${effect.name}.`);
+        const who = gameState.players[tokenOwner].isHuman ? 'You' : 'Opponent';
+        log.push(`${who} create${gameState.players[tokenOwner].isHuman ? '' : 's'} ${count} ${effect.power}/${effect.toughness} ${effect.name} token(s).`);
         break;
       }
 
@@ -1288,30 +1304,30 @@ export function _resolveItem(item, state) {
         if (effect.target === 'spell' || effect.target === 'creature_spell' || effect.target === 'noncreature_spell') {
           // Counter a spell on the stack
           if (!targets || targets.length === 0) {
-            log.push('Counter spell requer um alvo na stack.');
+            log.push('Counter spell requires a target on the stack.');
             break;
           }
 
           const targetSpell = targets[0];
           if (!targetSpell || !targetSpell.name) {
-            log.push('Alvo invalido para counter.');
+            log.push('Invalid target for counter.');
             break;
           }
 
           // Check spell type if restricted
           if (effect.target === 'creature_spell' && !Cards.isCreature(targetSpell)) {
-            log.push(`${targetSpell.name} nao e uma magia de criatura.`);
+            log.push(`${targetSpell.name} is not a creature spell.`);
             break;
           }
           if (effect.target === 'noncreature_spell' && Cards.isCreature(targetSpell)) {
-            log.push(`${targetSpell.name} e uma magia de criatura.`);
+            log.push(`${targetSpell.name} is a creature spell.`);
             break;
           }
 
           // Remove from stack (mark as countered — _resolveItem checks _countered flag)
           const stackIdx = gameState.stack.items.findIndex((s: any) => s.card._uid === targetSpell._uid);
           if (stackIdx !== -1) gameState.stack.items.splice(stackIdx, 1);
-          log.push(`${targetSpell.name} foi anulado!`);
+          log.push(`${targetSpell.name} is countered!`);
           break;
         }
 
@@ -1323,7 +1339,7 @@ export function _resolveItem(item, state) {
             if (!self._counters) self._counters = { '+1/+1': 0, '-1/-1': 0 };
             const amt = resolveAmount(effect.amount) || 1;
             self._counters[effect.counter] = (self._counters[effect.counter] || 0) + amt;
-            log.push(`${self.name} recebe ${amt} ${effect.counter} counter(s).`);
+            log.push(`${self.name} gets ${amt} ${effect.counter} counter(s).`);
             GameState.fireTrigger(gameState, 'counter_placed', { cardUid: self._uid, playerId: controller });
           }
           break;
@@ -1337,15 +1353,27 @@ export function _resolveItem(item, state) {
             if (retCreature) {
               if (!retCreature._counters) retCreature._counters = { '+1/+1': 0, '-1/-1': 0 };
               retCreature._counters[counterType] = (retCreature._counters[counterType] || 0) + counterAmt;
-              log.push(`${retCreature.name} recebe ${counterAmt} ${counterType} counter(s).`);
+              log.push(`${retCreature.name} gets ${counterAmt} ${counterType} counter(s).`);
               GameState.fireTrigger(gameState, 'counter_placed', { cardUid: retCreature._uid, playerId: ref.player });
             }
           }
           break;
         }
 
+        // Auto-target for ETB counter effects when no explicit targets (e.g. Reputable Merchant)
+        let resolvedCounterTargets = targets;
+        if ((!resolvedCounterTargets || resolvedCounterTargets.length === 0) &&
+            (effect.target === 'own_creature' || effect.target === 'creature' || effect.target === 'opponent_creature')) {
+          const targetPid = effect.target === 'opponent_creature' ? opponent : controller;
+          const bf2 = gameState.players[targetPid].zones.battlefield;
+          const best = bf2.cards.filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
+            .sort((a: any, b: any) => (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a)))[0];
+          if (best) resolvedCounterTargets = [{ type: 'creature', uid: best._uid, player: targetPid }];
+        }
+
         // Otherwise: add counters to a creature
-        if (targets && targets.length > 0) {
+        if (resolvedCounterTargets && resolvedCounterTargets.length > 0) {
+          const targets = resolvedCounterTargets;
           // Check for distribute_creatures (Armament Dragon)
           if (effect.target === 'distribute_creatures') {
             // Distribute counters among multiple targets
@@ -1354,13 +1382,13 @@ export function _resolveItem(item, state) {
               const creature = bf.get(target.uid);
               if (creature) {
                 if (!Cards.canBeTargeted(creature, controller)) {
-                  log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                  log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
                   continue;
                 }
                 const counterAmount = target.amount || 1; // Amount for this specific target
                 if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
                 creature._counters[effect.counter] = (creature._counters[effect.counter] || 0) + counterAmount;
-                log.push(`${creature.name} recebe ${counterAmount} ${effect.counter} counter(s).`);
+                log.push(`${creature.name} gets ${counterAmount} ${effect.counter} counter(s).`);
 
                 if (creature._counters['+1/+1'] > 0 && creature._counters['-1/-1'] > 0) {
                   const cancel = Math.min(creature._counters['+1/+1'], creature._counters['-1/-1']);
@@ -1370,7 +1398,7 @@ export function _resolveItem(item, state) {
 
                 if (Cards.getToughness(creature) <= 0) {
                   GameState.creatureDies(gameState, creature, target.player);
-                  log.push(`${creature.name} morre.`);
+                  log.push(`${creature.name} dies.`);
                 }
               }
             }
@@ -1381,12 +1409,12 @@ export function _resolveItem(item, state) {
             const creature = bf.get(target.uid);
             if (creature) {
               if (!Cards.canBeTargeted(creature, controller)) {
-                log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+                log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
                 break;
               }
               if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
               creature._counters[effect.counter] = (creature._counters[effect.counter] || 0) + effect.amount;
-              log.push(`${creature.name} recebe ${effect.amount} ${effect.counter} counter(s).`);
+              log.push(`${creature.name} gets ${effect.amount} ${effect.counter} counter(s).`);
 
               if (creature._counters['+1/+1'] > 0 && creature._counters['-1/-1'] > 0) {
                 const cancel = Math.min(creature._counters['+1/+1'], creature._counters['-1/-1']);
@@ -1396,7 +1424,7 @@ export function _resolveItem(item, state) {
 
               if (Cards.getToughness(creature) <= 0) {
                 GameState.creatureDies(gameState, creature, target.player);
-                log.push(`${creature.name} morre.`);
+                log.push(`${creature.name} dies.`);
               }
             }
           }
@@ -1412,7 +1440,7 @@ export function _resolveItem(item, state) {
           self._counters[effect.counter] = (self._counters[effect.counter] || 0) + effect.amount;
           // Finality counter: also set flag so creatureDies can exile instead of going to GY
           if (effect.counter === 'finality') self._finalityCounter = true;
-          log.push(`${self.name} entra com ${effect.amount} ${effect.counter} counter(s).`);
+          log.push(`${self.name} enters with ${effect.amount} ${effect.counter} counter(s).`);
         }
         break;
       }
@@ -1440,7 +1468,7 @@ export function _resolveItem(item, state) {
           const targetCard = bf.get(target.uid);
           if (targetCard) {
             targetCard._exileOnDeath = true;
-            log.push(`${targetCard.name}: se morrer este turno, sera exilado.`);
+            log.push(`${targetCard.name}: if it dies this turn, it will be exiled.`);
           }
         }
         break;
@@ -1453,7 +1481,7 @@ export function _resolveItem(item, state) {
           if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
           creature._counters[effect.counter] = (creature._counters[effect.counter] || 0) + effect.amount;
         }
-        log.push(`Todas as criaturas recebem ${effect.amount} ${effect.counter} counter(s).`);
+        log.push(`All creatures get ${effect.amount} ${effect.counter} counter(s).`);
         break;
       }
 
@@ -1477,8 +1505,8 @@ export function _resolveItem(item, state) {
           };
           gameState.waitingForInput = { type: 'mandatory_discard', playerId: targetPlayer };
           log.push(isOptional
-            ? `Voce pode descartar ate ${effect.amount || 1} carta(s).`
-            : `Voce deve descartar ${effect.amount || 1} carta(s).`);
+            ? `You may discard up to ${effect.amount || 1} card(s).`
+            : `You must discard ${effect.amount || 1} card(s).`);
           // Save remaining effects so they resume after human chooses (e.g., draw 2 after discard)
           if (ei < effects.length - 1) {
             gameState._pendingStackEffects = {
@@ -1516,8 +1544,8 @@ export function _resolveItem(item, state) {
         }
 
         if (discarded.length > 0) {
-          const who = targetPlayer === 0 ? 'Voce' : 'Oponente';
-          log.push(`${who} descarta: ${discarded.join(', ')}.`);
+          const who = targetPlayer === 0 ? 'You' : 'Opponent';
+          log.push(`${who} discard${targetPlayer === 0 ? '' : 's'}: ${discarded.join(', ')}.`);
         }
         break;
       }
@@ -1528,7 +1556,7 @@ export function _resolveItem(item, state) {
         const optHandSize = optHand.count();
 
         if (optHandSize === 0) {
-          log.push('Nenhuma carta na mao para descartar.');
+          log.push('No cards in hand to discard.');
           break;
         }
 
@@ -1540,7 +1568,7 @@ export function _resolveItem(item, state) {
             onNonlandDiscard: effect.onNonlandDiscard || null
           };
           gameState.waitingForInput = { type: 'optional_discard_choice', playerId: controller };
-          log.push('Voce pode descartar uma carta.');
+          log.push('You may discard a card.');
           return log;
         } else {
           // AI: decide whether to discard
@@ -1589,7 +1617,7 @@ export function _resolveItem(item, state) {
               gameState._lastDiscardedNonland[controller] = true;
             }
 
-            log.push(`IA descarta ${toDiscard.name}.`);
+            log.push(`AI discards ${toDiscard.name}.`);
 
             // Process onNonlandDiscard bonus effects (AI auto-targets)
             if (discardedNonland && hasBonus) {
@@ -1606,9 +1634,9 @@ export function _resolveItem(item, state) {
                       vfxPlay('damage', bestTarget._uid);
                       if (bestTarget._damage >= Cards.getToughness(bestTarget)) {
                         GameState.creatureDies(gameState, bestTarget, 1 - controller);
-                        log.push(`Glacial Dragonhunt causa ${bonusEffect.amount} dano em ${bestTarget.name} - morre!`);
+                        log.push(`Glacial Dragonhunt deals ${bonusEffect.amount} damage to ${bestTarget.name} - dies!`);
                       } else {
-                        log.push(`Glacial Dragonhunt causa ${bonusEffect.amount} dano em ${bestTarget.name}.`);
+                        log.push(`Glacial Dragonhunt deals ${bonusEffect.amount} damage to ${bestTarget.name}.`);
                       }
                     }
                   }
@@ -1616,7 +1644,7 @@ export function _resolveItem(item, state) {
               }
             }
           } else {
-            log.push('IA escolhe nao descartar carta.');
+            log.push('AI chooses not to discard.');
           }
         }
         break;
@@ -1661,15 +1689,15 @@ export function _resolveItem(item, state) {
               ourCreature._damage = Cards.getToughness(ourCreature);
             }
 
-            log.push(`${ourCreature.name} luta com ${theirCreature.name}.`);
+            log.push(`${ourCreature.name} fights ${theirCreature.name}.`);
 
             if (theirCreature._damage >= Cards.getToughness(theirCreature)) {
               GameState.creatureDies(gameState, theirCreature, target.player);
-              log.push(`${theirCreature.name} morre.`);
+              log.push(`${theirCreature.name} dies.`);
             }
             if (ourCreature._damage >= Cards.getToughness(ourCreature)) {
               GameState.creatureDies(gameState, ourCreature, controller);
-              log.push(`${ourCreature.name} morre.`);
+              log.push(`${ourCreature.name} dies.`);
             }
           }
         }
@@ -1680,19 +1708,19 @@ export function _resolveItem(item, state) {
         if (effect.target === 'all_opponent_creatures') {
           const tapCreatures = gameState.players[opponent].zones.battlefield.cards.filter(c => Cards.isCreature(c));
           tapCreatures.forEach(c => { c._tapped = true; });
-          log.push(`Todas as criaturas do oponente sao viradas.`);
+          log.push(`All opponent's creatures are tapped.`);
         } else if (targets && targets.length > 0) {
           const target = targets[0];
           const bf = gameState.players[target.player].zones.battlefield;
           const creature = bf.get(target.uid);
           if (creature) {
             if (!Cards.canBeTargeted(creature, controller)) {
-              log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+              log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
               break;
             }
             const wasTapped = creature._tapped;
             creature._tapped = true;
-            log.push(`${creature.name} e virado.`);
+            log.push(`${creature.name} is tapped.`);
             // Fire becomes_tapped trigger
             if (!wasTapped) {
               const tapLogs = GameState.fireTrigger(gameState, 'becomes_tapped', {
@@ -1714,11 +1742,11 @@ export function _resolveItem(item, state) {
           const creature = bf.get(target.uid);
           if (creature) {
             if (!Cards.canBeTargeted(creature, controller)) {
-              log.push(`${creature.name} nao pode ser alvo (hexproof/shroud).`);
+              log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
               break;
             }
             creature._tapped = false;
-            log.push(`${creature.name} e desvirado.`);
+            log.push(`${creature.name} is untapped.`);
           }
         }
         break;
@@ -1728,7 +1756,7 @@ export function _resolveItem(item, state) {
         // Store prevention shield on controller
         if (!gameState._damageShield) gameState._damageShield = {};
         gameState._damageShield[controller] = (gameState._damageShield[controller] || 0) + effect.amount;
-        log.push(`Previne os proximos ${effect.amount} de dano.`);
+        log.push(`Prevent the next ${effect.amount} damage.`);
         break;
       }
 
@@ -1804,10 +1832,10 @@ export function _resolveItem(item, state) {
           GameState.fireTrigger(gameState, 'card_leaves_graveyard', { playerId: controller, card: card });
           if (toTopLibrary) {
             gameState.players[controller].zones.library.cards.unshift(card);
-            log.push(`${card.name} volta do cemiterio para o topo da biblioteca.`);
+            log.push(`${card.name} returns from graveyard to the top of library.`);
           } else if (toHand) {
             gameState.players[controller].zones.hand.add(card);
-            log.push(`${card.name} volta do cemiterio para a mao.`);
+            log.push(`${card.name} returns from graveyard to hand.`);
           } else {
             const bfCard = Cards.prepareForBattlefield(card);
             bfCard._ownerId = controller;
@@ -1817,18 +1845,18 @@ export function _resolveItem(item, state) {
               if (!bfCard._counters) bfCard._counters = {};
               for (const keyword of effect.with_counters) {
                 bfCard._counters[keyword] = (bfCard._counters[keyword] || 0) + 1;
-                log.push(`${bfCard.name} entra com contador ${keyword}.`);
+                log.push(`${bfCard.name} enters with ${keyword} counter.`);
               }
             }
 
             gameState.players[controller].zones.battlefield.add(bfCard);
             GameState._registerCardTriggers(gameState, bfCard, controller);
             gameState._lastReturnedUIDs.push({ uid: bfCard._uid, player: controller });
-            log.push(`${card.name} volta do cemiterio para o campo!`);
+            log.push(`${card.name} returns from graveyard to the battlefield!`);
           }
         }
         if (candidates.length === 0) {
-          log.push('Nenhuma carta valida no cemiterio.');
+          log.push('No valid card in graveyard.');
         }
         break;
       }
@@ -1870,7 +1898,7 @@ export function _resolveItem(item, state) {
               creature._tempPowerMod = (creature._tempPowerMod || 0) + (powerMod || 0);
               creature._tempToughnessMod = (creature._tempToughnessMod || 0) + (toughnessMod || 0);
             }
-            log.push(`Todas as criaturas não-Dragão recebem ${powerMod}/${toughnessMod}.`);
+            log.push(`All non-Dragon creatures get ${powerMod}/${toughnessMod}.`);
             // Kill creatures with 0 or less toughness
             for (const { creature, playerId } of allCreatures) {
               if (Cards.getToughness(creature) <= 0) {
@@ -1885,7 +1913,7 @@ export function _resolveItem(item, state) {
               c._tempToughnessMod = (c._tempToughnessMod || 0) + (toughnessMod || 0);
             }
             const targetId = effect.target === 'opponent_creatures' ? (controller === 0 ? 1 : 0) : controller;
-            log.push(`Todas as criaturas do ${targetId === 0 ? 'jogador' : 'oponente'} recebem ${powerMod}/${toughnessMod}.`);
+            log.push(`All ${targetId === 0 ? 'your' : "opponent's"} creatures get ${powerMod}/${toughnessMod}.`);
             // Kill creatures with 0 or less toughness
             const dying = allCreatures.filter(c => Cards.getToughness(c) <= 0);
             dying.forEach(c => GameState.creatureDies(gameState, c, targetId));
@@ -1898,10 +1926,10 @@ export function _resolveItem(item, state) {
             creature._toughnessMod = (creature._toughnessMod || 0) + (effect.toughness || 0);
             creature._tempPowerMod = (creature._tempPowerMod || 0) + (effect.power || 0);
             creature._tempToughnessMod = (creature._tempToughnessMod || 0) + (effect.toughness || 0);
-            log.push(`${creature.name} recebe ${effect.power}/${effect.toughness} ate o fim do turno.`);
+            log.push(`${creature.name} gets ${effect.power}/${effect.toughness} until end of turn.`);
             if (Cards.getToughness(creature) <= 0) {
               GameState.creatureDies(gameState, creature, target.player);
-              log.push(`${creature.name} morre.`);
+              log.push(`${creature.name} dies.`);
             }
           }
         }
@@ -1972,13 +2000,13 @@ export function _payWardCost(creature, controller, state, log) {
         remaining -= paid;
         if (remaining === 0) break;
       }
-      log.push(`Ward ${wardCost} pago.`);
+      log.push(`Ward ${wardCost} paid.`);
       return true;
     }
   }
 
   // Cannot pay ward — spell is countered
-  log.push(`Ward ${wardCost}: nao pode pagar — feitico e anulado.`);
+  log.push(`Ward ${wardCost}: can't pay — spell is countered.`);
   return false;
 }
 
@@ -1989,14 +2017,15 @@ export function _payWardCost(creature, controller, state, log) {
 export function _aiChooseModes(modes, chooseCount, state, controller, opponent, targets) {
   const gameState = state;
   // Score each mode and pick the best N
+  const _safeN = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
   const scored = modes.map((mode, idx) => {
     let score = 0;
     const effects = Array.isArray(mode) ? mode : [mode];
     for (const eff of effects) {
       switch (eff.type) {
-        case 'damage': score += (eff.amount || 0) * 2; break;
-        case 'draw': score += (eff.amount || 0) * 3; break;
-        case 'gainLife': score += (eff.amount || 0); break;
+        case 'damage': score += _safeN(eff.amount) * 2; break;
+        case 'draw': score += _safeN(eff.amount) * 3; break;
+        case 'gainLife': score += _safeN(eff.amount); break;
         case 'destroy': score += 8; break;
         case 'exile': score += 9; break;
         case 'counter': score += 7; break;

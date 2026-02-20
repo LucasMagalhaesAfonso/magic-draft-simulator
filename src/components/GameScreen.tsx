@@ -1,6 +1,6 @@
 // GameScreen.tsx — Game UI connected to the real engine via useGameEngine hook
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import type { Card } from '../lib/types';
 import { CardImage } from './card/CardImage';
@@ -19,22 +19,29 @@ import { getLandManaColors, canPay } from '../engine/mana';
 import type { ManaPool } from '../engine/engine-types';
 import './GameScreen.css';
 
+// ── Token icons ──────────────────────────────────────────────────────────────
+const TOKEN_ICONS: Record<string, string> = {
+  Dragon:'🐉', Spirit:'👻', Warrior:'⚔️', Treasure:'💎', Soldier:'🛡',
+  Goblin:'👹', Zombie:'🧟', Monk:'🥋', Bird:'🦅', Elephant:'🐘',
+  Wolf:'🐺', Faerie:'🧚', Snake:'🐍',
+};
+
 // ── Phase strip config ─────────────────────────────────────────────────────────
 
 const PHASES = [
-  { key: 'mulligan',           label: 'Mulligan' },
-  { key: 'untap',              label: 'Untap' },
-  { key: 'upkeep',             label: 'Upkeep' },
-  { key: 'draw',               label: 'Draw' },
-  { key: 'main1',              label: 'Main 1' },
-  { key: 'combat_begin',       label: 'Combat' },
-  { key: 'combat_attackers',   label: 'Attack' },
-  { key: 'combat_blockers',    label: 'Block' },
-  { key: 'combat_damage',      label: 'Damage' },
-  { key: 'combat_end',         label: 'C.End' },
-  { key: 'main2',              label: 'Main 2' },
-  { key: 'end',                label: 'End' },
-  { key: 'cleanup',            label: 'Cleanup' },
+  { key: 'mulligan',           label: 'Mulligan',  tip: 'Choose to keep or mulligan your hand' },
+  { key: 'untap',              label: 'Untap',     tip: 'Untap all your permanents' },
+  { key: 'upkeep',             label: 'Upkeep',    tip: 'Upkeep triggers resolve here' },
+  { key: 'draw',               label: 'Draw',      tip: 'Draw a card for the turn' },
+  { key: 'main1',              label: 'Main 1',    tip: 'Play lands, cast creatures & sorceries' },
+  { key: 'combat_begin',       label: 'Combat',    tip: 'Beginning of combat — last chance for instants' },
+  { key: 'combat_attackers',   label: 'Attack',    tip: 'Declare attackers — click creatures to attack' },
+  { key: 'combat_blockers',    label: 'Block',     tip: 'Declare blockers — click your creature then the attacker' },
+  { key: 'combat_damage',      label: 'Damage',    tip: 'Combat damage is dealt' },
+  { key: 'combat_end',         label: 'C.End',     tip: 'End of combat — damage dealt, creatures survive or die' },
+  { key: 'main2',              label: 'Main 2',    tip: 'Second main phase — play lands & cast spells' },
+  { key: 'end',                label: 'End',       tip: 'End step — last chance to cast instants' },
+  { key: 'cleanup',            label: 'Cleanup',   tip: 'Discard to hand size, remove damage' },
 ];
 
 // ── Helpers for AI bot deck ────────────────────────────────────────────────────
@@ -105,7 +112,14 @@ export function GameScreen() {
   const [graveyardOpen, setGraveyardOpen] = useState<{ pid: number } | null>(null);
   const [exileOpen, setExileOpen] = useState<{ pid: number } | null>(null);
   // Targeting: pending spell waiting for player to click a target
-  const [targeting, setTargeting] = useState<{ cardUid: string; card: any } | null>(null);
+  // Multi-step targeting: step/steps/collectedTargets for spells that need multiple sequential targets
+  const [targeting, setTargeting] = useState<{
+    cardUid: string;
+    card: any;
+    step?: number;
+    steps?: Array<{ side: 'own' | 'opponent'; prompt: string }>;
+    collectedTargets?: any[];
+  } | null>(null);
   // Blocking: selected own creature waiting to be assigned to an attacker
   const [blockingWith, setBlockingWith] = useState<string | null>(null);
   // Ability modal: double-click on creature/planeswalker
@@ -139,17 +153,43 @@ export function GameScreen() {
   const prevLifeRef = useRef<[number, number] | null>(null);
   const prevActivePlayerRef = useRef<number | null>(null);
 
-  // Build decks for the engine
-  const playerSpells = deck?.mainboard ?? draftPool.slice(0, 23);
-  const playerLands  = deck?.lands    ?? { W: 9, U: 8, B: 0, R: 0, G: 0 };
-  const playerDeck   = buildFullDeck(playerSpells, playerLands);
+  // ── Arena-like animation states ──────────────────────────────────────────
+  // Battlefield enter/exit
+  const [recentlyEntered, setRecentlyEntered] = useState<Set<string>>(new Set());
+  const [ghosts, setGhosts] = useState<Array<{id: number; imgSrc: string; x: number; y: number; w: number; h: number}>>([]);
+  const ghostIdRef = useRef(0);
+  // Floating damage/life numbers
+  const [floats, setFloats] = useState<Array<{id: number; value: string; x: number; y: number; type: string}>>([]);
+  const floatIdRef = useRef(0);
+  // Spell cast center zoom
+  const [castingCard, setCastingCard] = useState<any>(null);
+  // Hand draw tracking
+  const prevHandUidsRef = useRef<Set<string>>(new Set());
+  const [newHandUids, setNewHandUids] = useState<Set<string>>(new Set());
+  // Trigger pulse
+  const [triggerPulseUids, setTriggerPulseUids] = useState<Set<string>>(new Set());
+  const prevLogLenRef = useRef(0);
+  // Combat edge flash
+  const [combatFlash, setCombatFlash] = useState(false);
+  const prevPhaseRef = useRef<string | null>(null);
+  // Target arrow
+  const targetArrowRef = useRef<SVGLineElement>(null);
 
-  // AI deck: use BotAI.buildDeck for proper 2-color optimization
-  const aiPool = draftPool.filter(c => !c.type_line?.includes('Land'));
-  const aiDeckData = aiPool.length >= 10
-    ? botBuildDeck(aiPool)
-    : { deck: playerSpells.slice(0, 23), lands: { W: 9, U: 8 } as Record<string, number>, sideboard: [] as any[] };
-  const aiDeck = buildFullDeck(aiDeckData.deck, aiDeckData.lands);
+  // Build decks for the engine (memoized — only recompute when deck/pool changes)
+  const playerDeck = useMemo(() => {
+    const spells = deck?.mainboard ?? draftPool.slice(0, 23);
+    const lands  = deck?.lands    ?? { W: 9, U: 8, B: 0, R: 0, G: 0 };
+    return buildFullDeck(spells, lands);
+  }, [deck, draftPool]);
+
+  const aiDeck = useMemo(() => {
+    const spells = deck?.mainboard ?? draftPool.slice(0, 23);
+    const aiPool = draftPool.filter(c => !c.type_line?.includes('Land'));
+    const aiDeckData = aiPool.length >= 10
+      ? botBuildDeck(aiPool)
+      : { deck: spells.slice(0, 23), lands: { W: 9, U: 8 } as Record<string, number>, sideboard: [] as any[] };
+    return buildFullDeck(aiDeckData.deck, aiDeckData.lands);
+  }, [deck, draftPool]);
 
   const { snap, loading, error, actions, gsRef, canUndoMana } = useGameEngine(playerDeck, aiDeck);
 
@@ -163,7 +203,19 @@ export function GameScreen() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 2500);
   }
 
-  // Life change toasts + flash
+  function addFloat(value: string, x: number, y: number, type: string) {
+    const id = ++floatIdRef.current;
+    setFloats(prev => [...prev.slice(-8), { id, value, x, y, type }]);
+    setTimeout(() => setFloats(prev => prev.filter(f => f.id !== id)), 800);
+  }
+
+  function showCastAnimation(card: any) {
+    if (!card?.image_normal && !card?.image_small) return;
+    setCastingCard(card);
+    setTimeout(() => setCastingCard(null), 900);
+  }
+
+  // Life change toasts + flash + floating numbers
   useEffect(() => {
     if (!snap) return;
     const p0life = snap.players[0].life;
@@ -176,6 +228,21 @@ export function GameScreen() {
       else if (d0 > 0) addToast(`+${d0} ❤️`, 'heal');
       if (d1 < 0) addToast(`AI -${-d1} ❤️`, 'damage');
       else if (d1 > 0) addToast(`AI +${d1} ❤️`, 'heal');
+      // Floating numbers near life totals
+      if (d0 !== 0) {
+        const el = document.querySelector('[data-player-id="p0"]');
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          addFloat(d0 > 0 ? `+${d0}` : `${d0}`, rect.left + rect.width / 2, rect.top, d0 > 0 ? 'heal' : 'damage');
+        }
+      }
+      if (d1 !== 0) {
+        const el = document.querySelector('[data-player-id="p1"]');
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          addFloat(d1 > 0 ? `+${d1}` : `${d1}`, rect.left + rect.width / 2, rect.top, d1 > 0 ? 'heal' : 'damage');
+        }
+      }
     }
     prevLifeRef.current = [p0life, p1life];
   }, [snap?.players[0].life, snap?.players[1].life]); // eslint-disable-line
@@ -185,7 +252,7 @@ export function GameScreen() {
     if (!snap || snap.phase === 'mulligan') return;
     const prev = prevActivePlayerRef.current;
     if (prev !== null && prev !== snap.activePlayer) {
-      setTurnBanner(snap.activePlayer === 0 ? 'Seu Turno' : 'Turno do Oponente');
+      setTurnBanner(snap.activePlayer === 0 ? 'Your Turn' : "Opponent's Turn");
       setTimeout(() => setTurnBanner(null), 1800);
     }
     prevActivePlayerRef.current = snap.activePlayer;
@@ -213,7 +280,7 @@ export function GameScreen() {
     prevLifeVfxRef.current = [p0life, p1life];
   }, [snap?.players[0].life, snap?.players[1].life]); // eslint-disable-line
 
-  // VFX: creature enters/leaves battlefield
+  // VFX: creature enters/leaves battlefield + Arena-like enter/exit animations
   const prevBfUidsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!snap) return;
@@ -223,19 +290,53 @@ export function GameScreen() {
     ];
     const nowSet = new Set<string>(allBfNow);
     const prev = prevBfUidsRef.current;
-    // Entering battlefield
+
+    // Entering battlefield — VFX + scale-in animation
+    const newEntries = new Set<string>();
     for (const uid of nowSet) {
       if (!prev.has(uid)) {
-        // Small delay so the element is in DOM
+        newEntries.add(uid);
         setTimeout(() => VfxManager.play('buff', uid), 80);
       }
     }
-    // Leaving battlefield (died / exiled)
+    if (newEntries.size > 0) {
+      setRecentlyEntered(s => new Set([...s, ...newEntries]));
+      setTimeout(() => {
+        setRecentlyEntered(s => {
+          const next = new Set(s);
+          for (const uid of newEntries) next.delete(uid);
+          return next;
+        });
+      }, 500);
+    }
+
+    // Leaving battlefield — VFX + ghost fade-out
+    const newGhosts: typeof ghosts = [];
     for (const uid of prev) {
       if (!nowSet.has(uid)) {
         VfxManager.play('death', uid);
+        const el = document.querySelector(`[data-uid="${uid}"]`);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          const img = el.querySelector('img');
+          const imgSrc = img?.src || '';
+          if (imgSrc) {
+            newGhosts.push({
+              id: ++ghostIdRef.current,
+              imgSrc,
+              x: rect.left, y: rect.top,
+              w: rect.width, h: rect.height,
+            });
+          }
+        }
       }
     }
+    if (newGhosts.length > 0) {
+      setGhosts(g => [...g, ...newGhosts].slice(-10));
+      const ids = newGhosts.map(g => g.id);
+      setTimeout(() => setGhosts(g => g.filter(ghost => !ids.includes(ghost.id))), 400);
+    }
+
     prevBfUidsRef.current = nowSet;
   }, [snap?.players[0].battlefield?.length, snap?.players[1].battlefield?.length]); // eslint-disable-line
 
@@ -258,6 +359,79 @@ export function GameScreen() {
     }, 120);
     return () => clearTimeout(timer);
   }, [snap?.phase, snap?.waitingForInput?.type, autoPass]); // eslint-disable-line
+
+  // ── Arena animations: hand draw detection ──────────────────────────────
+  useEffect(() => {
+    if (!snap) return;
+    const currentUids = new Set<string>(snap.players[0].hand.map((c: any) => c._uid as string));
+    const prev = prevHandUidsRef.current;
+    if (prev.size > 0) {
+      const justDrawn = new Set<string>();
+      for (const uid of currentUids) {
+        if (!prev.has(uid)) justDrawn.add(uid);
+      }
+      if (justDrawn.size > 0) {
+        setNewHandUids(justDrawn);
+        setTimeout(() => setNewHandUids(new Set()), 500);
+      }
+    }
+    prevHandUidsRef.current = currentUids;
+  }, [snap?.players[0]?.hand?.length]); // eslint-disable-line
+
+  // ── Arena animations: trigger pulse detection (from log) ───────────────
+  useEffect(() => {
+    if (!snap) return;
+    const newLen = snap.log.length;
+    const prev = prevLogLenRef.current;
+    prevLogLenRef.current = newLen;
+    if (newLen <= prev) return;
+    const newEntries = snap.log.slice(prev);
+    const allBf = [...snap.players[0].battlefield, ...snap.players[1].battlefield];
+    const pulseUids = new Set<string>();
+    for (const entry of newEntries) {
+      if (entry.includes('trigger') || entry.includes('Trigger') || entry.includes('fires')) {
+        for (const card of allBf) {
+          if (entry.includes(card.name)) {
+            pulseUids.add(card._uid);
+          }
+        }
+      }
+    }
+    if (pulseUids.size > 0) {
+      setTriggerPulseUids(pulseUids);
+      setTimeout(() => setTriggerPulseUids(new Set()), 600);
+    }
+  }, [snap?.log?.length]); // eslint-disable-line
+
+  // ── Arena animations: phase glow + combat flash ────────────────────────
+  useEffect(() => {
+    if (!snap) return;
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = snap.phase;
+    if (prev && !prev.startsWith('combat') && snap.phase === 'combat_begin') {
+      setCombatFlash(true);
+      setTimeout(() => setCombatFlash(false), 400);
+    }
+  }, [snap?.phase]); // eslint-disable-line
+
+  // ── Arena animations: targeting arrow mouse tracking ───────────────────
+  useEffect(() => {
+    if (!targeting) return;
+    function handleMouseMove(e: MouseEvent) {
+      const line = targetArrowRef.current;
+      if (!line) return;
+      const sourceEl = document.querySelector(`[data-uid="${targeting!.cardUid}"]`);
+      if (sourceEl) {
+        const rect = sourceEl.getBoundingClientRect();
+        line.setAttribute('x1', String(rect.left + rect.width / 2));
+        line.setAttribute('y1', String(rect.top));
+      }
+      line.setAttribute('x2', String(e.clientX));
+      line.setAttribute('y2', String(e.clientY));
+    }
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [targeting]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -288,14 +462,19 @@ export function GameScreen() {
           if (blockingWith) { setBlockingWith(null); break; }
           if (graveyardOpen) { setGraveyardOpen(null); break; }
           if (exileOpen) { setExileOpen(null); break; }
+          if (abilityModal) { setAbilityModal(null); break; }
+          if (equipModal) { setEquipModal(null); break; }
+          if (attackTargetPicker) { setAttackTargetPicker(null); break; }
+          if (adventureModal) { setAdventureModal(null); break; }
+          if (conditionalCostConfirm) { setConditionalCostConfirm(null); break; }
+          if (showStack) { setShowStack(false); break; }
           break;
         case 'Enter': {
           // Confirm scry/surveil if waiting
           const wi = snap?.waitingForInput;
           if (wi?.type === 'scry' || wi?.type === 'surveil') {
-            // Confirm with current choices (all top by default)
-            const pending = (window as any)._gsRef?.current?._pendingScry;
-            if (pending) actions.resolveScry(pending.choices);
+            const pending = (snap as any)?._pendingScry;
+            if (pending) actions.resolveScry(pending.choices, pending.topOrder);
           }
           break;
         }
@@ -350,7 +529,7 @@ export function GameScreen() {
     }
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [snap, actions, targeting, graveyardOpen, blockingWith, showStack, autoPass, exileOpen]);
+  }, [snap, actions, targeting, graveyardOpen, blockingWith, showStack, autoPass, exileOpen, abilityModal, equipModal, attackTargetPicker, adventureModal, conditionalCostConfirm]);
 
   // Helper: does this spell need interactive targeting?
   // Strips activated ability lines (e.g. "{1}, {T}: Target creature...") to avoid
@@ -403,11 +582,65 @@ export function GameScreen() {
     return { extraCost: extraCostStr, extraAmount };
   }
 
+  // Detect cards that need sequential multi-step targeting (own creature first, then opponent).
+  // Covered patterns:
+  //   A) "buff/double target creature you control ... fights target creature" (Dragonclaw Strike)
+  //   B) "put a counter on target creature you control, then it deals damage to target creature" (Knockout Maneuver)
+  //   C) "target creature you control deals damage equal to its power to target creature" (Piercing Exhale)
+  function getMultiTargetSteps(card: any): Array<{ side: 'own' | 'opponent'; prompt: string }> | null {
+    const text = (card?.oracle_text || '').toLowerCase();
+    if (!text.includes('target creature you control')) return null;
+
+    // Pattern A: ... then that creature fights target creature (Dragonclaw Strike)
+    if (text.includes('fights target creature') || text.includes('fight target creature')) {
+      const buffVerb = text.includes('double') ? 'to double' : text.includes('counter') ? 'for the counter' : 'to buff';
+      return [
+        { side: 'own', prompt: `Choose a creature you control ${buffVerb}` },
+        { side: 'opponent', prompt: 'Choose a creature to fight' }
+      ];
+    }
+
+    // Pattern B: "put a counter on target creature you control, then it deals damage to target creature"
+    // (Knockout Maneuver)
+    if (text.includes('then it deals damage') && text.includes('target creature')) {
+      return [
+        { side: 'own', prompt: 'Choose a creature you control (deals damage)' },
+        { side: 'opponent', prompt: 'Choose a creature to deal damage to' }
+      ];
+    }
+
+    // Pattern C: "target creature you control deals damage equal to its power to target creature or planeswalker"
+    // (Piercing Exhale)
+    if (/target creature you control deals damage.*to target (creature|permanent|planeswalker)/.test(text)) {
+      return [
+        { side: 'own', prompt: 'Choose a creature you control (deals damage)' },
+        { side: 'opponent', prompt: 'Choose a target to deal damage to' }
+      ];
+    }
+
+    return null;
+  }
+
   // Build valid targets for current targeting spell
-  function getValidTargets(card: any) {
+  // stepFilter: if provided, restrict to 'own' or 'opponent' side only (for multi-step targeting)
+  function getValidTargets(card: any, stepFilter?: 'own' | 'opponent') {
     if (!snap) return [];
     const text = (card?.oracle_text || '').toLowerCase();
     const targets: any[] = [];
+
+    // Multi-step targeting: restrict valid targets to the appropriate side for the current step
+    if (stepFilter === 'own') {
+      snap.players[0].battlefield
+        .filter((c: any) => c.type_line?.includes('Creature'))
+        .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: 0, card: c }));
+      return targets;
+    }
+    if (stepFilter === 'opponent') {
+      snap.players[1].battlefield
+        .filter((c: any) => c.type_line?.includes('Creature'))
+        .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: 1, card: c }));
+      return targets;
+    }
 
     const wantsCreature = text.includes('target creature') || text.includes('target permanent') || text.includes('target nonland');
     // "target player" / "target opponent" / "player or planeswalker" are explicitly player-targeting.
@@ -464,8 +697,8 @@ export function GameScreen() {
     }
     // Add players
     if (wantsPlayer || wantsAny) {
-      targets.push({ type: 'player', player: 1, name: 'Oponente' });
-      if (!wantsEnemy) targets.push({ type: 'player', player: 0, name: 'Você' });
+      targets.push({ type: 'player', player: 1, name: 'Opponent' });
+      if (!wantsEnemy) targets.push({ type: 'player', player: 0, name: 'You' });
     }
 
     return targets;
@@ -477,6 +710,26 @@ export function GameScreen() {
 
     // ── Targeting mode: clicking a creature/permanent to target it ──────────
     if (targeting) {
+      // Multi-step targeting (e.g. Dragonclaw Strike: step 1 = own creature, step 2 = opp creature)
+      if (targeting.steps && targeting.step) {
+        const currentStep = targeting.steps[targeting.step - 1];
+        const stepTargets = getValidTargets(targeting.card, currentStep.side);
+        const hit = stepTargets.find((x: any) => x.uid === card._uid);
+        if (hit) {
+          const collected = [...(targeting.collectedTargets || []), { type: 'creature', uid: card._uid, player: hit.player }];
+          if (targeting.step < targeting.steps.length) {
+            // Advance to next step
+            setTargeting({ ...targeting, step: targeting.step + 1, collectedTargets: collected });
+          } else {
+            // All steps done — cast with all collected targets
+            showCastAnimation(targeting.card);
+            actions.castSpell(targeting.cardUid, collected);
+            setTargeting(null);
+          }
+        }
+        return;
+      }
+
       const t = getValidTargets(targeting.card);
       const hit = t.find((x: any) => (x.type === 'creature' || x.type === 'permanent') && x.uid === card._uid);
       if (hit) {
@@ -489,7 +742,7 @@ export function GameScreen() {
           const baseCmc = targeting.card.cmc || 0;
           const needed = baseCmc + condCost.extraAmount;
           if (totalAvailableMana < needed) {
-            addToast(`Mana insuficiente — precisa de ${condCost.extraCost} a mais para dar alvo num Dragão`, 'damage');
+            addToast(`Insufficient mana — need ${condCost.extraCost} more to target a Dragon`, 'damage');
             setTargeting(null);
             return;
           }
@@ -506,6 +759,7 @@ export function GameScreen() {
           return;
         }
 
+        showCastAnimation(targeting.card);
         if (targeting.card._isAdventure) {
           actions.castAdventure(targeting.cardUid, tgt);
         } else {
@@ -631,13 +885,21 @@ export function GameScreen() {
         const oppSpells = stackItems.filter((item: any) => item.controller !== 0);
         if (oppSpells.length === 0) return; // Nothing to counter
         const topOppSpell = oppSpells[oppSpells.length - 1];
+        showCastAnimation(card);
         actions.castSpell(card._uid, [topOppSpell.card]);
         return;
       }
 
+      // Detect cards that need two sequential targets (e.g. Dragonclaw Strike: buff own then fight opp)
+      const multiSteps = getMultiTargetSteps(card);
       if (spellNeedsTargeting(card)) {
-        setTargeting({ cardUid: card._uid, card });
+        if (multiSteps) {
+          setTargeting({ cardUid: card._uid, card, step: 1, steps: multiSteps, collectedTargets: [] });
+        } else {
+          setTargeting({ cardUid: card._uid, card });
+        }
       } else {
+        showCastAnimation(card);
         actions.castSpell(card._uid);
       }
     } else if (inBF) {
@@ -683,6 +945,7 @@ export function GameScreen() {
       const hit = t.find(x => x.type === 'player' && x.player === pid);
       if (hit) {
         const tgt = [{ type: 'player', player: pid }];
+        showCastAnimation(targeting.card);
         if (targeting.card._isAdventure) {
           actions.castAdventure(targeting.cardUid, tgt);
         } else {
@@ -706,10 +969,12 @@ export function GameScreen() {
 
   // Handle double-click on battlefield cards → show ability modal or equip modal
   function handleDoubleClick(card: any) {
-    if (!snap || snap.activePlayer !== 0) return;
+    if (!snap) return;
     const phase = snap.phase;
     const wiType = snap.waitingForInput?.type;
     const isInstantWindow = wiType === 'instant_priority' || wiType === 'stack_priority';
+    // Allow activation on your turn (main phases) OR during instant windows (even on opponent's turn)
+    if (snap.activePlayer !== 0 && !isInstantWindow) return;
     if (phase !== 'main1' && phase !== 'main2' && !isInstantWindow) return;
     const gs = gsRef.current;
     if (!gs) return;
@@ -1072,7 +1337,8 @@ export function GameScreen() {
                 .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
               const lands = p1.battlefield.filter((c: any) => c.type_line?.includes('Land'));
               const makeCard = (card: any) => {
-                const validTgts = targeting ? getValidTargets(targeting.card) : [];
+                const _stepFilter = targeting?.steps && targeting.step ? targeting.steps[targeting.step - 1]?.side : undefined;
+                const validTgts = targeting ? getValidTargets(targeting.card, _stepFilter) : [];
                 const isTargetable = !!(targeting &&
                   validTgts.some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
                 const isBlockingTarget = !!(snap.waitingForInput?.type === 'declare_blockers' &&
@@ -1088,6 +1354,8 @@ export function GameScreen() {
                     isAttacker={false}
                     isTargetable={isTargetable || isAttackTarget}
                     isBlockingTarget={isBlockingTarget}
+                    isRecentlyEntered={recentlyEntered.has(card._uid)}
+                    isTriggerPulsing={triggerPulseUids.has(card._uid)}
                     overrideArtUrl={getLandArtUrl(card)}
                     onClick={c => handleCardClick(c, 1)}
                     onRightClick={c => setZoom(c)}
@@ -1112,6 +1380,7 @@ export function GameScreen() {
             <div
               key={p.key}
               className={`game-phase-step ${i === phaseIdx ? 'active' : ''} ${i < phaseIdx ? 'done' : ''}`}
+              title={p.tip}
             >
               {p.label}
             </div>
@@ -1122,7 +1391,24 @@ export function GameScreen() {
         <div className="game-center-info">
           <span className="game-turn">Turn {turn}</span>
           {stackSize > 0 && (
-            <div className="game-stack-indicator">Stack: {stackSize}</div>
+            <div className="game-stack-indicator" onClick={() => setShowStack(v => !v)}>
+              Stack: {stackSize}
+              {showStack && (
+                <div className="stack-panel glass" onClick={e => e.stopPropagation()}>
+                  {((snap as any).stackItems || []).slice().reverse().map((item: any, i: number) => (
+                    <div key={i} className="stack-item">
+                      {item.imageUrl && <img src={item.imageUrl} alt="" className="stack-item-img" />}
+                      <div className="stack-item-info">
+                        <div className="stack-item-name">{item.cardName}</div>
+                        <div className="stack-item-type">
+                          {item.controller === 0 ? 'You' : 'Opponent'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           <div className="game-actions">
             {/* AI turn indicator */}
@@ -1204,8 +1490,8 @@ export function GameScreen() {
               <button
                 className="btn-undo-mana"
                 onClick={() => actions.undoTapLand()}
-                title="Desfazer último tap de mana"
-              >↩ Desfazer</button>
+                title="Undo last mana tap"
+              >↩ Undo</button>
             )}
           </div>
         )}
@@ -1220,6 +1506,16 @@ export function GameScreen() {
           backgroundPosition: 'center',
         } : undefined}
       >
+        {/* ── Library stack visual ── */}
+        <div className="library-stack-visual" title={`Library: ${p0.libraryCount} cards`}>
+          <div className="library-card-stack">
+            <img className="lib-card lib-card-3" src={sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'} alt="deck" />
+            <img className="lib-card lib-card-2" src={sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'} alt="deck" />
+            <img className="lib-card lib-card-1" src={sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'} alt="deck" />
+          </div>
+          <span className="library-count-badge">{p0.libraryCount}</span>
+        </div>
+
         {p0.battlefield.length === 0
           ? <span className="game-bf-empty">Your battlefield</span>
           : (() => {
@@ -1229,8 +1525,9 @@ export function GameScreen() {
                 .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
               const lands = p0.battlefield.filter((c: any) => c.type_line?.includes('Land'));
               const makeCard = (card: any) => {
+                const _stepFilter2 = targeting?.steps && targeting.step ? targeting.steps[targeting.step - 1]?.side : undefined;
                 const isTargetable = !!(targeting &&
-                  getValidTargets(targeting.card).some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
+                  getValidTargets(targeting.card, _stepFilter2).some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
                 const isAssignedBlocker = !!(card._blocking);
                 const isSelectedBlocker = blockingWith === card._uid;
                 const canActivatePW = !!(
@@ -1250,6 +1547,8 @@ export function GameScreen() {
                     canActivate={canActivatePW}
                     overrideArtUrl={getLandArtUrl(card)}
                     isAutoTapPreview={autoTapPreviewUids.has(card._uid)}
+                    isRecentlyEntered={recentlyEntered.has(card._uid)}
+                    isTriggerPulsing={triggerPulseUids.has(card._uid)}
                     onClick={c => handleCardClick(c, 0)}
                     onDoubleClick={c => handleDoubleClick(c)}
                     onRightClick={c => setZoom(c)}
@@ -1297,7 +1596,8 @@ export function GameScreen() {
               return (
                 <div
                   key={card._uid}
-                  className={`game-hand-card ${isPlayable ? 'hand-playable' : humanHasPriority ? 'hand-unplayable' : ''}`}
+                  data-uid={card._uid}
+                  className={`game-hand-card ${isPlayable ? 'hand-playable' : humanHasPriority ? 'hand-unplayable' : ''} ${newHandUids.has(card._uid) ? 'hand-draw-in' : ''}`}
                   onClick={() => handleCardClick(card, 0)}
                   onContextMenu={e => { e.preventDefault(); setZoom(card); }}
                   onMouseEnter={() => isMainPhaseHuman && setHoveredHandCard(card._uid)}
@@ -1396,16 +1696,16 @@ export function GameScreen() {
           // ── Post-modal target selection banner ──────────────────────────
           case 'post_modal_target': {
             const labelMap: Record<string, string> = {
-              creature: 'qualquer criatura',
-              own_creature: 'uma das suas criaturas',
-              own_nonlegendary_creature: 'uma criatura sua não-lendária',
-              opponent_creature: 'uma criatura do oponente',
-              creature_with_flying: 'uma criatura com voar',
-              artifact: 'um artefato',
-              enchantment: 'um encantamento',
-              permanent: 'uma permanente',
-              nonland_permanent: 'uma permanente não-terreno',
-              any: 'qualquer alvo',
+              creature: 'any creature',
+              own_creature: 'one of your creatures',
+              own_nonlegendary_creature: 'a non-legendary creature you control',
+              opponent_creature: "an opponent's creature",
+              creature_with_flying: 'a creature with flying',
+              artifact: 'an artifact',
+              enchantment: 'an enchantment',
+              permanent: 'a permanent',
+              nonland_permanent: 'a non-land permanent',
+              any: 'any target',
             };
             const label = labelMap[wi.targetType] || wi.targetType;
             return (
@@ -1416,9 +1716,9 @@ export function GameScreen() {
                 fontSize: 15, fontWeight: 600, textAlign: 'center', pointerEvents: 'none',
                 boxShadow: '0 0 20px rgba(124,58,237,0.5)',
               }}>
-                🎯 {wi.cardName || 'Feitiço'}: escolha {label}
+                🎯 {wi.cardName || 'Spell'}: choose {label}
                 <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4 }}>
-                  Clique em um alvo válido no campo de batalha
+                  Click a valid target on the battlefield
                 </div>
               </div>
             );
@@ -1675,8 +1975,8 @@ export function GameScreen() {
             return (
               <SearchLibraryOverlay
                 candidates={pending.cards || []}
-                title={`✨ Exile — Escolha ${pending.choose || 1} para jogar`}
-                hint="Escolha qual carta exilada você pode jogar."
+                title={`✨ Exile — Choose ${pending.choose || 1} to play`}
+                hint="Choose which exiled card to play."
                 onConfirm={uid => {
                   if (!uid) { actions.resolveUnknownInput(); return; }
                   actions.resolveExileChoice(uid);
@@ -1693,6 +1993,19 @@ export function GameScreen() {
                 candidates={cards}
                 title="✨ Exile from Hand"
                 hint="Choose a card to exile (behold cost)."
+                onConfirm={uid => uid && actions.resolveHandExile(uid)}
+              />
+            );
+          }
+
+          case 'opponent_hand_exile': {
+            const pendingOpp = gs?._pendingHandExile;
+            const oppCards = pendingOpp?.cards || [];
+            return (
+              <SearchLibraryOverlay
+                candidates={oppCards}
+                title="✋ Exile from Opponent's Hand"
+                hint="Choose a nonland card to exile."
                 onConfirm={uid => uid && actions.resolveHandExile(uid)}
               />
             );
@@ -1715,6 +2028,31 @@ export function GameScreen() {
                     </button>
                     <button className="btn btn-muted" onClick={() => actions.resolveGraveyardChoice(1)}>
                       Opponent's GY ({oppGy.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ── Player choice: pick which player for an effect ──────────────
+          case 'player_choice': {
+            const pendingPC = gs?._pendingPlayerChoice;
+            const pcAmount = pendingPC?.amount || 0;
+            const pcType = pendingPC?.effectType || 'effect';
+            return (
+              <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 8000 }}>
+                <div className="glass overlay-panel" style={{ maxWidth: 380, padding: 24, textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 12, color: 'var(--gold)', fontSize: 16 }}>Choose Target Player</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+                    {pcType === 'mill' ? `Mill ${pcAmount} cards — choose who:` : `Choose target player:`}
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                    <button className="btn btn-muted" onClick={() => actions.resolvePlayerChoice(0)}>
+                      Yourself
+                    </button>
+                    <button className="btn btn-gold" onClick={() => actions.resolvePlayerChoice(1)}>
+                      Opponent
                     </button>
                   </div>
                 </div>
@@ -1758,20 +2096,20 @@ export function GameScreen() {
           case 'traveling_botanist_choice': {
             const pending = gs?._pendingTravelingBotanist;
             if (!pending) return null;
-            const cardName = pending.card?.name || 'terreno';
+            const cardName = pending.card?.name || 'land';
             return (
               <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 8000 }}>
                 <div className="glass overlay-panel" style={{ maxWidth: 360, padding: 20, textAlign: 'center' }}>
                   <div style={{ fontWeight: 700, marginBottom: 12, color: 'var(--gold)' }}>Traveling Botanist</div>
                   <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
-                    {cardName} está no topo. O que fazer?
+                    {cardName} is on top. What do you want to do?
                   </div>
                   <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
                     <button className="btn btn-gold" onClick={() => actions.resolveTravelingBotanist(true)}>
-                      📤 Colocar na mão
+                      📤 Put into Hand
                     </button>
                     <button className="btn btn-muted" onClick={() => actions.resolveTravelingBotanist(false)}>
-                      ☠ Cemitério
+                      ☠ Graveyard
                     </button>
                   </div>
                 </div>
@@ -1789,8 +2127,8 @@ export function GameScreen() {
             return (
               <CreatureChoiceOverlay
                 creatures={candidates}
-                title={`💪 Buff até ${pending.maxTargets || 1} Criatura(s)`}
-                hint={`Escolha uma criatura para receber o bônus`}
+                title={`💪 Buff up to ${pending.maxTargets || 1} Creature(s)`}
+                hint={`Choose a creature to receive the buff`}
                 optional
                 onConfirm={uid => actions.resolveMultiBuffChoiceAction(uid ? [uid] : [])}
               />
@@ -1801,6 +2139,7 @@ export function GameScreen() {
           case 'main_phase':
           case 'declare_attackers':
           case 'mulligan':
+          case 'choose_target':
             return null;
 
           // ── Blocker damage order — auto-resolve using AI heuristic ───
@@ -1808,12 +2147,12 @@ export function GameScreen() {
             return (
               <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 7000 }}>
                 <div className="glass overlay-panel" style={{ maxWidth: 320, padding: 16, textAlign: 'center' }}>
-                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Ordem dos Bloqueadores</div>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Blocker Order</div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-                    Múltiplos bloqueadores — confirme a ordem de atribuição de dano.
+                    Multiple blockers — confirm damage assignment order.
                   </div>
                   <button className="btn btn-gold" onClick={() => actions.resolveOrderBlockers()}>
-                    Confirmar Ordem
+                    Confirm Order
                   </button>
                 </div>
               </div>
@@ -1824,22 +2163,22 @@ export function GameScreen() {
           case 'legendary_choice_pre_cast': {
             const pending = gs?._pendingLegendaryChoice;
             if (!pending) return null;
-            const existingName = pending.existingCards?.[0]?.name ?? 'lendária existente';
-            const newName = pending.cardToCast?.name ?? 'nova carta';
+            const existingName = pending.existingCards?.[0]?.name ?? 'existing legendary';
+            const newName = pending.cardToCast?.name ?? 'new card';
             return (
               <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 7000 }}>
                 <div className="glass overlay-panel" style={{ maxWidth: 340, padding: 20, textAlign: 'center' }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>Regra Lendária</div>
+                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>Legendary Rule</div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
-                    Você já controla <strong>{existingName}</strong>.<br />
-                    Conjurar <strong>{newName}</strong> vai sacrificar a existente.
+                    You already control <strong>{existingName}</strong>.<br />
+                    Casting <strong>{newName}</strong> will sacrifice the existing one.
                   </div>
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
                     <button className="btn btn-gold" onClick={() => actions.resolveLegendaryChoice('keep_new')}>
-                      Conjurar (sacrificar antiga)
+                      Cast (sacrifice existing)
                     </button>
                     <button className="btn btn-muted" onClick={() => actions.resolveLegendaryChoice('cancel')}>
-                      Cancelar
+                      Cancel
                     </button>
                   </div>
                 </div>
@@ -1854,7 +2193,7 @@ export function GameScreen() {
             return (
               <CreatureChoiceOverlay
                 creatures={pending.targets}
-                title={`🎯 ${pending.effectType === 'tap' ? 'Virar' : 'Escolher'} — Escolha uma criatura`}
+                title={`🎯 ${pending.effectType === 'tap' ? 'Tap' : 'Choose'} — Choose a creature`}
                 optional={false}
                 onConfirm={uid => uid && actions.resolveTargetChoiceSingle(uid)}
               />
@@ -1869,8 +2208,8 @@ export function GameScreen() {
             return (
               <SearchLibraryOverlay
                 candidates={pending.cards || []}
-                title="🐉 Behold — Revele um Dragão da sua mão"
-                hint="Escolha qual Dragão revelar."
+                title="🐉 Behold — Reveal a Dragon from your hand"
+                hint="Choose which Dragon to reveal."
                 optional={pending.isOptional === true}
                 onConfirm={uid => actions.resolveBeholdChoice(uid ?? null)}
               />
@@ -1884,8 +2223,8 @@ export function GameScreen() {
             return (
               <SearchLibraryOverlay
                 candidates={pending.cards || []}
-                title={`🏔️ ${pending.landName} — Esconder`}
-                hint="Escolha uma carta para exilar com a terra (ativável depois)."
+                title={`🏔️ ${pending.landName} — Hideaway`}
+                hint="Choose a card to exile with the land (activatable later)."
                 optional={false}
                 onConfirm={uid => {
                   if (uid) actions.resolveHideaway(uid);
@@ -1915,14 +2254,22 @@ export function GameScreen() {
       })()}
 
       {/* ── Targeting prompt banner (player-initiated) ── */}
-      {targeting && (
-        <TargetingPrompt
-          spell={targeting.card}
-          validTargets={getValidTargets(targeting.card)}
-          onTarget={() => {}}
-          onCancel={() => setTargeting(null)}
-        />
-      )}
+      {targeting && (() => {
+        // Multi-step: show step-specific prompt and filter targets accordingly
+        const currentStep = targeting.steps && targeting.step ? targeting.steps[targeting.step - 1] : null;
+        const stepFilter = currentStep?.side;
+        const promptSpell = currentStep
+          ? { ...targeting.card, _targetPromptOverride: `${targeting.card.name}: ${currentStep.prompt}` }
+          : targeting.card;
+        return (
+          <TargetingPrompt
+            spell={promptSpell}
+            validTargets={getValidTargets(targeting.card, stepFilter)}
+            onTarget={() => {}}
+            onCancel={() => setTargeting(null)}
+          />
+        );
+      })()}
 
       {/* ── choose_target engine waiting (saga chapters etc.) ── */}
       {snap.waitingForInput?.type === 'choose_target' &&
@@ -1972,13 +2319,13 @@ export function GameScreen() {
               onClick={e => e.stopPropagation()}
             >
               <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 15 }}>
-                ⚔️ Equipar {equipModal.equipName}
+                ⚔️ Equip {equipModal.equipName}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-                Escolha uma criatura para equipar:
+                Choose a creature to equip:
               </div>
               {myCreatures.length === 0 ? (
-                <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Nenhuma criatura disponível.</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No creatures available.</div>
               ) : (
                 myCreatures.map((c: any) => (
                   <button
@@ -1995,7 +2342,7 @@ export function GameScreen() {
                 ))
               )}
               <button className="btn" style={{ marginTop: 8 }} onClick={() => setEquipModal(null)}>
-                Cancelar
+                Cancel
               </button>
             </div>
           </div>
@@ -2019,7 +2366,7 @@ export function GameScreen() {
               onClick={e => e.stopPropagation()}
             >
               <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 15 }}>
-                ⚔️ Quem atacar?
+                ⚔️ Who to attack?
               </div>
               {/* Attack player button */}
               <button
@@ -2030,7 +2377,7 @@ export function GameScreen() {
                   setAttackTargetPicker(null);
                 }}
               >
-                👤 Atacar o jogador
+                👤 Attack the player
               </button>
               {/* One button per opponent planeswalker */}
               {oppPlaneswalkers.map((pw: any) => (
@@ -2043,7 +2390,7 @@ export function GameScreen() {
                     setAttackTargetPicker(null);
                   }}
                 >
-                  🌟 Atacar {pw.name} <span style={{ color: 'rgba(230,120,0,0.9)', fontWeight: 800 }}>★{pw._loyalty ?? '?'}</span>
+                  🌟 Attack {pw.name} <span style={{ color: 'rgba(230,120,0,0.9)', fontWeight: 800 }}>★{pw._loyalty ?? '?'}</span>
                 </button>
               ))}
               <button
@@ -2051,7 +2398,7 @@ export function GameScreen() {
                 style={{ marginTop: 4, width: '100%' }}
                 onClick={() => setAttackTargetPicker(null)}
               >
-                Cancelar
+                Cancel
               </button>
             </div>
           </div>
@@ -2071,16 +2418,16 @@ export function GameScreen() {
             onClick={e => e.stopPropagation()}
           >
             <div style={{ fontWeight: 700, fontSize: '15px', marginBottom: '10px', color: 'var(--gold)' }}>
-              Custo Adicional
+              Additional Cost
             </div>
             <div style={{ fontSize: '13px', marginBottom: '8px' }}>
-              <strong>{conditionalCostConfirm.card.name}</strong> custa{' '}
-              <span style={{ color: '#f88', fontWeight: 700 }}>{conditionalCostConfirm.extraCost} a mais</span>
+              <strong>{conditionalCostConfirm.card.name}</strong> costs{' '}
+              <span style={{ color: '#f88', fontWeight: 700 }}>{conditionalCostConfirm.extraCost} more</span>
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-              {conditionalCostConfirm.targetName} é um Dragão.
+              {conditionalCostConfirm.targetName} is a Dragon.
               <br />
-              Custo total: {conditionalCostConfirm.card.cmc + conditionalCostConfirm.extraAmount} mana.
+              Total cost: {conditionalCostConfirm.card.cmc + conditionalCostConfirm.extraAmount} mana.
             </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
               <button
@@ -2089,11 +2436,11 @@ export function GameScreen() {
                   actions.castSpell(conditionalCostConfirm.cardUid, conditionalCostConfirm.targets);
                   setConditionalCostConfirm(null);
                 }}
-              >Confirmar</button>
+              >Confirm</button>
               <button
                 className="btn btn-muted"
                 onClick={() => setConditionalCostConfirm(null)}
-              >Cancelar</button>
+              >Cancel</button>
             </div>
           </div>
         </div>
@@ -2120,7 +2467,7 @@ export function GameScreen() {
                 {card.name}
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                Como deseja conjurar esta carta?
+                How do you want to cast this card?
               </div>
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
                 {/* Cast as creature */}
@@ -2165,7 +2512,7 @@ export function GameScreen() {
                 style={{ marginTop: '10px', width: '100%', fontSize: '11px' }}
                 onClick={() => setAdventureModal(null)}
               >
-                Cancelar
+                Cancel
               </button>
             </div>
           </div>
@@ -2182,13 +2529,15 @@ export function GameScreen() {
             </div>
             {snap.stackSize === 0 && <p className="overlay-hint">Stack is empty.</p>}
             <div className="modal-modes">
-              {(gsRef.current?.stack?.items || []).slice().reverse().map((item: any, i: number) => (
-                <div key={i} className="modal-mode-btn" style={{ cursor: 'default' }}>
-                  <span className="modal-mode-num">{i + 1}</span>
-                  <span className="modal-mode-desc">
-                    {item.card?.name || item.spell?.name || item.type || 'Effect'}
-                    {item.controller !== undefined ? ` (P${item.controller})` : ''}
-                  </span>
+              {((snap as any).stackItems || []).slice().reverse().map((item: any, i: number) => (
+                <div key={i} className="stack-item" style={{ cursor: 'default' }}>
+                  {item.imageUrl && <img src={item.imageUrl} alt="" className="stack-item-img" />}
+                  <div className="stack-item-info">
+                    <div className="stack-item-name">{item.cardName}</div>
+                    <div className="stack-item-type">
+                      {item.controller === 0 ? 'You' : 'Opponent'} · {item.typeLine}
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -2240,6 +2589,63 @@ export function GameScreen() {
 
       {/* ── VFX sprite layer ── */}
       <VfxLayer />
+
+      {/* ── Arena: Exit ghosts (dying/exiled card fade-out) ── */}
+      {ghosts.map(g => (
+        <div
+          key={g.id}
+          className="exit-ghost"
+          style={{ left: g.x, top: g.y, width: g.w, height: g.h }}
+        >
+          <img src={g.imgSrc} alt="" />
+        </div>
+      ))}
+
+      {/* ── Arena: Floating damage/life numbers ── */}
+      {floats.map(f => (
+        <div
+          key={f.id}
+          className={`float-number float-${f.type}`}
+          style={{ left: f.x, top: f.y }}
+        >
+          {f.value}
+        </div>
+      ))}
+
+      {/* ── Arena: Spell cast center zoom ── */}
+      {castingCard && (
+        <>
+          <div className="cast-zoom-glow" />
+          <div className="cast-zoom-overlay">
+            <img src={castingCard.image_normal || castingCard.image_small} alt={castingCard.name} />
+          </div>
+        </>
+      )}
+
+      {/* ── Arena: Combat edge flash ── */}
+      {combatFlash && <div className="combat-edge-flash" />}
+
+      {/* ── Arena: Targeting arrow ── */}
+      {targeting && (
+        <svg style={{ position: 'fixed', inset: 0, zIndex: 240, pointerEvents: 'none', width: '100vw', height: '100vh' }}>
+          <defs>
+            <linearGradient id="tgt-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#f0c040" />
+              <stop offset="100%" stopColor="#e74c3c" />
+            </linearGradient>
+            <marker id="tgt-arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+              <polygon points="0 0, 10 3.5, 0 7" fill="#f0c040" />
+            </marker>
+          </defs>
+          <line
+            ref={targetArrowRef}
+            x1={0} y1={0} x2={0} y2={0}
+            stroke="url(#tgt-grad)" strokeWidth={3}
+            className="targeting-arrow-line"
+            markerEnd="url(#tgt-arrow)"
+          />
+        </svg>
+      )}
     </div>
   );
 }
@@ -2257,12 +2663,14 @@ interface BFCardProps {
   canActivate?: boolean; // planeswalker: can use loyalty ability this turn
   overrideArtUrl?: string; // For land art override
   isAutoTapPreview?: boolean; // Highlight: would be auto-tapped for hovered hand card
+  isRecentlyEntered?: boolean; // Arena ETB animation
+  isTriggerPulsing?: boolean; // Arena trigger pulse glow
   onClick?: (card: any) => void;
   onDoubleClick?: (card: any) => void;
   onRightClick: (card: any) => void;
 }
 
-function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, onClick, onDoubleClick, onRightClick }: BFCardProps) {
+function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, isRecentlyEntered, isTriggerPulsing, onClick, onDoubleClick, onRightClick }: BFCardProps) {
   const isLand = card.type_line?.includes('Land');
   const isCreature = card.type_line?.includes('Creature');
   const isPlaneswalkerCard = card.type_line?.includes('Planeswalker');
@@ -2291,6 +2699,8 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
         ${isAssignedBlocker ? 'assigned-blocker' : ''}
         ${isSelectedBlocker ? 'targetable' : ''}
         ${isAutoTapPreview ? 'auto-tap-preview' : ''}
+        ${isRecentlyEntered ? 'card-entering' : ''}
+        ${isTriggerPulsing ? 'trigger-pulse' : ''}
       `}
       onClick={() => onClick?.(card)}
       onDoubleClick={() => onDoubleClick?.(card)}
@@ -2299,9 +2709,7 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
       {card._isToken && !(overrideArtUrl || card.image_normal || card.image_small) ? (
         <div className="bf-token-placeholder">
           <span className="bf-token-icon">
-            {({'Dragon':'🐉','Spirit':'👻','Warrior':'⚔️','Treasure':'💎','Soldier':'🛡','Goblin':'👹','Zombie':'🧟','Monk':'🥋','Bird':'🦅','Elephant':'🐘','Wolf':'🐺','Faerie':'🧚','Snake':'🐍'} as any)[card.name]
-              || ({'Dragon':'🐉','Spirit':'👻','Warrior':'⚔️','Treasure':'💎','Soldier':'🛡','Goblin':'👹','Zombie':'🧟','Monk':'🥋','Bird':'🦅','Elephant':'🐘','Wolf':'🐺','Faerie':'🧚','Snake':'🐍'} as any)[(card.name || '').split(' ')[0]]
-              || '★'}
+            {TOKEN_ICONS[card.name] || TOKEN_ICONS[(card.name || '').split(' ')[0]] || '★'}
           </span>
           <span className="bf-token-name">{card.name}</span>
         </div>

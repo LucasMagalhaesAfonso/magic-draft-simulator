@@ -13,6 +13,32 @@ const STACK_PART1  = path.join(ROOT, 'src/engine/stack-part1.ts');
 const STACK_PART2  = path.join(ROOT, 'src/engine/stack-part2.ts');
 const GAME_STATE   = path.join(ROOT, 'src/engine/game-state.ts');
 const AI_PART2     = path.join(ROOT, 'src/engine/game-ai-part2.ts');
+const SCRYFALL_TDM = path.join(ROOT, 'legacy-pure-js/js/data/scryfall-tdm.json');
+
+// ─── Load Scryfall oracle text ─────────────────────────────────────────────
+function loadOracleTexts() {
+  const oracleMap = {}; // lowercase name → oracle_text
+  try {
+    const raw = fs.readFileSync(SCRYFALL_TDM, 'utf8');
+    const jsonStart = raw.indexOf('{');
+    const data = JSON.parse(raw.slice(jsonStart));
+    for (const card of (data.cards || [])) {
+      const name = (card.name || '').toLowerCase();
+      const oracle = card.oracle_text || '';
+      oracleMap[name] = oracle;
+      // Also index card_faces for adventure/DFC
+      if (card.card_faces) {
+        for (const face of card.card_faces) {
+          const faceName = (face.name || '').toLowerCase();
+          if (faceName) oracleMap[faceName] = face.oracle_text || oracle;
+        }
+      }
+    }
+  } catch (e) {
+    // Scryfall JSON not available — checks A/B that need it will be skipped
+  }
+  return oracleMap;
+}
 
 // ─── Parse card-effects.ts ──────────────────────────────────────────────────
 function parseCardEffects() {
@@ -190,8 +216,54 @@ function getKnownConditions() {
   return conditions;
 }
 
+// ─── CHECK A: P/T condicional no oracle text ──────────────────────────────
+// Se o oracle text tem "during your turn, this creature has base power and toughness X/Y",
+// o card DEVE ter static: [{ type: "conditional_buff", condition: "your_turn" }]
+function checkA_ConditionalPT(cardInfo, oracleText) {
+  if (!oracleText) return null;
+  const oracle = oracleText.toLowerCase();
+
+  // Padrão: "during your turn, this creature has base power and toughness"
+  const hasDuringYourTurnPT = /during your turn[^.]*(?:has base|gets|becomes) [^.]*(?:power and toughness|\d+\/\d+)/i.test(oracle);
+  if (!hasDuringYourTurnPT) return null;
+
+  // Verificar se tem conditional_buff com your_turn no DB
+  const blob = cardInfo.raw;
+  const hasConditionalBuff = /type\s*:\s*["']conditional_buff["']/.test(blob);
+  const hasYourTurnCond    = /condition\s*:\s*["']your_turn["']/.test(blob);
+
+  if (!hasConditionalBuff || !hasYourTurnCond) {
+    return `❌ [CHECK-A] Oracle: "during your turn, base P/T changes" → DB deve ter static conditional_buff com condition:"your_turn" (tem conditional_buff:${hasConditionalBuff}, your_turn:${hasYourTurnCond})`;
+  }
+  return null; // OK
+}
+
+// ─── CHECK B: Spell com dois alvos em lados opostos ───────────────────────
+// Se um cast: array tem effect com target:"own_creature" E outro com target:"opponent_creature"
+// (ou type:"fight"), a UI de targeting single-step vai selecionar o alvo errado para um dos efeitos.
+// Esses spells precisam de two-step targeting ou lógica especial no stack.
+function checkB_TwoSidedTargets(cardInfo) {
+  const blob = cardInfo.raw;
+  if (!cardInfo.hasCast) return null;
+
+  // Extrair o bloco cast: [...] para analisar isoladamente
+  const castMatch = blob.match(/cast\s*:\s*\[[\s\S]*?\](?=\s*[,}])/);
+  if (!castMatch) return null;
+  const castBlob = castMatch[0];
+
+  const hasOwnTarget = /target\s*:\s*["']own_creature["']/.test(castBlob);
+  const hasOppTarget = /target\s*:\s*["']opponent_creature["']/.test(castBlob);
+  const hasFight     = /type\s*:\s*["']fight["']/.test(castBlob);
+
+  // "own_creature" + "opponent_creature" OU "own_creature" + "fight"
+  if (hasOwnTarget && (hasOppTarget || hasFight)) {
+    return `⚠️  [CHECK-B] Cast tem alvos em lados opostos (own_creature + ${hasFight ? 'fight' : 'opponent_creature'}). UI single-step vai aplicar buff/efeito no alvo errado. Verificar se getMultiTargetSteps() cobre este card.`;
+  }
+  return null;
+}
+
 // ─── AUDIT ───────────────────────────────────────────────────────────────────
-function auditCard(cardInfo, knownEffects, knownEvents, aiCoverage, knownConditions) {
+function auditCard(cardInfo, knownEffects, knownEvents, aiCoverage, knownConditions, oracleTexts) {
   const issues = [];
   const warnings = [];
   const ok = [];
@@ -284,6 +356,21 @@ function auditCard(cardInfo, knownEffects, knownEvents, aiCoverage, knownConditi
     }
   }
 
+  // ── Check A: P/T condicional (oracle text → DB) ──────────────────────────
+  const oracleText = oracleTexts ? (oracleTexts[cardInfo.name] || '') : '';
+  const checkAResult = checkA_ConditionalPT(cardInfo, oracleText);
+  if (checkAResult) {
+    issues.push(checkAResult);
+  } else if (oracleText && /during your turn/i.test(oracleText)) {
+    ok.push('✅ [CHECK-A] conditional_buff your_turn presente');
+  }
+
+  // ── Check B: Cast com dois alvos em lados opostos ────────────────────────
+  const checkBResult = checkB_TwoSidedTargets(cardInfo);
+  if (checkBResult) {
+    warnings.push(checkBResult);
+  }
+
   return { issues, warnings, ok };
 }
 
@@ -296,11 +383,13 @@ function main() {
   const knownEvents = getKnownTriggerEvents();
   const aiCoverage = getAITargetingCoverage();
   const knownConditions = getKnownConditions();
+  const oracleTexts = loadOracleTexts();
 
   console.log(`  Stack effect types: ${knownEffects.size}`);
   console.log(`  Known trigger events: ${knownEvents.size}`);
   console.log(`  AI targeting cases: ${aiCoverage.size}`);
   console.log(`  Known conditions: ${knownConditions.size}`);
+  console.log(`  Oracle texts loaded: ${Object.keys(oracleTexts).length} (for checks A/B)`);
 
   console.log('\nParsing card-effects.ts...');
   const cards = parseCardEffects();
@@ -324,7 +413,7 @@ function main() {
 
   for (const name of toAudit) {
     const info = cards[name];
-    const { issues, warnings } = auditCard(info, knownEffects, knownEvents, aiCoverage, knownConditions);
+    const { issues, warnings } = auditCard(info, knownEffects, knownEvents, aiCoverage, knownConditions, oracleTexts);
 
     if (issues.length > 0 || warnings.length > 0) {
       cardsWithIssues++;

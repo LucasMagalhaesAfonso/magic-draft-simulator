@@ -4,7 +4,7 @@
 
 .game-screen {
   display: grid;
-  grid-template-rows: 48px 1fr 80px 1fr 150px;
+  grid-template-rows: 48px minmax(110px, 1fr) 80px minmax(110px, 1fr) 150px;
   height: 100%;
   background: var(--bg-primary);
   overflow: hidden;
@@ -62,7 +62,7 @@
   color: white;
   font-size: 11px;
   font-weight: 700;
-  animation: pulse 1.5s ease infinite;
+  animation: pulseActive 1.5s ease infinite;
 }
 
 .game-active-indicator.mine {
@@ -70,7 +70,7 @@
   color: #000;
 }
 
-@keyframes pulse {
+@keyframes pulseActive {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
 }
@@ -100,6 +100,44 @@
   background-size: cover;
   background-position: center;
   transition: background 0.4s ease;
+  position: relative;
+}
+
+/* ── Library stack visual ── */
+.library-stack-visual {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  z-index: 10;
+  cursor: default;
+}
+.library-card-stack {
+  position: relative;
+  width: 52px;
+  height: 72px;
+}
+.lib-card {
+  position: absolute;
+  width: 52px;
+  height: 72px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,0.2);
+}
+.lib-card-3 { transform: rotate(-4deg) translate(-2px, -2px); }
+.lib-card-2 { transform: rotate(-2deg) translate(-1px, -1px); }
+.lib-card-1 { transform: rotate(0deg); }
+.library-count-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0,0,0,0.7);
+  border-radius: 10px;
+  padding: 1px 6px;
 }
 
 /* ── Battlefield rows: creatures top, lands bottom ── */
@@ -376,10 +414,12 @@
 }
 
 .game-ai-thinking {
-  font-size: 11px;
-  color: var(--accent);
-  font-style: italic;
-  animation: pulse 1.5s ease infinite;
+  font-size: 13px;
+  color: var(--gold);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-shadow: 0 0 8px rgba(240, 192, 64, 0.4);
+  animation: pulse 1.2s ease infinite;
 }
 
 .game-mana-pool {
@@ -787,6 +827,11 @@
 .bf-card.bf-planeswalker {
   border: 2px solid rgba(230,120,0,0.7);
   box-shadow: 0 0 8px rgba(230,120,0,0.3);
+  /* Ensure art/name visible even if card is cut off vertically */
+  align-self: flex-start;
+}
+.bf-card.bf-planeswalker img {
+  object-position: top center;
 }
 
 /* ── Planeswalker can-activate glow ── */
@@ -844,4 +889,234 @@
   background: rgba(0,0,0,0.5);
   padding: 2px 5px;
   border-radius: 4px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Arena-like Visual Polish — Keyframes & Styles
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Keyframes ── */
+
+@keyframes cardEtbAppear {
+  0%   { opacity: 0; filter: brightness(2.5) saturate(1.5); }
+  40%  { opacity: 1; filter: brightness(1.5) saturate(1.2); }
+  100% { opacity: 1; filter: brightness(1) saturate(1); }
+}
+
+@keyframes cardExitFade {
+  0%   { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(0.4) translateY(-30px); opacity: 0; }
+}
+
+@keyframes handDrawIn {
+  0%   { transform: translateX(60px) scale(0.7); opacity: 0; }
+  100% { transform: translateX(0) scale(1); opacity: 1; }
+}
+
+@keyframes floatUp {
+  0%   { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-50px); opacity: 0; }
+}
+
+@keyframes castZoom {
+  0%   { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+  20%  { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+  60%  { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+}
+
+@keyframes castGlow {
+  0%   { opacity: 0; }
+  20%  { opacity: 1; }
+  60%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes triggerPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(240, 192, 64, 0); }
+  50%  { box-shadow: 0 0 20px 8px rgba(240, 192, 64, 0.8); }
+  100% { box-shadow: 0 0 0 0 rgba(240, 192, 64, 0); }
+}
+
+@keyframes phaseActivate {
+  0%   { box-shadow: 0 0 8px rgba(108,92,231,0.4); }
+  50%  { box-shadow: 0 0 20px rgba(108,92,231,0.9), 0 0 40px rgba(108,92,231,0.4); }
+  100% { box-shadow: 0 0 8px rgba(108,92,231,0.4); }
+}
+
+@keyframes combatEdgeFlash {
+  0%   { opacity: 0.7; }
+  100% { opacity: 0; }
+}
+
+@keyframes stackSlideIn {
+  0%   { transform: translateY(20px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* ── Battlefield Enter Animation ── */
+
+.bf-card.card-entering {
+  animation: cardEtbAppear 450ms ease-out;
+}
+
+/* ── Exit Ghost (dying/exiled card ghost) ── */
+
+.exit-ghost {
+  position: fixed;
+  z-index: 100;
+  pointer-events: none;
+  animation: cardExitFade 400ms ease-out forwards;
+}
+
+.exit-ghost img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+/* ── Hand Draw Animation ── */
+
+.game-hand-card.hand-draw-in {
+  animation: handDrawIn 400ms ease-out;
+}
+
+/* ── Floating Damage/Life Numbers ── */
+
+.float-number {
+  position: fixed;
+  z-index: 450;
+  pointer-events: none;
+  font-size: 24px;
+  font-weight: 900;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+  animation: floatUp 800ms ease-out forwards;
+  transform: translateX(-50%);
+}
+
+.float-number.float-damage { color: #e74c3c; }
+.float-number.float-heal { color: #2ecc71; }
+.float-number.float-buff { color: var(--gold); }
+
+/* ── Spell Cast Center Zoom ── */
+
+.cast-zoom-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 350;
+  animation: castZoom 900ms ease forwards;
+  pointer-events: none;
+}
+
+.cast-zoom-overlay img {
+  width: 200px;
+  border-radius: 14px;
+  box-shadow: 0 0 40px rgba(108, 92, 231, 0.6), 0 0 80px rgba(108, 92, 231, 0.3);
+}
+
+.cast-zoom-glow {
+  position: fixed;
+  inset: 0;
+  z-index: 349;
+  background: radial-gradient(circle at 50% 50%, rgba(108, 92, 231, 0.15), transparent 70%);
+  pointer-events: none;
+  animation: castGlow 900ms ease forwards;
+}
+
+/* ── Trigger Pulse on Battlefield Cards ── */
+
+.bf-card.trigger-pulse {
+  animation: triggerPulse 600ms ease !important;
+}
+
+/* ── Phase Glow (active step) ── */
+
+.game-phase-step.active {
+  animation: phaseActivate 500ms ease;
+}
+
+/* ── Combat Edge Flash ── */
+
+.combat-edge-flash {
+  position: fixed;
+  inset: 0;
+  border: 3px solid rgba(231, 76, 60, 0.7);
+  z-index: 55;
+  pointer-events: none;
+  animation: combatEdgeFlash 400ms ease forwards;
+}
+
+/* ── Stack Panel (dropdown under stack indicator) ── */
+
+.game-stack-indicator {
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+}
+
+.stack-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 200;
+  width: 260px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px;
+  border-radius: 8px;
+  scrollbar-width: thin;
+}
+
+.stack-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: rgba(255,255,255,0.05);
+  animation: stackSlideIn 200ms ease;
+}
+
+.stack-item:first-child {
+  background: rgba(108, 92, 231, 0.2);
+  border: 1px solid rgba(108, 92, 231, 0.4);
+}
+
+.stack-item-img {
+  width: 32px;
+  height: 44px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.stack-item-info {
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.stack-item-name {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.stack-item-type {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ── Targeting Arrow Animation ── */
+
+@keyframes targetArrowDash {
+  to { stroke-dashoffset: -16; }
+}
+
+.targeting-arrow-line {
+  stroke-dasharray: 8, 4;
+  animation: targetArrowDash 0.4s linear infinite;
+  filter: drop-shadow(0 0 4px rgba(240, 192, 64, 0.6));
 }

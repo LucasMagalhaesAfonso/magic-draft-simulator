@@ -1374,7 +1374,7 @@ export const CardEffectsDB: Record<string, any> = {
     static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
   "summit intimidator": {
-    etb: [{ type: "grant", keywords: ["unblockable"], target: "opponent_creature", duration: "end_of_turn" }],
+    etb: [{ type: "cant_block", target: "opponent_creature" }],
     static: [{ type: "has_keyword", keywords: ["reach"] }]
   },
   "skirmish rhino": {

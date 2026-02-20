@@ -2270,6 +2270,30 @@ export function dispatch(
     case 'grant':
       handleGrant(state, effect, card, controller, targets, log);
       return null;
+    case 'cant_block': {
+      // Summit Intimidator: "target creature can't block this turn"
+      const cbOpponent = controller === 0 ? 1 : 0;
+      if (targets && targets.length > 0) {
+        // Use explicitly chosen target
+        const cbT = targets[0];
+        const cbCreature = state.players[cbT.player].zones.battlefield.get(cbT.uid);
+        if (cbCreature && CardEngine.isCreature(cbCreature)) {
+          cbCreature._cantBlockThisTurn = true;
+          log.push(`${cbCreature.name} nao pode bloquear neste turno.`);
+        }
+      } else {
+        // Auto-pick: opponent's biggest-toughness creature (most impactful blocker to disable)
+        const cbTargetId = effect.target === 'self' ? controller : cbOpponent;
+        const cbCreatures = state.players[cbTargetId].zones.battlefield.cards
+          .filter((c: any) => CardEngine.isCreature(c) && !c._cantBlockThisTurn);
+        if (cbCreatures.length > 0) {
+          cbCreatures.sort((a: any, b: any) => CardEngine.getToughness(b) - CardEngine.getToughness(a));
+          cbCreatures[0]._cantBlockThisTurn = true;
+          log.push(`${cbCreatures[0].name} nao pode bloquear neste turno.`);
+        }
+      }
+      return null;
+    }
     case 'register_temp_trigger':
       handleRegisterTempTrigger(state, effect, card, controller, log);
       return null;

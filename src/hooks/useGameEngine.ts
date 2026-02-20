@@ -322,10 +322,12 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
   // Mana undo tracking: stack of { uid, color } for each land tapped this priority
   const tapUndoRef = useRef<Array<{ uid: string; color: string }>>([]);
   const [canUndoMana, setCanUndoMana] = useState(false);
+  const [undoManaCount, setUndoManaCount] = useState(0);
 
   function clearManaUndo() {
     tapUndoRef.current = [];
     setCanUndoMana(false);
+    setUndoManaCount(0);
   }
 
   // Update snapshot (React re-render trigger)
@@ -734,6 +736,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
           tapUndoRef.current.push({ uid: cardUid, color: addedColor });
           setCanUndoMana(true);
+          setUndoManaCount(tapUndoRef.current.length);
         }
         refresh();
       } catch (e) {
@@ -745,6 +748,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const gs = gsRef.current;
       if (!gs || tapUndoRef.current.length === 0) return;
       const entry = tapUndoRef.current.pop();
+      setUndoManaCount(tapUndoRef.current.length);
+      if (tapUndoRef.current.length === 0) setCanUndoMana(false);
       if (entry) {
         try {
           const card = gs.players[0].zones.battlefield.get(entry.uid);
@@ -1804,5 +1809,5 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
     },
   };
 
-  return { snap, loading, error, actions, gsRef, canUndoMana };
+  return { snap, loading, error, actions, gsRef, canUndoMana, undoManaCount };
 }

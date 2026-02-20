@@ -286,6 +286,9 @@
   text-shadow: 0 1px 2px rgba(0,0,0,0.8);
 }
 
+.bf-card {
+  transition: transform 0.25s ease, box-shadow 0.15s ease;
+}
 .bf-card.tapped {
   transform: rotate(90deg);
 }
@@ -596,18 +599,56 @@
 
 /* Undo mana button */
 .btn-undo-mana {
-  background: rgba(255, 100, 60, 0.85);
+  background: rgba(255, 100, 60, 0.9);
   color: #fff;
   border: none;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 11px;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   margin-left: 6px;
   white-space: nowrap;
-  transition: background 0.15s;
+  transition: background 0.15s, transform 0.1s;
+  box-shadow: 0 2px 8px rgba(255,80,40,0.4);
 }
-.btn-undo-mana:hover { background: rgba(255, 60, 20, 1); }
+.btn-undo-mana:hover {
+  background: rgba(255, 60, 20, 1);
+  transform: scale(1.05);
+}
+
+/* ── Opponent info tooltip ── */
+.opp-info-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 8px;
+  background: rgba(10, 12, 20, 0.96);
+  border: 1px solid rgba(140, 120, 60, 0.5);
+  border-radius: 8px;
+  padding: 8px 12px;
+  z-index: 200;
+  min-width: 180px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.oit-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.oit-label {
+  font-size: 11px;
+  color: #8a7a5a;
+}
+.oit-val {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e0d0a0;
+}
 
 /* ── Hand card sizing (inside game-hand-card) ── */
 .game-hand-card .card-small {

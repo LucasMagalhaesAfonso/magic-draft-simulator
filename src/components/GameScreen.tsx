@@ -199,6 +199,7 @@ export function GameScreen() {
   const [autoPass, setAutoPass] = useState(false);
   const autoPassRef = useRef(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showOppTooltip, setShowOppTooltip] = useState(false);
   // Full Control Mode: pause at every phase transition (like Arena Ctrl)
   const [fullControl, setFullControl] = useState(false);
   const fullControlRef = useRef(false);
@@ -243,7 +244,7 @@ export function GameScreen() {
     return buildFullDeck(aiDeckData.deck, aiDeckData.lands);
   }, [deck, draftPool]);
 
-  const { snap, loading, error, actions, gsRef, canUndoMana } = useGameEngine(playerDeck, aiDeck);
+  const { snap, loading, error, actions, gsRef, canUndoMana, undoManaCount } = useGameEngine(playerDeck, aiDeck);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -318,6 +319,20 @@ export function GameScreen() {
       addToast(`🐉 Revealed: ${reveal} (stays in hand)`, 'cast');
     }
   }, [(snap as any)?._lastBeholdReveal]); // eslint-disable-line
+
+  // Hand size warning (8+ cards → reminder to discard at cleanup)
+  const prevHandSizeRef = useRef<number>(0);
+  useEffect(() => {
+    if (!snap) return;
+    const handSize = snap.players[0].hand.length;
+    const phase = snap.phase;
+    const activePlayer = snap.activePlayer;
+    // Warn when hand reaches 8 during player's own turn (before cleanup)
+    if (handSize >= 8 && handSize > prevHandSizeRef.current && activePlayer === 0 && phase !== 'cleanup') {
+      addToast(`⚠ Mão cheia (${handSize}) — descarte no cleanup!`, 'damage');
+    }
+    prevHandSizeRef.current = handSize;
+  }, [snap?.players[0].hand.length]); // eslint-disable-line
 
   // Turn banner
   useEffect(() => {
@@ -599,6 +614,10 @@ export function GameScreen() {
           // Full Control Mode toggle: pause at every phase like Arena Ctrl
           fullControlRef.current = !fullControlRef.current;
           setFullControl(v => !v);
+          break;
+        case 'g': case 'G':
+          // Toggle own graveyard
+          setGraveyardOpen(prev => prev ? null : { pid: 0 });
           break;
         case 'e': case 'E':
           // Open exile zone
@@ -1389,7 +1408,12 @@ export function GameScreen() {
     <div className="game-screen animate-fade-in">
 
       {/* ── Opponent bar ── */}
-      <div className="game-opp-bar">
+      <div
+        className="game-opp-bar"
+        onMouseEnter={() => setShowOppTooltip(true)}
+        onMouseLeave={() => setShowOppTooltip(false)}
+        style={{ position: 'relative' }}
+      >
         <div className="game-player-info">
           <span
             data-player-id="p1"
@@ -1410,6 +1434,24 @@ export function GameScreen() {
           >✨ Ex: {p1.exile?.length || 0}</span>
         </div>
         {activePlayer === 1 && <div className="game-active-indicator">AI thinking...</div>}
+        {/* Opponent info tooltip */}
+        {showOppTooltip && (() => {
+          const oppLands = p1.battlefield.filter((c: any) => c.type_line?.includes('Land'));
+          const oppUntappedLands = oppLands.filter((c: any) => !c._tapped).length;
+          const oppCreatures = p1.battlefield.filter((c: any) => c.type_line?.includes('Creature')).length;
+          const oppOther = p1.battlefield.filter((c: any) => !c.type_line?.includes('Land') && !c.type_line?.includes('Creature')).length;
+          return (
+            <div className="opp-info-tooltip">
+              <div className="oit-row"><span className="oit-label">❤️ Vida</span><span className="oit-val">{p1.life}</span></div>
+              <div className="oit-row"><span className="oit-label">🃏 Mão</span><span className="oit-val">{p1.hand.length} cartas</span></div>
+              <div className="oit-row"><span className="oit-label">📚 Deck</span><span className="oit-val">{p1.libraryCount} cartas</span></div>
+              <div className="oit-row"><span className="oit-label">☠ Cemitério</span><span className="oit-val">{p1.graveyard.length} cartas</span></div>
+              <div className="oit-row"><span className="oit-label">🐉 Criaturas</span><span className="oit-val">{oppCreatures}</span></div>
+              <div className="oit-row"><span className="oit-label">🌲 Terrenos</span><span className="oit-val">{oppLands.length} ({oppUntappedLands} livres)</span></div>
+              {oppOther > 0 && <div className="oit-row"><span className="oit-label">✨ Outros</span><span className="oit-val">{oppOther}</span></div>}
+            </div>
+          );
+        })()}
       </div>
 
       {/* ── Opponent battlefield ── */}
@@ -1572,7 +1614,7 @@ export function GameScreen() {
         </div>
 
         {/* Mana pool */}
-        {myMana.length > 0 && (
+        {(myMana.length > 0 || canUndoMana) && (
           <div className="game-mana-pool">
             {myMana.map(([color, count]) => (
               <div key={color} className="game-mana-pip">
@@ -1583,8 +1625,8 @@ export function GameScreen() {
               <button
                 className="btn-undo-mana"
                 onClick={() => actions.undoTapLand()}
-                title="Undo last mana tap"
-              >↩ Undo</button>
+                title={`Desfazer tap de terreno (${undoManaCount} tapado${undoManaCount !== 1 ? 's' : ''})`}
+              >↩ Undo {undoManaCount > 1 ? `(${undoManaCount})` : ''}</button>
             )}
           </div>
         )}

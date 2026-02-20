@@ -1204,21 +1204,22 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
   }
 
   if (phase === 'upkeep') {
-    // Opponent's upkeep — bounce before they draw, tap before they can use mana
+    // Opponent's upkeep — bounce before they draw, remove/tap before they can attack
     if (hasBounce && oppCreatures.length > 0) {
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
-      score += 5 + biggestThreat * 0.5;
+      score += 6 + biggestThreat * 0.5;
     }
     if (hasTap && oppCreatures.length > 0) {
       const untappedThreats = oppCreatures.filter(c => !c._tapped);
       if (untappedThreats.length > 0) {
         const biggestThreat = Math.max(...untappedThreats.map(c => _threatScore(c)), 0);
-        score += 4 + biggestThreat * 0.4;
+        score += 6 + biggestThreat * 0.4;
       }
     }
     if (hasRemoval && oppCreatures.length > 0) {
+      // Removal before their attack step is always valuable — baseline above threshold
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
-      score += 4 + biggestThreat * 0.5;
+      score += 6 + biggestThreat * 0.5;
     }
   }
 
@@ -1235,14 +1236,15 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
     }
     if (hasToken) score += 7;
     if (hasRemoval && oppCreatures.length > 0) {
+      // End of turn removal is safe (no tempo loss) — always worth it vs any creature
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
-      score += 3 + biggestThreat * 0.4;
+      score += 6 + biggestThreat * 0.5;
     }
     if (hasBounce && oppCreatures.length > 0) {
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
-      score += 3 + biggestThreat * 0.3;
+      score += 6 + biggestThreat * 0.3;
     }
-    if (hasTap) score += 3;
+    if (hasTap && oppCreatures.filter(c => !c._tapped).length > 0) score += 4;
   }
 
   return score;

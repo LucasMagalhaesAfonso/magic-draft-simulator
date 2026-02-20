@@ -96,6 +96,12 @@ function snapshot(gs: any) {
     waitingForInput: gs.waitingForInput,
     log: [...(gs.log || [])].slice(-50),
     stackSize: gs.stack?.items?.length ?? 0,
+    stackItems: (gs.stack?.items || []).map((item: any) => ({
+      cardName: item.card?.name || item.spell?.name || item.type || 'Effect',
+      controller: item.controller ?? -1,
+      imageUrl: item.card?.image_small || item.card?.image_normal || '',
+      typeLine: item.card?.type_line || '',
+    })),
 
     players: [
       {
@@ -217,6 +223,7 @@ export interface GameActions {
   resolveBuffChoiceAction(creatureUid: string): void;
   resolveDistributeCountersAction(creatureUid: string): void;
   resolveHandExile(cardUid: string): void;
+  resolvePlayerChoice(chosenPlayerId: number): void;
   resolveTriggerCostAction(choice: string): void;
   resolveUnlessPayAction(shouldPay: boolean): void;
 
@@ -240,6 +247,12 @@ export interface GameActions {
 
   // Search library
   resolveSearchLibrary(cardUid: string | null): void;
+
+  // ETB bounce target choice
+  resolveETBBounceTarget(targetUids: string[]): void;
+
+  // tap_creature cost choice
+  resolveActivationTapCreature(tappedUid: string | null): void;
 
   // Ramp choice
   resolveRampChoice(landUid: string, options?: any): void;
@@ -280,6 +293,17 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
   const aiRunningRef = useRef(false);
   const mountedRef = useRef(true);
 
+  // Pending timers — cleared on unmount to prevent memory leaks
+  const pendingTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  function safeTimeout(fn: () => void, ms: number) {
+    const id = setTimeout(() => {
+      pendingTimers.current.delete(id);
+      if (mountedRef.current) fn();
+    }, ms);
+    pendingTimers.current.add(id);
+    return id;
+  }
+
   // Mana undo tracking: stack of { uid, color } for each land tapped this priority
   const tapUndoRef = useRef<Array<{ uid: string; color: string }>>([]);
   const [canUndoMana, setCanUndoMana] = useState(false);
@@ -318,7 +342,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const ap = gs.activePlayer;
       if (!gs.players[ap]?.isHuman) {
         // AI's turn — brief visual delay then continue so "thinking..." shows
-        setTimeout(() => {
+        safeTimeout(() => {
           if (!gsRef.current || !_GS) return;
           _GS.reprocessCurrentPhase(gsRef.current);
           refresh();
@@ -367,7 +391,12 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
     }
 
     init();
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      // Clear all pending timers to prevent leaks
+      for (const id of pendingTimers.current) clearTimeout(id);
+      pendingTimers.current.clear();
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Actions ──────────────────────────────────────────────────────────────
@@ -466,7 +495,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const ap = gs.activePlayer;
         if (!gs.players[ap]?.isHuman && !gs.winner) {
           // Refresh once to show "AI thinking..." indicator, then process AI
-          setTimeout(() => {
+          safeTimeout(() => {
             if (!gsRef.current || !_GS) return;
             // If engine left the game mid-AI-turn waiting for something, use runAI
             if (gsRef.current.waitingForInput || gsRef.current.players[gsRef.current.activePlayer]?.isHuman === false) {
@@ -732,7 +761,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         // If AI goes first, trigger AI turn
         const ap = gs.activePlayer;
         if (!gs.players[ap]?.isHuman) {
-          setTimeout(() => runAI(), 600);
+          safeTimeout(() => runAI(), 600);
         }
       } catch (e) {
         console.warn('[keepHand] error:', e);
@@ -964,7 +993,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try { _GS.advancePhase(gs); } catch (e) { console.warn('[confirmBlockers]', e); }
       refresh();
       const ap = gs.activePlayer;
-      if (!gs.players[ap]?.isHuman) setTimeout(() => runAI(), 300);
+      if (!gs.players[ap]?.isHuman) safeTimeout(() => runAI(), 300);
     },
 
     // ── Activated abilities ─────────────────────────────────────────────────
@@ -1119,6 +1148,16 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveHandExile] error:', e); }
+    },
+
+    resolvePlayerChoice(chosenPlayerId: number) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolvePlayerChoice(gs, chosenPlayerId);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolvePlayerChoice] error:', e); }
     },
 
     resolveTriggerCostAction(choice: string) {
@@ -1425,6 +1464,38 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveHideaway]', e); }
+    },
+
+    // ── ETB bounce target (human chose which permanent to bounce) ────────────
+
+    resolveETBBounceTarget(targetUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBBounceTarget === 'function') {
+          _GS.resolveETBBounceTarget(gs, targetUids);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBBounceTarget]', e); }
+    },
+
+    // ── tap_creature cost resolution (human chose which creature to tap) ─────
+
+    resolveActivationTapCreature(tappedUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveActivationTapCreature === 'function') {
+          _GS.resolveActivationTapCreature(gs, tappedUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveActivationTapCreature]', e); }
     },
 
     // ── Search library ──────────────────────────────────────────────────────

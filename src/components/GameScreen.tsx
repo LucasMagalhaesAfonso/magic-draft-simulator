@@ -17,6 +17,7 @@ import {
 import { VfxLayer, VfxManager } from './game/VfxLayer';
 import { getLandManaColors, canPay } from '../engine/mana';
 import type { ManaPool } from '../engine/engine-types';
+import { getTokenImageUrl, preloadTokenImage } from '../engine/token-images';
 import './GameScreen.css';
 
 // ── Token icons ──────────────────────────────────────────────────────────────
@@ -25,6 +26,34 @@ const TOKEN_ICONS: Record<string, string> = {
   Goblin:'👹', Zombie:'🧟', Monk:'🥋', Bird:'🦅', Elephant:'🐘',
   Wolf:'🐺', Faerie:'🧚', Snake:'🐍',
 };
+
+// ── Battlefield token renderer (fetches real image from Scryfall) ─────────────
+// Returns whether this token has loaded a Scryfall image (via ref for parent access)
+function BfToken({ card, power, toughness }: { card: any; power: number | null; toughness: number | null }) {
+  const [imgUrl, setImgUrl] = useState<string | null>(
+    () => getTokenImageUrl(card.name),
+  );
+  useEffect(() => {
+    if (imgUrl) return;
+    preloadTokenImage(card.name, card.colors || []).then(url => {
+      if (url) setImgUrl(url);
+    });
+  }, [card.name, imgUrl]);
+
+  if (imgUrl) {
+    // Scryfall image already includes P/T printed on the card — no badge needed
+    return <img src={imgUrl} alt={card.name} loading="lazy" className="token-scryfall-img" />;
+  }
+  return (
+    <div className="bf-token-placeholder">
+      <span className="bf-token-icon">
+        {TOKEN_ICONS[card.name] || TOKEN_ICONS[(card.name || '').split(' ')[0]] || '★'}
+      </span>
+      <span className="bf-token-name">{card.name}</span>
+      {power !== null && <span className="bf-token-pt">{power}/{toughness}</span>}
+    </div>
+  );
+}
 
 // ── Phase strip config ─────────────────────────────────────────────────────────
 
@@ -1882,6 +1911,33 @@ export function GameScreen() {
             );
           }
 
+          // ── ETB bounce target (Iceridge Serpent etc.) ─────────────────────
+          case 'etb_bounce_target': {
+            const choices = (wi as any).choices || [];
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="↩ Bounce — Choose a permanent to return to hand"
+                hint="Click a permanent to bounce it to its owner's hand."
+                onConfirm={uid => uid && actions.resolveETBBounceTarget([uid])}
+              />
+            );
+          }
+
+          // ── tap_creature cost (Dragonbrood's Relic etc.) ──────────────────
+          case 'tap_creature_cost': {
+            const choices = (wi as any).choices || [];
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="⟳ Cost — Choose a creature to tap"
+                hint="Tap this creature as part of the ability cost."
+                optional
+                onConfirm={uid => actions.resolveActivationTapCreature(uid)}
+              />
+            );
+          }
+
           // ── Look top cards ───────────────────────────────────────────────
           case 'look_top_choice':
           case 'look_top_land_choice':
@@ -2707,16 +2763,12 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
       onContextMenu={e => { e.preventDefault(); onRightClick(card); }}
     >
       {card._isToken && !(overrideArtUrl || card.image_normal || card.image_small) ? (
-        <div className="bf-token-placeholder">
-          <span className="bf-token-icon">
-            {TOKEN_ICONS[card.name] || TOKEN_ICONS[(card.name || '').split(' ')[0]] || '★'}
-          </span>
-          <span className="bf-token-name">{card.name}</span>
-        </div>
+        <BfToken card={card} power={power} toughness={toughness} />
       ) : (
         <img src={overrideArtUrl || card.image_normal || card.image_small || undefined} alt={card.name} loading="lazy" />
       )}
-      {isCreature && power !== null && (
+      {/* Tokens show P/T inside BfToken placeholder; real cards show badge here */}
+      {isCreature && power !== null && !card._isToken && (
         <div className="bf-pt">{power}/{toughness}</div>
       )}
       {card._damage > 0 && <div className="bf-damage">💥{card._damage}</div>}

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect, memo } from 'react';
 import type { Card } from '../../lib/types';
+import { getTokenImageUrl, preloadTokenImage } from '../../engine/token-images';
 import './CardImage.css';
 
 interface CardImageProps {
@@ -40,7 +41,7 @@ function getTokenGradient(card: any): string {
   return `linear-gradient(160deg, ${stops})`;
 }
 
-export function CardImage({ card, size = 'medium', selected, overrideArtUrl, onClick, onRightClick, className = '' }: CardImageProps) {
+export const CardImage = memo(function CardImage({ card, size = 'medium', selected, overrideArtUrl, onClick, onRightClick, className = '' }: CardImageProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
 
@@ -48,18 +49,43 @@ export function CardImage({ card, size = 'medium', selected, overrideArtUrl, onC
   const imgSrc = overrideArtUrl || (size === 'small' ? card.image_small : card.image_normal);
   const hasImage = !!(imgSrc && imgSrc.length > 4); // ''/undefined → no image
 
+  // Token image: try cache first, then async fetch
+  const [tokenImg, setTokenImg] = useState<string | null>(
+    isToken && !hasImage ? getTokenImageUrl(card.name) : null,
+  );
+  useEffect(() => {
+    if (!isToken || hasImage || tokenImg) return;
+    preloadTokenImage(card.name, (card as any).colors || []).then(url => {
+      if (url) setTokenImg(url);
+    });
+  }, [card.name, isToken, hasImage]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
     onRightClick?.(card, e);
   }
 
-  // Tokens without images: render a styled card
+  // Tokens: if we have a fetched image, render it like a real card
+  if (isToken && !hasImage && tokenImg) {
+    return (
+      <div
+        className={`card-image card-${size} ${selected ? 'card-selected' : ''} ${className}`}
+        onClick={() => onClick?.(card)}
+        onContextMenu={handleContextMenu}
+        title={card.name}
+      >
+        <img src={tokenImg} alt={card.name} loading="lazy" className="token-scryfall-img" />
+        {selected && <div className="card-selected-overlay" />}
+      </div>
+    );
+  }
+
+  // Tokens without image yet: render emoji/gradient fallback
   if (isToken && !hasImage) {
     const keywords: string[] = (card as any).keywords || [];
     const icon = TOKEN_ICONS[card.name] || TOKEN_ICONS[(card.name || '').split(' ')[0]] || '★';
     const pt = card.power !== undefined && card.toughness !== undefined
       ? `${card.power}/${card.toughness}` : '';
-    const typeLine = (card as any).type_line || 'Token';
     const isTreasure = card.name?.toLowerCase() === 'treasure';
     return (
       <div
@@ -100,4 +126,11 @@ export function CardImage({ card, size = 'medium', selected, overrideArtUrl, onC
       {selected && <div className="card-selected-overlay" />}
     </div>
   );
-}
+}, (prev, next) =>
+  (prev.card as any)._uid === (next.card as any)._uid &&
+  prev.card.id === next.card.id &&
+  prev.size === next.size &&
+  prev.selected === next.selected &&
+  prev.overrideArtUrl === next.overrideArtUrl &&
+  prev.className === next.className
+);

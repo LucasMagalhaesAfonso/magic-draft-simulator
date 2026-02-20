@@ -600,16 +600,35 @@ export function _resolveItem(item, state) {
           const candidates = gameState.players[autoTargetPlayer].zones.battlefield.cards
             .filter(filterFn)
             .filter((c: any) => Cards.canBeTargeted(c, controller));
-          if (candidates.length > 0) {
-            candidates.sort((a: any, b: any) =>
-              (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a))
-            );
-            // Respect up_to: N for multi-bounce effects (e.g. Marang River Regent ETB up_to: 2)
+
+          if (candidates.length === 0) break; // nothing to bounce
+
+          // Human player with no pre-selected target: pause and let them choose
+          if (gameState.players[controller].isHuman && effect.up_to !== 0) {
             const maxBounce = effect.up_to || 1;
-            resolvedBounceTargets = candidates.slice(0, maxBounce).map((c: any) =>
-              ({ type: 'creature', uid: c._uid, player: autoTargetPlayer })
-            );
+            gameState._pendingETBBounce = {
+              effect, controller, cardUid: card?._uid,
+              autoTargetPlayer, filterFn: null, maxBounce,
+              // Store valid targets by uid so resolve can find them
+              validUids: candidates.map((c: any) => c._uid),
+            };
+            gameState.waitingForInput = {
+              type: 'etb_bounce_target',
+              playerId: controller,
+              choices: candidates,
+              maxBounce,
+            };
+            break; // Resume via resolveETBBounceTarget
           }
+
+          candidates.sort((a: any, b: any) =>
+            (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a))
+          );
+          // Respect up_to: N for multi-bounce effects (e.g. Marang River Regent ETB up_to: 2)
+          const maxBounce = effect.up_to || 1;
+          resolvedBounceTargets = candidates.slice(0, maxBounce).map((c: any) =>
+            ({ type: 'creature', uid: c._uid, player: autoTargetPlayer })
+          );
         }
         // Process all bounce targets (handles up_to: N)
         const bouncedUids = new Set<string>();

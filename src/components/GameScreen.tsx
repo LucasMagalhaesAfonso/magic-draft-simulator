@@ -13,7 +13,7 @@ import {
   LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
-  BounceMultiOverlay,
+  BounceMultiOverlay, DistributeCountersOverlay,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
 import { getLandManaColors, canPay } from '../engine/mana';
@@ -46,13 +46,18 @@ function getTokenBg(colors: string[] | undefined): string {
 
 // ── Battlefield token renderer (fetches real image from Scryfall) ─────────────
 function BfToken({ card, power, toughness }: { card: any; power: number | null; toughness: number | null }) {
-  const [imgUrl, setImgUrl] = useState<string | null>(
-    () => getTokenImageUrl(card.name),
-  );
+  const [imgUrl, setImgUrl] = useState<string | null>(() => {
+    const cached = getTokenImageUrl(card.name);
+    if (cached) card.image_normal = cached; // sync cache hit: write immediately
+    return cached;
+  });
   useEffect(() => {
     if (imgUrl) return;
     preloadTokenImage(card.name, card.colors || []).then(url => {
-      if (url) setImgUrl(url);
+      if (url) {
+        setImgUrl(url);
+        card.image_normal = url; // Write back so right-click zoom finds the image
+      }
     });
   }, [card.name, imgUrl]);
 
@@ -1898,19 +1903,20 @@ export function GameScreen() {
             );
           }
 
-          // ── Distribute counters (pick creature to receive all counters) ──
+          // ── Distribute counters — multi-click UI ──────────────────────────
           case 'distribute_counters': {
             const pending = gs?._pendingDistribute;
             const creatures = pending
               ? snap.players[0].battlefield.filter((c: any) => c.type_line?.includes('Creature'))
               : [];
-            return (
-              <CreatureChoiceOverlay
+            return pending ? (
+              <DistributeCountersOverlay
                 creatures={creatures}
-                title={`🎯 Distribute — Choose Creature (+${pending?.amount || 0} ${pending?.counter || '+1/+1'})`}
-                onConfirm={uid => uid && actions.resolveDistributeCountersAction(uid)}
+                totalAmount={pending.amount || 1}
+                counterType={pending.counter || '+1/+1'}
+                onConfirm={dist => actions.resolveDistributeCountersAction(dist)}
               />
-            );
+            ) : null;
           }
 
           // ── Sacrifice choice ─────────────────────────────────────────────
@@ -1960,6 +1966,30 @@ export function GameScreen() {
                 title="↩ Bounce — Choose a permanent to return to hand"
                 hint="Click a permanent to bounce it to its owner's hand."
                 onConfirm={uid => uid && actions.resolveETBBounceTarget([uid])}
+              />
+            );
+          }
+
+          // ── ETB tap target (Constrictor Sage etc.) ────────────────────────
+          case 'etb_tap_target': {
+            const choices = (wi as any).choices || [];
+            const maxTap = (wi as any).maxTap || 1;
+            if (maxTap > 1) {
+              return (
+                <BounceMultiOverlay
+                  permanents={choices}
+                  maxBounce={maxTap}
+                  title={`⟳ Tap — Choose up to ${maxTap} creatures to tap`}
+                  onConfirm={uids => actions.resolveETBTapTarget(uids)}
+                />
+              );
+            }
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="⟳ Tap — Choose a creature to tap"
+                hint="Click a creature to tap it."
+                onConfirm={uid => actions.resolveETBTapTarget(uid ? [uid] : [])}
               />
             );
           }

@@ -3817,16 +3817,35 @@ export function resolveBuffChoice(state, creatureUid) {
     state.waitingForInput = null;
   }
 
-export function resolveDistributeCounters(state, creatureUid) {
+// Accepts a distribution map { [creatureUid]: count } from the new DistributeCountersOverlay
+// Falls back to legacy single-uid string for backwards compatibility
+export function resolveDistributeCounters(state, distribution: Record<string, number> | string) {
     if (!state._pendingDistribute) return;
-    const { amount, counter, controller } = state._pendingDistribute;
-    const creature = state.players[controller].zones.battlefield.get(creatureUid);
-    if (!creature || !CardEngine.isCreature(creature)) return;
-    if (!creature._counters) creature._counters = { '+1/+1': 0, '-1/-1': 0 };
-    creature._counters[counter] = (creature._counters[counter] || 0) + amount;
-    state.log.push(`${creature.name} receives ${amount} ${counter} counter(s).`);
+    const { counter, controller } = state._pendingDistribute;
     state._pendingDistribute = null;
     state.waitingForInput = null;
+
+    // Legacy: single uid string → put all counters on that creature
+    if (typeof distribution === 'string') {
+      const creature = state.players[controller].zones.battlefield.get(distribution);
+      if (!creature || !CardEngine.isCreature(creature)) return;
+      if (!creature._counters) creature._counters = {};
+      creature._counters[counter] = (creature._counters[counter] || 0) + 1;
+      state.log.push(`${creature.name} receives 1 ${counter} counter.`);
+      return;
+    }
+
+    // New: map of uid → count
+    for (const [uid, count] of Object.entries(distribution)) {
+      if (!count || count <= 0) continue;
+      const creature = state.players[controller].zones.battlefield.get(uid);
+      if (!creature || !CardEngine.isCreature(creature)) continue;
+      if (!creature._counters) creature._counters = {};
+      creature._counters[counter] = (creature._counters[counter] || 0) + count;
+      state.log.push(`${creature.name} receives ${count} ${counter} counter(s).`);
+      GameState.fireTrigger(state, 'counter_placed', { cardUid: creature._uid, card: creature, controllerId: controller });
+    }
+    _afterResolve(state);
   }
 
 export function resolveMultiBuffChoice(state) {
@@ -3886,6 +3905,34 @@ export function resolveETBBounceTarget(state: any, targetUids: string[]): void {
         const owner = perm._owner ?? perm._controller;
         state.players[owner].zones.hand.add(perm);
         state.log.push(`${perm.name} devolvida à mão.`);
+      }
+    }
+  }
+  _afterResolve(state);
+}
+
+  // ── ETB Tap target resolution (human chose which creature(s) to tap) ─────────
+export function resolveETBTapTarget(state: any, targetUids: string[]): void {
+  const pending = state._pendingETBTap;
+  if (!pending) return;
+  state._pendingETBTap = null;
+  state.waitingForInput = null;
+
+  const controller = pending.controller;
+  for (const uid of targetUids) {
+    for (const p of state.players) {
+      const bf = p.zones.battlefield;
+      const creature = bf.get(uid);
+      if (!creature) continue;
+      if (!CardEngine.canBeTargeted(creature, controller)) {
+        state.log.push(`${creature.name} can't be targeted.`);
+        continue;
+      }
+      const wasTapped = creature._tapped;
+      creature._tapped = true;
+      state.log.push(`${creature.name} is tapped.`);
+      if (!wasTapped) {
+        GameState.fireTrigger(state, 'becomes_tapped', { cardUid: creature._uid, card: creature, controllerId: pending.targetPid });
       }
     }
   }
@@ -5659,7 +5706,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
 
         // If ETB set waitingForInput (search_library, scry, surveil, confirm_optional, etc.), pause here
         // The game will resume after the human player completes their input
-        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost'];
+        const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost', 'etb_tap_target'];
         if (state.waitingForInput && _etbPauseTypes.includes(state.waitingForInput.type)) {
           return { success: true, waitForInput: true };
         }

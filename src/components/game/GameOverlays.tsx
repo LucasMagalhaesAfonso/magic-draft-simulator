@@ -464,6 +464,71 @@ export function BounceMultiOverlay({ permanents, maxBounce, title, onConfirm }: 
   );
 }
 
+// ─── Distribute Counters Overlay ─────────────────────────────────────────────
+// Click creature to assign +1 counter, click again to remove. Budget tracked.
+interface DistributeCountersOverlayProps {
+  creatures: any[]; totalAmount: number; counterType?: string;
+  onConfirm: (distribution: Record<string, number>) => void;
+}
+export function DistributeCountersOverlay({ creatures, totalAmount, counterType = '+1/+1', onConfirm }: DistributeCountersOverlayProps) {
+  const [dist, setDist] = useState<Record<string, number>>({});
+  const spent = Object.values(dist).reduce((a, b) => a + b, 0);
+  const remaining = totalAmount - spent;
+
+  const add = (uid: string) => {
+    if (remaining <= 0) return;
+    setDist(prev => ({ ...prev, [uid]: (prev[uid] || 0) + 1 }));
+  };
+  const remove = (uid: string) => {
+    setDist(prev => {
+      const cur = prev[uid] || 0;
+      if (cur <= 0) return prev;
+      const next = { ...prev, [uid]: cur - 1 };
+      if (next[uid] === 0) delete next[uid];
+      return next;
+    });
+  };
+
+  return (
+    <div className="overlay-backdrop">
+      <div className="overlay-panel glass">
+        <h3 className="overlay-title">⬆ Distribute {counterType} Counters</h3>
+        <p className="overlay-hint">
+          Click to add a counter · Right-click to remove · Budget: <strong>{remaining}/{totalAmount}</strong> remaining
+        </p>
+        <div className="scry-cards">
+          {creatures.map((c: any, i: number) => {
+            const count = dist[c._uid] || 0;
+            return (
+              <div
+                key={c._uid || i}
+                className={`scry-card-slot${count > 0 ? ' scry-card-selected' : ''}`}
+                onClick={() => add(c._uid)}
+                onContextMenu={e => { e.preventDefault(); remove(c._uid); }}
+              >
+                <CardImage card={c} size="medium" />
+                <div className="scry-card-label">{c.name} {c.power}/{c.toughness}</div>
+                {count > 0 && <div className="bounce-selected-badge">+{count}</div>}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(dist)} disabled={spent === 0}>
+            Confirm ({spent}/{totalAmount})
+          </button>
+          {spent < totalAmount && spent > 0 && (
+            <button className="btn btn-muted" onClick={() => onConfirm(dist)}>Use Fewer</button>
+          )}
+          {spent === 0 && (
+            <button className="btn btn-muted" onClick={() => onConfirm({})}>Skip</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Look Top Overlay ─────────────────────────────────────────────────────────
 interface LookTopOverlayProps {
   cards: any[]; pickCount?: number; title?: string; hint?: string;

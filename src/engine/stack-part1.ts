@@ -1762,6 +1762,27 @@ export function _resolveItem(item, state) {
               log.push(...tapLogs);
             }
           }
+        } else if (effect.target && effect.target !== 'all_opponent_creatures') {
+          // ETB tap with no pre-selected targets — auto-target for AI, pause for human
+          const tapOpponent = effect.target === 'own_creature' ? controller : opponent;
+          const tapCandidates = gameState.players[tapOpponent].zones.battlefield.cards
+            .filter((c: any) => Cards.isCreature(c) && !c._tapped && Cards.canBeTargeted(c, controller));
+          if (tapCandidates.length === 0) break;
+          const maxTap = effect.up_to || 1;
+          if (gameState.players[controller].isHuman) {
+            gameState._pendingETBTap = { effect, controller, cardUid: card?._uid, targetPid: tapOpponent, maxTap };
+            gameState.waitingForInput = { type: 'etb_tap_target', playerId: controller, choices: tapCandidates, maxTap };
+            break;
+          }
+          // AI: tap highest-threat untapped creatures
+          tapCandidates.sort((a: any, b: any) =>
+            (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a))
+          );
+          for (const c of tapCandidates.slice(0, maxTap)) {
+            c._tapped = true;
+            log.push(`${c.name} is tapped.`);
+            GameState.fireTrigger(gameState, 'becomes_tapped', { cardUid: c._uid, card: c, controllerId: tapOpponent });
+          }
         }
         break;
       }

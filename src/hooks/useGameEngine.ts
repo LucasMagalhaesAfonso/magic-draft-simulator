@@ -221,7 +221,7 @@ export interface GameActions {
   resolveMillLand(choice: string): void;
   resolveBlight(creatureUid: string): void;
   resolveBuffChoiceAction(creatureUid: string): void;
-  resolveDistributeCountersAction(creatureUid: string): void;
+  resolveDistributeCountersAction(distribution: Record<string, number>): void;
   resolveHandExile(cardUid: string): void;
   resolvePlayerChoice(chosenPlayerId: number): void;
   resolveTriggerCostAction(choice: string): void;
@@ -253,6 +253,9 @@ export interface GameActions {
 
   // ETB destroy target choice
   resolveETBDestroyTarget(targetUid: string | null): void;
+
+  // ETB tap target choice
+  resolveETBTapTarget(targetUids: string[]): void;
 
   // tap_creature cost choice
   resolveActivationTapCreature(tappedUid: string | null): void;
@@ -1132,11 +1135,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveBuffChoiceAction] error:', e); }
     },
 
-    resolveDistributeCountersAction(creatureUid: string) {
+    resolveDistributeCountersAction(distribution: Record<string, number>) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
-        _GS.resolveDistributeCounters(gs, creatureUid);
+        _GS.resolveDistributeCounters(gs, distribution);
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveDistributeCounters] error:', e); }
@@ -1499,6 +1502,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveETBBounceTarget]', e); }
+    },
+
+    // ── ETB tap target (human chose which creature(s) to tap) ─────────────────
+
+    resolveETBTapTarget(targetUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBTapTarget === 'function') {
+          _GS.resolveETBTapTarget(gs, targetUids);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBTapTarget]', e); }
     },
 
     // ── tap_creature cost resolution (human chose which creature to tap) ─────

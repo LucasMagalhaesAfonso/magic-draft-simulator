@@ -475,7 +475,7 @@ export function _chooseTargets(state, playerId, card) {
           }
           break;
         }
-        if (tgt === 'enchantment' || tgt === 'artifact' || tgt === 'artifact_or_enchantment') {
+        if (tgt === 'enchantment' || tgt === 'artifact' || tgt === 'artifact_or_enchantment' || tgt === 'opponent_artifact_or_enchantment') {
           const opNonCreatures = state.players[opponentId].zones.battlefield.cards
             .filter(c => {
               if (!CardEngine.canBeTargeted(c, playerId)) return false;
@@ -485,8 +485,9 @@ export function _chooseTargets(state, playerId, card) {
             })
             .sort((a, b) => _threatScore(b) - _threatScore(a));
           if (opNonCreatures.length > 0) {
-            targets.push({ type: 'creature', player: opponentId, uid: opNonCreatures[0]._uid });
+            targets.push({ type: 'permanent', player: opponentId, uid: opNonCreatures[0]._uid });
           }
+          // optional: if no valid target, don't push anything (caller will skip)
           break;
         }
         if (tgt === 'noncreature_permanent' || tgt === 'nonland_permanent') {

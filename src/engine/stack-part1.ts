@@ -383,6 +383,7 @@ export function _resolveItem(item, state) {
           let validChoices: { c: any; pid: number }[] = [];
           if (tgt === 'artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact'));
           else if (tgt === 'enchantment') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Enchantment'));
+          else if (tgt === 'opponent_artifact_or_enchantment') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && (Cards.isArtifact(c) || Cards.isEnchantment(c)) && Cards.canBeTargeted(c, controller));
           else if (tgt === 'creature_with_flying') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.hasKeyword(c, 'Flying') && Cards.canBeTargeted(c, controller));
           else if (tgt === 'noncreature_artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
           else if (tgt === 'creature_power4+') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.isCreature(c) && Cards.getPower(c) >= 4 && Cards.canBeTargeted(c, controller));

@@ -1494,7 +1494,6 @@ export function GameScreen() {
                   <img className="lib-card lib-card-3" src={CARD_BACK} alt="deck" />
                   <img className="lib-card lib-card-2" src={CARD_BACK} alt="deck" />
                   <img className="lib-card lib-card-1" src={CARD_BACK} alt="deck" />
-                  <div className="lib-shield-badge">🛡</div>
                 </div>
               </div>
               {/* Cemitério do oponente */}
@@ -1762,7 +1761,6 @@ export function GameScreen() {
                   <img className="lib-card lib-card-3" src={CARD_BACK} alt="deck" />
                   <img className="lib-card lib-card-2" src={CARD_BACK} alt="deck" />
                   <img className="lib-card lib-card-1" src={CARD_BACK} alt="deck" />
-                  <div className="lib-shield-badge">🛡</div>
                 </div>
                 <span className="zone-count-badge">{p0.libraryCount}</span>
               </div>

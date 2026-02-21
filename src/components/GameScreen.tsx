@@ -157,7 +157,11 @@ export function GameScreen() {
 
   const [showLog, setShowLog] = useState(false);
   const [zoom, setZoom] = useState<any>(null);
+  const [zoomModified, setZoomModified] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+
+  // Reset modified view when zoom target changes
+  useEffect(() => setZoomModified(false), [zoom]);
 
   // ── Overlay states ────────────────────────────────────────────────────────
   const [graveyardOpen, setGraveyardOpen] = useState<{ pid: number } | null>(null);
@@ -227,6 +231,8 @@ export function GameScreen() {
   const prevPhaseRef = useRef<string | null>(null);
   // Target arrow
   const targetArrowRef = useRef<SVGLineElement>(null);
+  // Floating mana pip animations (on land tap)
+  const [floatingManas, setFloatingManas] = useState<{ id: string; color: string; x: number; y: number }[]>([]);
 
   // Build decks for the engine (memoized — only recompute when deck/pool changes)
   const playerDeck = useMemo(() => {
@@ -1034,6 +1040,7 @@ export function GameScreen() {
           actions.activateFetchLand(card._uid);
         } else {
           actions.tapLand(card._uid);
+          spawnManaFloat(card);
         }
       } else if (!isLand && (isMainPhase || isInstantPriority) && snap.activePlayer === 0) {
         // Single-click opens ability/equip modal for non-land permanents in main phase or instant priority
@@ -1123,6 +1130,23 @@ export function GameScreen() {
       // Use battlefield ability activation (not graveyard)
       actions.activateBattlefieldAbility(cardUid, abilityIdx);
     }
+  }
+
+  // ── Floating mana pip on land tap ────────────────────────────────────────────
+  function spawnManaFloat(landCard: any) {
+    const colors = getLandManaColors(landCard);
+    const color = colors[0] || 'C';
+    const el = document.querySelector(`[data-uid="${landCard._uid}"]`) as HTMLElement | null;
+    let x = window.innerWidth * 0.5 + (Math.random() - 0.5) * 120;
+    let y = window.innerHeight * 0.72;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      x = rect.left + rect.width / 2;
+      y = rect.top + rect.height / 2;
+    }
+    const id = landCard._uid + '_' + Date.now();
+    setFloatingManas(prev => [...prev, { id, color, x, y }]);
+    setTimeout(() => setFloatingManas(prev => prev.filter(f => f.id !== id)), 850);
   }
 
   // ── Loading / Error ──────────────────────────────────────────────────────────
@@ -1669,11 +1693,13 @@ export function GameScreen() {
         {/* Mana pool */}
         {(myMana.length > 0 || canUndoMana) && (
           <div className="game-mana-pool">
-            {myMana.map(([color, count]) => (
-              <div key={color} className="game-mana-pip">
-                <div className={`mana-dot mana-${color}`} />{count as number}
-              </div>
-            ))}
+            {myMana.flatMap(([color, count]) =>
+              Array.from({ length: count as number }, (_, i) => (
+                <div key={`${color}_${i}`} className={`mana-pool-pip mana-pool-${color}`}>
+                  {color === 'C' ? '◇' : color}
+                </div>
+              ))
+            )}
             {canUndoMana && isMainPhaseHuman && (
               <button
                 className="btn-undo-mana"
@@ -1919,11 +1945,28 @@ export function GameScreen() {
       {zoom && (
         <div className="game-zoom-overlay" onClick={() => setZoom(null)}>
           <img src={zoom.image_normal} alt={zoom.name} className="game-zoom-img" />
-          <div className="game-zoom-info glass">
-            <div className="game-zoom-name">{zoom.name}</div>
+          <div className="game-zoom-info glass" onClick={e => e.stopPropagation()}>
+            <div className="game-zoom-header">
+              <div className="game-zoom-name">{zoom.name}</div>
+              {(zoom.power != null || zoom._powerMod || zoom._counters) && (
+                <button
+                  className={`btn btn-sm zoom-toggle-btn ${zoomModified ? 'active' : ''}`}
+                  onClick={e => { e.stopPropagation(); setZoomModified(v => !v); }}
+                  title="Toggle between original and current in-game state"
+                >
+                  {zoomModified ? '📋 Original' : '⚡ Current'}
+                </button>
+              )}
+            </div>
             <div className="game-zoom-type">{zoom.type_line}</div>
-            {zoom.oracle_text && <div className="game-zoom-text">{zoom.oracle_text}</div>}
-            {zoom.power && <div className="game-zoom-pt">{zoom.power}/{zoom.toughness}</div>}
+            {!zoomModified ? (
+              <>
+                {zoom.oracle_text && <div className="game-zoom-text">{zoom.oracle_text}</div>}
+                {zoom.power != null && <div className="game-zoom-pt">{zoom.power}/{zoom.toughness}</div>}
+              </>
+            ) : (
+              <ZoomModifiedPanel card={zoom} />
+            )}
           </div>
         </div>
       )}
@@ -3048,6 +3091,17 @@ export function GameScreen() {
       {/* ── Arena: Combat edge flash ── */}
       {combatFlash && <div className="combat-edge-flash" />}
 
+      {/* ── Floating mana pip animations ── */}
+      {floatingManas.map(f => (
+        <div
+          key={f.id}
+          className={`mana-float-pip mana-float-${f.color}`}
+          style={{ left: f.x, top: f.y }}
+        >
+          {f.color}
+        </div>
+      ))}
+
       {/* ── Arena: Targeting arrow ── */}
       {targeting && (
         <svg style={{ position: 'fixed', inset: 0, zIndex: 240, pointerEvents: 'none', width: '100vw', height: '100vh' }}>
@@ -3236,6 +3290,116 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
       {/* ── Planeswalker loyalty badge ── */}
       {isPlaneswalkerCard && card._loyalty !== undefined && (
         <div className="bf-loyalty-badge">{card._loyalty}</div>
+      )}
+    </div>
+  );
+}
+
+// ── ZoomModifiedPanel ─────────────────────────────────────────────────────────
+
+function ZoomModifiedPanel({ card }: { card: any }) {
+  const counters = card._counters || {};
+  const counterBonus = (counters['+1/+1'] || 0) - (counters['-1/-1'] || 0);
+  const hasPT = card.power != null;
+
+  // Compute current P/T
+  const basePow = parseInt(card.power);
+  const baseTou = parseInt(card.toughness);
+  const curPow = isNaN(basePow) ? null : basePow + (card._powerMod || 0) + counterBonus;
+  const curTou = isNaN(baseTou) ? null : baseTou + (card._toughnessMod || 0) + counterBonus;
+  const origPow = isNaN(basePow) ? null : basePow;
+  const origTou = isNaN(baseTou) ? null : baseTou;
+
+  // Temp buffs (until EOT)
+  const tempPow = card._tempPowerMod || 0;
+  const tempTou = card._tempToughnessMod || 0;
+
+  // Counter list
+  const counterEntries = Object.entries(counters).filter(([, v]) => (v as number) > 0);
+
+  // Temp keywords
+  const tempKws: string[] = card._tempKeywords || [];
+  const stunCount: number = card._stunCounters || 0;
+  const damage: number = card._damage || 0;
+  const isTapped: boolean = !!card._tapped;
+  const hasSummoningSick: boolean = !!card._summoningSick;
+
+  const noChanges = !counterEntries.length && !tempPow && !tempTou && !tempKws.length &&
+    !stunCount && !damage && curPow === origPow && curTou === origTou;
+
+  return (
+    <div className="zoom-modified-panel">
+      {hasPT && curPow != null && (
+        <div className="zm-row">
+          <span className="zm-label">P/T</span>
+          <span className="zm-val">
+            <span className={curPow !== origPow ? 'zm-changed' : ''}>{curPow}</span>
+            {' / '}
+            <span className={curTou !== origTou ? 'zm-changed' : ''}>{curTou}</span>
+            <span className="zm-orig"> (base {origPow}/{origTou})</span>
+          </span>
+        </div>
+      )}
+      {counterEntries.length > 0 && (
+        <div className="zm-row">
+          <span className="zm-label">Counters</span>
+          <span className="zm-val">
+            {counterEntries.map(([k, v]) => (
+              <span key={k} className={`zm-counter zm-counter-${k === '+1/+1' ? 'plus' : k === '-1/-1' ? 'minus' : 'other'}`}>
+                {v as number}× {k}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+      {(tempPow !== 0 || tempTou !== 0) && (
+        <div className="zm-row">
+          <span className="zm-label">Until EOT</span>
+          <span className="zm-val zm-changed">
+            {tempPow > 0 ? `+${tempPow}` : tempPow}{' / '}{tempTou > 0 ? `+${tempTou}` : tempTou}
+          </span>
+        </div>
+      )}
+      {tempKws.length > 0 && (
+        <div className="zm-row">
+          <span className="zm-label">Granted</span>
+          <span className="zm-val zm-changed">{tempKws.join(', ')}</span>
+        </div>
+      )}
+      {stunCount > 0 && (
+        <div className="zm-row">
+          <span className="zm-label">Stun</span>
+          <span className="zm-val zm-danger">{stunCount} counter{stunCount > 1 ? 's' : ''}</span>
+        </div>
+      )}
+      {damage > 0 && (
+        <div className="zm-row">
+          <span className="zm-label">Damage</span>
+          <span className="zm-val zm-danger">{damage} (lethal at {curTou})</span>
+        </div>
+      )}
+      {isTapped && (
+        <div className="zm-row">
+          <span className="zm-label">Status</span>
+          <span className="zm-val zm-muted">Tapped</span>
+        </div>
+      )}
+      {hasSummoningSick && (
+        <div className="zm-row">
+          <span className="zm-label">Sick</span>
+          <span className="zm-val zm-muted">Summoning sickness</span>
+        </div>
+      )}
+      {card._attachedTo && (
+        <div className="zm-row">
+          <span className="zm-label">Attached</span>
+          <span className="zm-val zm-muted">On battlefield</span>
+        </div>
+      )}
+      {noChanges && (
+        <div className="zm-muted" style={{ padding: '8px 0', fontSize: 12 }}>
+          No modifications — card is at base state
+        </div>
       )}
     </div>
   );

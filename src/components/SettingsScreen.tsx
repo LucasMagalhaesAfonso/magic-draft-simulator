@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore, type ThemeId, type PlaymatId } from '../store/useAppStore';
 import './SettingsScreen.css';
 
@@ -21,30 +21,14 @@ const THEMES: { id: ThemeId; label: string; accent: string; bg: string }[] = [
 ];
 
 export function SettingsScreen() {
-  const { theme, setTheme, playmat, playmatArt, setPlaymat, landArts, setLandArt, resetLandArts, sleeveArt, setSleeveArt } = useAppStore();
-  const [customSearch, setCustomSearch] = useState('');
+  const { theme, setTheme, playmat, playmatArt, playmatPosition, playmatSize, setPlaymat, setPlaymatPosition, setPlaymatSize, landArts, setLandArt, resetLandArts, sleeveArt, setSleeveArt } = useAppStore();
+  const [sleeveZoom, setSleeveZoom] = useState(false);
   const [customArtUrl, setCustomArtUrl] = useState(playmatArt || '');
-  const [searching, setSearching] = useState(false);
   // Land art picker
   const [landPicker, setLandPicker] = useState<{ color: string; name: string } | null>(null);
-  // Custom sleeve input
-  const [customSleeveUrl, setCustomSleeveUrl] = useState('');
-
-  async function handleCustomSearch() {
-    if (!customSearch.trim()) return;
-    setSearching(true);
-    try {
-      const name = encodeURIComponent(customSearch.trim());
-      const url = `https://api.scryfall.com/cards/named?exact=${name}&format=image&version=art_crop`;
-      // Test the URL loads
-      setCustomArtUrl(url);
-      setPlaymat('custom', url);
-    } catch (e) {
-      console.error('Custom art search failed:', e);
-    } finally {
-      setSearching(false);
-    }
-  }
+  // Card art search modals
+  const [showPlaymatSearch, setShowPlaymatSearch] = useState(false);
+  const [showSleeveSearch, setShowSleeveSearch] = useState(false);
 
   return (
     <div className="settings-screen animate-fade-in">
@@ -109,25 +93,31 @@ export function SettingsScreen() {
           </div>
 
           {/* Custom art search */}
-          <div className="settings-custom-row">
-            <input
-              type="text"
-              className="sync-input"
-              placeholder="Card name for custom art (e.g. Tarmogoyf)"
-              value={customSearch}
-              onChange={e => setCustomSearch(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleCustomSearch()}
-            />
-            <button className="btn btn-primary" onClick={handleCustomSearch} disabled={searching || !customSearch.trim()}>
-              {searching ? '...' : 'Set Art'}
-            </button>
-          </div>
+          <button className="btn btn-primary settings-search-art-btn" onClick={() => setShowPlaymatSearch(true)}>
+            Search Card Art...
+          </button>
           {customArtUrl && (
             <div className="settings-custom-preview">
               <img src={customArtUrl} alt="Custom playmat preview" />
               <span>Current custom art</span>
             </div>
           )}
+
+          {/* Playmat position picker — shown when a non-default playmat is selected */}
+          {playmat !== 'default' && (() => {
+            const currentPlaymatArt = playmat === 'custom' ? customArtUrl
+              : PLAYMATS.find(p => p.id === playmat)?.artUrl || '';
+            if (!currentPlaymatArt) return null;
+            return (
+              <PlaymatPositionPicker
+                artUrl={currentPlaymatArt}
+                position={playmatPosition}
+                size={playmatSize}
+                onPositionChange={setPlaymatPosition}
+                onSizeChange={setPlaymatSize}
+              />
+            );
+          })()}
         </div>
 
         {/* ── Land Art Section ── */}
@@ -170,45 +160,89 @@ export function SettingsScreen() {
         <div className="settings-section glass">
           <h2 className="settings-title">🃏 Card Sleeves</h2>
           <p className="settings-desc">Choose card back art for your library pile.</p>
-          <div className="settings-sleeve-grid">
-            {[
-              { label: 'Default', artUrl: '' },
-              { label: 'Dark', artUrl: 'https://api.scryfall.com/cards/named?exact=Swamp&set=znr&format=image&version=art_crop' },
-              { label: 'Forest', artUrl: 'https://api.scryfall.com/cards/named?exact=Forest&set=znr&format=image&version=art_crop' },
-              { label: 'Ocean', artUrl: 'https://api.scryfall.com/cards/named?exact=Island&set=znr&format=image&version=art_crop' },
-              { label: 'Fire', artUrl: 'https://api.scryfall.com/cards/named?exact=Mountain&set=znr&format=image&version=art_crop' },
-              { label: 'Plains', artUrl: 'https://api.scryfall.com/cards/named?exact=Plains&set=znr&format=image&version=art_crop' },
-            ].map(({ label, artUrl }) => (
-              <button
-                key={label}
-                className={`settings-playmat-opt ${sleeveArt === artUrl ? 'selected' : ''}`}
-                onClick={() => setSleeveArt(artUrl)}
-                style={artUrl ? {
-                  backgroundImage: `linear-gradient(rgba(0,0,0,0.45),rgba(0,0,0,0.45)), url('${artUrl}')`,
-                  backgroundSize: 'cover', backgroundPosition: 'center',
-                } : {}}
-              >
-                <span className="settings-playmat-label">{label}</span>
-                {sleeveArt === artUrl && <span className="settings-check">✓</span>}
-              </button>
-            ))}
+          <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+            <div className="settings-sleeve-grid" style={{ flex: 1 }}>
+              {[
+                { label: 'Default', artUrl: '' },
+                { label: 'Dark', artUrl: 'https://api.scryfall.com/cards/named?exact=Swamp&set=znr&format=image&version=art_crop' },
+                { label: 'Forest', artUrl: 'https://api.scryfall.com/cards/named?exact=Forest&set=znr&format=image&version=art_crop' },
+                { label: 'Ocean', artUrl: 'https://api.scryfall.com/cards/named?exact=Island&set=znr&format=image&version=art_crop' },
+                { label: 'Fire', artUrl: 'https://api.scryfall.com/cards/named?exact=Mountain&set=znr&format=image&version=art_crop' },
+                { label: 'Plains', artUrl: 'https://api.scryfall.com/cards/named?exact=Plains&set=znr&format=image&version=art_crop' },
+              ].map(({ label, artUrl }) => (
+                <button
+                  key={label}
+                  className={`settings-playmat-opt ${sleeveArt === artUrl ? 'selected' : ''}`}
+                  onClick={() => setSleeveArt(artUrl)}
+                  style={artUrl ? {
+                    backgroundImage: `linear-gradient(rgba(0,0,0,0.45),rgba(0,0,0,0.45)), url('${artUrl}')`,
+                    backgroundSize: 'cover', backgroundPosition: 'center',
+                  } : {}}
+                >
+                  <span className="settings-playmat-label">{label}</span>
+                  {sleeveArt === artUrl && <span className="settings-check">✓</span>}
+                </button>
+              ))}
+            </div>
+
+            {/* Sleeve preview — click to zoom */}
+            <div
+              className="settings-sleeve-preview"
+              onClick={() => sleeveArt && setSleeveZoom(true)}
+              title={sleeveArt ? 'Clique para zoom' : ''}
+              style={{ cursor: sleeveArt ? 'zoom-in' : 'default' }}
+            >
+              {sleeveArt ? (
+                <img
+                  src={sleeveArt}
+                  alt="Sleeve preview"
+                  className="settings-sleeve-preview-img"
+                />
+              ) : (
+                <div className="settings-sleeve-preview-empty">
+                  <span>🃏</span>
+                  <span style={{ fontSize: 10, marginTop: 4, color: 'rgba(255,255,255,0.4)' }}>Default</span>
+                </div>
+              )}
+              {sleeveArt && (
+                <div className="settings-sleeve-zoom-hint">🔍 Zoom</div>
+              )}
+            </div>
           </div>
-          <div className="settings-custom-row" style={{ marginTop: 10 }}>
-            <input
-              type="text"
-              className="sync-input"
-              placeholder="Custom card back image URL..."
-              value={customSleeveUrl}
-              onChange={e => setCustomSleeveUrl(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && customSleeveUrl.trim()) setSleeveArt(customSleeveUrl.trim()); }}
-            />
-            <button
-              className="btn btn-primary"
-              onClick={() => customSleeveUrl.trim() && setSleeveArt(customSleeveUrl.trim())}
-              disabled={!customSleeveUrl.trim()}
-            >Set</button>
-          </div>
+
+          <button className="btn btn-primary settings-search-art-btn" style={{ marginTop: 10 }} onClick={() => setShowSleeveSearch(true)}>
+            Search Card Art...
+          </button>
         </div>
+
+        {/* Sleeve zoom overlay */}
+        {sleeveZoom && sleeveArt && (
+          <div
+            className="overlay-backdrop"
+            onClick={() => setSleeveZoom(false)}
+            style={{ zIndex: 9999 }}
+          >
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <img
+                src={sleeveArt}
+                alt="Sleeve zoom"
+                style={{
+                  width: 300,
+                  height: 418,
+                  borderRadius: 12,
+                  objectFit: 'cover',
+                  boxShadow: '0 8px 40px rgba(0,0,0,0.9)',
+                  border: '2px solid rgba(255,255,255,0.3)',
+                }}
+              />
+              <div style={{
+                position: 'absolute', top: 10, right: 10,
+                background: 'rgba(0,0,0,0.7)', color: '#fff',
+                borderRadius: 8, padding: '4px 10px', fontSize: 12,
+              }}>Clique para fechar</div>
+            </div>
+          </div>
+        )}
 
         {/* Land Art Picker Modal */}
         {landPicker && (
@@ -218,6 +252,31 @@ export function SettingsScreen() {
             currentArt={landArts[landPicker.color] || ''}
             onSelect={(artUrl) => { setLandArt(landPicker.color, artUrl); setLandPicker(null); }}
             onClose={() => setLandPicker(null)}
+          />
+        )}
+
+        {/* Card Art Search Modals */}
+        {showPlaymatSearch && (
+          <CardArtSearchModal
+            title="Search Card Art — Playmat"
+            currentArt={customArtUrl}
+            onSelect={(artUrl) => {
+              setCustomArtUrl(artUrl);
+              setPlaymat('custom', artUrl);
+              setShowPlaymatSearch(false);
+            }}
+            onClose={() => setShowPlaymatSearch(false)}
+          />
+        )}
+        {showSleeveSearch && (
+          <CardArtSearchModal
+            title="Search Card Art — Sleeve"
+            currentArt={sleeveArt}
+            onSelect={(artUrl) => {
+              setSleeveArt(artUrl);
+              setShowSleeveSearch(false);
+            }}
+            onClose={() => setShowSleeveSearch(false)}
           />
         )}
 
@@ -245,6 +304,290 @@ export function SettingsScreen() {
   );
 }
 
+// ── Card Art Search Modal ────────────────────────────────────────────────────
+
+interface CardArtSearchModalProps {
+  title: string;
+  currentArt: string;
+  onSelect: (artUrl: string) => void;
+  onClose: () => void;
+}
+
+interface CardArtResult {
+  id: string;
+  name: string;
+  art_crop: string;
+  set: string;
+  artist: string;
+}
+
+// ─── Playmat Position Picker ─────────────────────────────────────────────────
+function PlaymatPositionPicker({ artUrl, position, size, onPositionChange, onSizeChange }: {
+  artUrl: string;
+  position: string;
+  size: number;          // 0 = cover, 30–200 = percentage
+  onPositionChange: (pos: string) => void;
+  onSizeChange: (size: number) => void;
+}) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+
+  // Parse current position to percentages (e.g. "30% 60%")
+  const parts = position.split(' ');
+  const curX = parseFloat(parts[0]) || 50;
+  const curY = parseFloat(parts[1]) || 50;
+
+  // Resolved backgroundSize for the preview
+  const bgSize = size > 0 ? `${size}%` : 'cover';
+  // Slider value: 0 maps to a display value. We show "Cover" at slider=0, else the %
+  const sliderVal = size === 0 ? 100 : size; // default display as 100 when cover
+
+  function handlePointer(e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) {
+    const box = boxRef.current;
+    if (!box) return;
+    const rect = box.getBoundingClientRect();
+    let clientX: number, clientY: number;
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    const x = Math.round(Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)));
+    const y = Math.round(Math.max(0, Math.min(100, ((clientY - rect.top) / rect.height) * 100)));
+    onPositionChange(`${x}% ${y}%`);
+  }
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      {/* Zoom / Size slider */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.7)', whiteSpace: 'nowrap' }}>
+          🔍 Zoom
+        </span>
+        <input
+          type="range"
+          min={30}
+          max={200}
+          value={sliderVal}
+          onChange={e => onSizeChange(parseInt(e.target.value))}
+          style={{ flex: 1, accentColor: 'var(--accent)' }}
+        />
+        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', minWidth: 48, textAlign: 'right' }}>
+          {size === 0 ? 'Cover' : `${size}%`}
+        </span>
+        <button
+          className="btn btn-muted"
+          style={{ fontSize: 10, padding: '2px 8px', whiteSpace: 'nowrap' }}
+          onClick={() => onSizeChange(0)}
+          title="Preencher tudo (cover)"
+        >
+          Fill
+        </button>
+      </div>
+
+      {/* Position drag area */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>
+          📐 Posição — clique/arraste para ajustar
+        </span>
+        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>{curX}% {curY}%</span>
+      </div>
+      <div
+        ref={boxRef}
+        className="playmat-pos-picker"
+        style={{
+          backgroundImage: `linear-gradient(rgba(0,0,0,0.3), rgba(0,0,0,0.3)), url('${artUrl}')`,
+          backgroundSize: bgSize,
+          backgroundPosition: position,
+          backgroundRepeat: 'no-repeat',
+          backgroundColor: '#000',
+          cursor: 'crosshair',
+        }}
+        onMouseDown={(e) => { dragging.current = true; handlePointer(e); }}
+        onMouseMove={(e) => { if (dragging.current) handlePointer(e); }}
+        onMouseUp={() => { dragging.current = false; }}
+        onMouseLeave={() => { dragging.current = false; }}
+        onTouchStart={(e) => { dragging.current = true; handlePointer(e); }}
+        onTouchMove={(e) => { if (dragging.current) handlePointer(e); }}
+        onTouchEnd={() => { dragging.current = false; }}
+      >
+        {/* Crosshair indicator */}
+        <div
+          className="playmat-pos-crosshair"
+          style={{ left: `${curX}%`, top: `${curY}%` }}
+        />
+      </div>
+      <button
+        className="btn btn-muted"
+        style={{ marginTop: 6, fontSize: 11 }}
+        onClick={() => { onPositionChange('50% 50%'); onSizeChange(0); }}
+      >
+        Resetar
+      </button>
+    </div>
+  );
+}
+
+function CardArtSearchModal({ title, currentArt, onSelect, onClose }: CardArtSearchModalProps) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<CardArtResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalCards, setTotalCards] = useState(0);
+  const [error, setError] = useState('');
+  const [searched, setSearched] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const currentQueryRef = useRef('');
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose]);
+
+  const fetchResults = useCallback(async (q: string, p: number) => {
+    if (!q.trim()) return;
+    setLoading(true);
+    setError('');
+    try {
+      const encoded = encodeURIComponent(q.trim());
+      const res = await fetch(
+        `https://api.scryfall.com/cards/search?q=name:${encoded}&unique=art&order=released&page=${p}`
+      );
+      if (res.status === 404) {
+        if (p === 1) {
+          setResults([]);
+          setHasMore(false);
+          setTotalCards(0);
+          setError('No cards found');
+        }
+        setLoading(false);
+        setSearched(true);
+        return;
+      }
+      const json = await res.json();
+      if (json.data) {
+        const mapped: CardArtResult[] = json.data
+          .filter((c: any) => c.image_uris?.art_crop)
+          .map((c: any) => ({
+            id: c.id,
+            name: c.name,
+            art_crop: c.image_uris.art_crop,
+            set: (c.set as string).toUpperCase(),
+            artist: c.artist || '',
+          }));
+        setResults(prev => p === 1 ? mapped : [...prev, ...mapped]);
+        setHasMore(json.has_more || false);
+        setTotalCards(json.total_cards || mapped.length);
+      }
+    } catch (e) {
+      console.error('Card art search failed:', e);
+      setError('Search failed. Try again.');
+    }
+    setLoading(false);
+    setSearched(true);
+  }, []);
+
+  function handleInputChange(value: string) {
+    setQuery(value);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!value.trim()) {
+      setResults([]);
+      setHasMore(false);
+      setError('');
+      setSearched(false);
+      setTotalCards(0);
+      return;
+    }
+    debounceRef.current = setTimeout(() => {
+      currentQueryRef.current = value;
+      setPage(1);
+      fetchResults(value, 1);
+    }, 500);
+  }
+
+  function loadMore() {
+    const next = page + 1;
+    setPage(next);
+    fetchResults(currentQueryRef.current, next);
+  }
+
+  return (
+    <div className="card-search-backdrop" onClick={onClose}>
+      <div className="card-search-modal glass" onClick={e => e.stopPropagation()}>
+        <div className="card-search-header">
+          <h3>{title}</h3>
+          <button className="btn btn-muted btn-sm" onClick={onClose}>✕</button>
+        </div>
+
+        <input
+          ref={inputRef}
+          type="text"
+          className="card-search-input"
+          placeholder='Search any card (e.g. "Jace", "Lightning Bolt", "Dragon")'
+          value={query}
+          onChange={e => handleInputChange(e.target.value)}
+        />
+
+        {totalCards > 0 && (
+          <div className="card-search-count">
+            Showing {results.length} of {totalCards} results
+          </div>
+        )}
+
+        <div className="card-search-scroll">
+          {!searched && !loading && results.length === 0 && (
+            <div className="card-search-empty">
+              Type a card name to search Scryfall
+            </div>
+          )}
+
+          {searched && !loading && results.length === 0 && error && (
+            <div className="card-search-empty">{error}</div>
+          )}
+
+          {results.length > 0 && (
+            <div className="card-search-grid">
+              {results.map(card => (
+                <div
+                  key={card.id}
+                  className={`card-search-item ${currentArt === card.art_crop ? 'selected' : ''}`}
+                  onClick={() => onSelect(card.art_crop)}
+                  title={`${card.name} · ${card.set} · ${card.artist}`}
+                >
+                  <img src={card.art_crop} alt={card.name} loading="lazy" />
+                  <div className="card-search-item-info">
+                    <span className="card-search-item-name">{card.name}</span>
+                    <span className="card-search-item-set">{card.set}</span>
+                  </div>
+                  {currentArt === card.art_crop && (
+                    <div className="card-search-item-check">✓</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {loading && (
+            <div className="card-search-empty">Searching Scryfall...</div>
+          )}
+
+          {hasMore && !loading && (
+            <div className="card-search-load-more">
+              <button className="btn btn-muted" onClick={loadMore}>Load More</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Land Art Picker Modal ────────────────────────────────────────────────────
 
 interface LandArtPickerProps {
@@ -256,7 +599,7 @@ interface LandArtPickerProps {
 }
 
 function LandArtPickerModal({ name, currentArt, onSelect, onClose }: LandArtPickerProps) {
-  const [arts, setArts] = useState<{ id: string; art_crop: string; set: string; artist: string }[]>([]);
+  const [arts, setArts] = useState<{ id: string; art_crop: string; normal: string; set: string; artist: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
@@ -284,6 +627,7 @@ function LandArtPickerModal({ name, currentArt, onSelect, onClose }: LandArtPick
           .map((c: any) => ({
             id: c.id,
             art_crop: c.image_uris.art_crop,
+            normal: c.image_uris?.normal || '',
             set: (c.set as string).toUpperCase(),
             artist: c.artist || '',
           }));
@@ -300,6 +644,12 @@ function LandArtPickerModal({ name, currentArt, onSelect, onClose }: LandArtPick
   }
 
   useEffect(() => { fetchArts(1); }, []); // eslint-disable-line
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose]);
 
   function loadMore() {
     const next = page + 1;
@@ -344,11 +694,11 @@ function LandArtPickerModal({ name, currentArt, onSelect, onClose }: LandArtPick
             {arts.map(art => (
               <div
                 key={art.id}
-                onClick={() => onSelect(art.art_crop)}
+                onClick={() => onSelect(art.normal || art.art_crop)}
                 title={`${art.set} · ${art.artist}`}
                 style={{
                   cursor: 'pointer', borderRadius: 8, overflow: 'hidden',
-                  border: currentArt === art.art_crop ? '3px solid var(--gold)' : '2px solid transparent',
+                  border: currentArt === (art.normal || art.art_crop) ? '3px solid var(--gold)' : '2px solid transparent',
                   transition: 'all 0.15s', position: 'relative',
                 }}
               >
@@ -363,7 +713,7 @@ function LandArtPickerModal({ name, currentArt, onSelect, onClose }: LandArtPick
                     {art.artist}
                   </span>
                 </div>
-                {currentArt === art.art_crop && (
+                {currentArt === (art.normal || art.art_crop) && (
                   <div style={{
                     position: 'absolute', top: 4, right: 4,
                     background: 'var(--gold)', color: '#000',

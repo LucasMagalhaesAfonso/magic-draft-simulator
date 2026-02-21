@@ -72,7 +72,7 @@
 
 .db-cmc-columns {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: flex-start;
   min-width: max-content;
 }
@@ -80,7 +80,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 100px;
+  width: 128px;
   flex-shrink: 0;
 }
 .db-cmc-header {
@@ -101,23 +101,25 @@
 .db-card-stack {
   display: flex;
   flex-direction: column;
-  width: 100px;
+  width: 128px;
   position: relative;
 }
 .db-stack-card {
-  width: 100px;
-  height: 140px;
+  width: 128px;
+  height: 179px;
   position: relative;
-  margin-top: -100px;
-  cursor: pointer;
+  margin-top: -130px;
+  cursor: grab;
   border-radius: 6px;
   overflow: hidden;
   transition: transform 0.12s ease, z-index 0s;
   border: 1px solid rgba(255,255,255,0.15);
   flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .db-stack-card:first-child { margin-top: 0; }
-.db-stack-card:hover {
+.db-stack-card:not(.dragging):hover {
   transform: translateY(-12px) scale(1.04);
   z-index: 100 !important;
   border-color: var(--gold);
@@ -153,7 +155,145 @@
   transition: opacity 0.1s;
 }
 .db-stack-card:hover .db-stack-label { opacity: 1; }
-.db-cmc-empty { width: 100px; height: 30px; }
+.db-cmc-empty { width: 128px; height: 30px; }
+
+/* Column drag-over highlight */
+.db-cmc-col.col-drag-over {
+  background: rgba(240, 192, 64, 0.1);
+  border-radius: 8px;
+  outline: 2px dashed var(--gold);
+  outline-offset: 2px;
+}
+.db-cmc-col.col-drag-over .db-cmc-num {
+  color: white;
+}
+
+/* ── 2D Type Grid ────────────────────────────────────────── */
+.db-type-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+.db-type-header-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  margin-bottom: 4px;
+}
+.db-type-row-spacer {
+  width: 54px;
+  min-width: 54px;
+  flex-shrink: 0;
+}
+.db-type-col-header {
+  width: 110px;
+  min-width: 110px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.45);
+  letter-spacing: 0.04em;
+}
+.db-type-col-header.db-land-col-header {
+  color: var(--gold);
+  opacity: 0.7;
+}
+.db-type-grid-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  padding: 6px 0 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  min-height: 60px;
+}
+.db-type-land-row {
+  border-bottom: none;
+}
+.db-type-row-label {
+  width: 54px;
+  min-width: 54px;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.35);
+  padding-top: 8px;
+  padding-right: 6px;
+  text-align: right;
+  line-height: 1.3;
+}
+.db-type-cell {
+  width: 110px;
+  min-width: 110px;
+  position: relative;
+  flex-shrink: 0;
+}
+.db-type-cell-land {
+  border-left: 1px solid rgba(255,215,0,0.15);
+}
+.db-type-cell.type-drag-over,
+.db-type-cell.col-drag-over {
+  background: rgba(240, 192, 64, 0.1);
+  border-radius: 6px;
+  outline: 2px dashed rgba(240, 192, 64, 0.5);
+  outline-offset: 2px;
+}
+.db-type-drop-target {
+  width: 128px;
+  height: 40px;
+  margin: 0 auto;
+}
+
+/* Basic land cards in Land column */
+.db-stack-card.db-basic-land {
+  cursor: pointer;
+}
+.db-stack-card.db-basic-land:hover {
+  border-color: var(--danger);
+}
+.db-basic-badge {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  background: rgba(0,0,0,0.85);
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 4px;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+}
+.db-type-empty {
+  width: 128px;
+  height: 16px;
+}
+
+/* ── Button active state ─────────────────────────────────── */
+.btn.btn-active {
+  background: rgba(108, 92, 231, 0.35);
+  border-color: rgba(108, 92, 231, 0.7);
+  color: #c8b4ff;
+}
+
+/* Card manually moved to a different column — subtle indicator */
+.db-stack-card.col-overridden::after {
+  content: '↕';
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  font-size: 10px;
+  color: var(--gold);
+  opacity: 0.7;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+}
 
 /* ── Right panel ────────────────────────────────────────── */
 .db-right-panel {
@@ -168,8 +308,8 @@
 }
 
 /* Mini curve chart */
-.db-mini-curve { border-radius: 8px; padding: 8px; flex-shrink: 0; }
-.db-mini-curve-bars { display: flex; align-items: flex-end; gap: 4px; height: 64px; }
+.db-mini-curve { border-radius: 8px; padding: 6px; flex-shrink: 0; max-height: 90px; }
+.db-mini-curve-bars { display: flex; align-items: flex-end; gap: 3px; height: 48px; }
 .db-mini-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .db-mini-count { font-size: 10px; color: var(--text-secondary); min-height: 14px; }
 .db-mini-bar-wrap { flex: 1; display: flex; align-items: flex-end; width: 100%; }
@@ -186,15 +326,15 @@
 .db-pip-dot { width: 10px; height: 10px; border-radius: 50%; }
 
 /* Land controls */
-.db-lands-mini { border-radius: 8px; padding: 8px; flex-shrink: 0; }
-.db-lands-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px; }
-.db-land-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
-.db-land-img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
-.db-land-name { flex: 1; font-size: 11px; color: var(--text-primary); }
-.db-land-controls { display: flex; align-items: center; gap: 4px; }
+.db-lands-mini { border-radius: 8px; padding: 4px 6px; flex-shrink: 0; display: block; }
+.db-lands-title { font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 3px; }
+.db-land-row { display: flex; align-items: center; gap: 5px; padding: 1px 0; }
+.db-mana-symbol { width: 16px; height: 16px; flex-shrink: 0; }
+.db-land-name { flex: 1; font-size: 10px; color: var(--text-primary); }
+.db-land-controls { display: flex; align-items: center; gap: 3px; }
 .db-land-btn {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 4px;
   border: 1px solid var(--glass-border);
   background: rgba(255,255,255,0.08);
@@ -214,7 +354,7 @@
 .db-side-panel {
   border-radius: 8px;
   padding: 8px;
-  flex: 1;          /* takes remaining height */
+  flex: 0.8;        /* slightly smaller than 1 */
   min-height: 0;    /* allows shrinking */
   display: flex;
   flex-direction: column;
@@ -364,4 +504,66 @@
 @keyframes fadeIn {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/* ── Drag ghost (custom mouse drag) ──────────────────────── */
+.db-drag-ghost {
+  position: fixed;
+  width: 80px;
+  border-radius: 8px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.88;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.85);
+  transform: rotate(4deg) scale(1.05);
+  transition: box-shadow 0.1s;
+}
+.db-drag-ghost img {
+  width: 100%;
+  display: block;
+}
+.db-drag-ghost-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(108,92,231,0.9);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+  padding: 3px 4px;
+  letter-spacing: 0.03em;
+}
+.db-drag-ghost.over-col {
+  box-shadow: 0 12px 40px rgba(240,192,64,0.5), 0 0 0 2px var(--gold);
+}
+.db-drag-ghost.over-side .db-drag-ghost-label,
+.db-drag-ghost-side {
+  background: rgba(39,174,96,0.9) !important;
+}
+.db-drag-ghost.over-side {
+  box-shadow: 0 12px 40px rgba(39,174,96,0.5), 0 0 0 2px var(--success);
+}
+
+/* Dragging card becomes transparent in-place */
+.db-stack-card.dragging {
+  opacity: 0.25;
+}
+
+.db-toast {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(39, 174, 96, 0.9);
+  color: #fff;
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  z-index: 500;
+  animation: fadeIn 0.2s ease;
+  pointer-events: none;
 }

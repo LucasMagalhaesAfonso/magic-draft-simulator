@@ -13,7 +13,7 @@ import {
   LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
-  BounceMultiOverlay, DistributeCountersOverlay, ManaCostPips,
+  BounceMultiOverlay, DistributeCountersOverlay, ManaCostPips, MANA_IMAGES,
   KeyboardHelpOverlay, DistributeDamageOverlay,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
@@ -1695,9 +1695,12 @@ export function GameScreen() {
           <div className="game-mana-pool">
             {myMana.flatMap(([color, count]) =>
               Array.from({ length: count as number }, (_, i) => (
-                <div key={`${color}_${i}`} className={`mana-pool-pip mana-pool-${color}`}>
-                  {color === 'C' ? '◇' : color}
-                </div>
+                MANA_IMAGES[color]
+                  ? <img key={`${color}_${i}`} src={MANA_IMAGES[color]} alt={color}
+                      className="mana-pool-pip" title={`${color} mana`} />
+                  : <div key={`${color}_${i}`} className={`mana-pool-pip mana-pool-${color}`}>
+                      {color === 'C' ? '◇' : color}
+                    </div>
               ))
             )}
             {canUndoMana && isMainPhaseHuman && (
@@ -3093,13 +3096,13 @@ export function GameScreen() {
 
       {/* ── Floating mana pip animations ── */}
       {floatingManas.map(f => (
-        <div
-          key={f.id}
-          className={`mana-float-pip mana-float-${f.color}`}
-          style={{ left: f.x, top: f.y }}
-        >
-          {f.color}
-        </div>
+        MANA_IMAGES[f.color]
+          ? <img key={f.id} src={MANA_IMAGES[f.color]} alt={f.color}
+              className={`mana-float-pip mana-float-${f.color}`}
+              style={{ left: f.x, top: f.y }} />
+          : <div key={f.id}
+              className={`mana-float-pip mana-float-${f.color}`}
+              style={{ left: f.x, top: f.y }}>{f.color}</div>
       ))}
 
       {/* ── Arena: Targeting arrow ── */}

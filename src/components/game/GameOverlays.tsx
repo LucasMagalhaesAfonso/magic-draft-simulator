@@ -307,31 +307,43 @@ export function InstantPriorityBanner({ phase, onPass }: InstantPriorityBannerPr
 }
 
 // ─── Mana cost pip renderer (for banners / tooltips) ─────────────────────────
+import manaImgW from '../../assets/mana-W.png';
+import manaImgU from '../../assets/mana-U.png';
+import manaImgB from '../../assets/mana-B.png';
+import manaImgR from '../../assets/mana-R.png';
+import manaImgG from '../../assets/mana-G.png';
+
+export const MANA_IMAGES: Record<string, string> = {
+  W: manaImgW, U: manaImgU, B: manaImgB, R: manaImgR, G: manaImgG,
+};
 const MANA_PIP_COLORS: Record<string, string> = {
-  W: '#f8f4e8', U: '#1a5fa8', B: '#2a1a3a', R: '#c0392b', G: '#1e7c3a',
   C: '#8a8a8a', X: '#555',
 };
-const MANA_PIP_TEXT: Record<string, string> = {
-  W: 'W', U: 'U', B: 'B', R: 'R', G: 'G', C: 'C', X: 'X',
-};
-export function ManaCostPips({ cost }: { cost: string }) {
+export function ManaCostPips({ cost, size = 18 }: { cost: string; size?: number }) {
   if (!cost) return null;
   const tokens = (cost.match(/\{[^}]+\}/g) || []);
   return (
     <span style={{ display: 'inline-flex', gap: 2, alignItems: 'center', marginLeft: 6 }}>
       {tokens.map((t, i) => {
         const sym = t.slice(1, -1);
+        if (MANA_IMAGES[sym]) {
+          return (
+            <img key={i} src={MANA_IMAGES[sym]} alt={sym}
+              style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0,
+                       objectFit: 'cover', display: 'block' }} />
+          );
+        }
+        // Generic / numeric pip
         const bg = MANA_PIP_COLORS[sym] ?? '#444';
-        const txt = MANA_PIP_TEXT[sym] ?? sym;
         const isNum = /^\d+$/.test(sym);
         return (
           <span key={i} style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 18, height: 18, borderRadius: '50%',
-            background: bg, color: isNum || sym === 'C' ? '#eee' : (sym === 'W' ? '#333' : '#fff'),
-            fontSize: 10, fontWeight: 700, flexShrink: 0,
+            width: size, height: size, borderRadius: '50%',
+            background: bg, color: '#eee',
+            fontSize: Math.round(size * 0.58), fontWeight: 700, flexShrink: 0,
             border: '1px solid rgba(255,255,255,0.2)',
-          }}>{txt}</span>
+          }}>{isNum ? sym : sym}</span>
         );
       })}
     </span>

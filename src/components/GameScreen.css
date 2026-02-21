@@ -1016,6 +1016,50 @@
   line-height: 1.3;
 }
 
+/* ── Arena-style: attachment thumbnails (equipment/aura on creature) ── */
+.bf-attachment-strip {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.bf-attachment-mini {
+  width: 22px;
+  height: 30px;
+  border-radius: 3px;
+  border: 1px solid rgba(240,192,64,0.8);
+  object-fit: cover;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.7);
+  background: #111;
+}
+
+/* ── Arena-style: exiled-by-enchantment thumbnails ── */
+.bf-exiled-strip {
+  position: absolute;
+  bottom: 18px;
+  right: -6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.bf-exiled-mini {
+  width: 20px;
+  height: 28px;
+  border-radius: 3px;
+  border: 1px solid rgba(139,92,246,0.8);
+  object-fit: cover;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.7);
+  background: #111;
+}
+
 /* ── Saga badge ── */
 .bf-saga-badge {
   position: absolute;

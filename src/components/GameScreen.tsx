@@ -1508,6 +1508,8 @@ export function GameScreen() {
                 .filter((c: any) => !c.type_line?.includes('Land'))
                 .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
               const lands = p1.battlefield.filter((c: any) => c.type_line?.includes('Land'));
+              // Build uid→card map for resolving attachment UIDs
+              const p1BfMap = new Map(p1.battlefield.map((c: any) => [c._uid, c]));
               const makeCard = (card: any) => {
                 const _stepFilter = targeting?.steps && targeting.step ? targeting.steps[targeting.step - 1]?.side : undefined;
                 const validTgts = targeting ? getValidTargets(targeting.card, _stepFilter) : [];
@@ -1518,6 +1520,11 @@ export function GameScreen() {
                 // Show "being attacked" glow on a PW that is currently targeted by an attacker
                 const isAttackTarget = !!(card.type_line?.includes('Planeswalker') &&
                   combat.attackers.some((a: any) => a.attackTarget === card._uid));
+                // Resolve attachment card objects (equipment/auras on this creature)
+                const attachmentCards = (card._attachments || [])
+                  .map((uid: string) => p1BfMap.get(uid)).filter(Boolean);
+                // Cards exiled by this permanent (e.g. Banishing Light)
+                const exiledCards = card._exiledCards || [];
                 return (
                   <BattlefieldCard
                     key={card._uid}
@@ -1529,6 +1536,8 @@ export function GameScreen() {
                     isRecentlyEntered={recentlyEntered.has(card._uid)}
                     isTriggerPulsing={triggerPulseUids.has(card._uid)}
                     overrideArtUrl={getLandArtUrl(card)}
+                    attachmentCards={attachmentCards}
+                    exiledCards={exiledCards}
                     onClick={c => handleCardClick(c, 1)}
                     onRightClick={c => setZoom(c)}
                   />
@@ -1735,11 +1744,12 @@ export function GameScreen() {
         {p0.battlefield.length === 0
           ? <span className="game-bf-empty">Your battlefield</span>
           : (() => {
-              // Sort: regular permanents first, planeswalkers last (right side)
               const nonLands = p0.battlefield
                 .filter((c: any) => !c.type_line?.includes('Land'))
                 .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
               const lands = p0.battlefield.filter((c: any) => c.type_line?.includes('Land'));
+              // Build uid→card map for resolving attachment UIDs
+              const p0BfMap = new Map(p0.battlefield.map((c: any) => [c._uid, c]));
               const makeCard = (card: any) => {
                 const _stepFilter2 = targeting?.steps && targeting.step ? targeting.steps[targeting.step - 1]?.side : undefined;
                 const isTargetable = !!(targeting &&
@@ -1751,6 +1761,11 @@ export function GameScreen() {
                   isMainPhaseHuman &&
                   !card._loyaltyUsedThisTurn
                 );
+                // Resolve attachment card objects (equipment/auras on this creature)
+                const attachmentCards = (card._attachments || [])
+                  .map((uid: string) => p0BfMap.get(uid)).filter(Boolean);
+                // Cards exiled by this permanent (e.g. Banishing Light)
+                const exiledCards = card._exiledCards || [];
                 return (
                   <BattlefieldCard
                     key={card._uid}
@@ -1765,6 +1780,8 @@ export function GameScreen() {
                     isAutoTapPreview={autoTapPreviewUids.has(card._uid)}
                     isRecentlyEntered={recentlyEntered.has(card._uid)}
                     isTriggerPulsing={triggerPulseUids.has(card._uid)}
+                    attachmentCards={attachmentCards}
+                    exiledCards={exiledCards}
                     onClick={c => handleCardClick(c, 0)}
                     onDoubleClick={c => handleDoubleClick(c)}
                     onRightClick={c => setZoom(c)}
@@ -3066,17 +3083,21 @@ interface BFCardProps {
   isBlockingTarget?: boolean;
   isAssignedBlocker?: boolean;
   isSelectedBlocker?: boolean;
-  canActivate?: boolean; // planeswalker: can use loyalty ability this turn
-  overrideArtUrl?: string; // For land art override
-  isAutoTapPreview?: boolean; // Highlight: would be auto-tapped for hovered hand card
-  isRecentlyEntered?: boolean; // Arena ETB animation
-  isTriggerPulsing?: boolean; // Arena trigger pulse glow
+  canActivate?: boolean;
+  overrideArtUrl?: string;
+  isAutoTapPreview?: boolean;
+  isRecentlyEntered?: boolean;
+  isTriggerPulsing?: boolean;
+  /** Cards currently equipped/enchanting this creature (shown as mini thumbnails) */
+  attachmentCards?: any[];
+  /** Cards exiled by this permanent (enchantments like Banishing Light) */
+  exiledCards?: any[];
   onClick?: (card: any) => void;
   onDoubleClick?: (card: any) => void;
   onRightClick: (card: any) => void;
 }
 
-function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, isRecentlyEntered, isTriggerPulsing, onClick, onDoubleClick, onRightClick }: BFCardProps) {
+function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, isRecentlyEntered, isTriggerPulsing, attachmentCards, exiledCards, onClick, onDoubleClick, onRightClick }: BFCardProps) {
   const isLand = card.type_line?.includes('Land');
   const isCreature = card.type_line?.includes('Creature');
   const isPlaneswalkerCard = card.type_line?.includes('Planeswalker');
@@ -3164,14 +3185,38 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
           </div>
         );
       })()}
-      {/* ── Equipment: attached badge (on equipment/aura card) ── */}
+      {/* ── Attached-to indicator (on equipment/aura itself) ── */}
       {card._attachedTo && (
-        <div className="bf-equip-attached" title="Equipped/Enchanting a creature">🔗</div>
+        <div className="bf-equip-attached" title="Equipped/Enchanting">🔗</div>
       )}
-      {/* ── Creature: equipment count badge (on creature) ── */}
-      {isCreature && card._attachments && card._attachments.length > 0 && (
-        <div className="bf-equip-count" title={`Equipped (${card._attachments.length})`}>
-          ⚔{card._attachments.length > 1 ? `×${card._attachments.length}` : ''}
+      {/* ── Arena-style: equipment/aura thumbnails on creature ── */}
+      {attachmentCards && attachmentCards.length > 0 && (
+        <div className="bf-attachment-strip">
+          {attachmentCards.map((a: any) => (
+            <img
+              key={a._uid}
+              className="bf-attachment-mini"
+              src={a.image_small || a.image_normal}
+              alt={a.name}
+              title={a.name}
+              onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+            />
+          ))}
+        </div>
+      )}
+      {/* ── Arena-style: exiled-by-enchantment thumbnails ── */}
+      {exiledCards && exiledCards.length > 0 && (
+        <div className="bf-exiled-strip">
+          {exiledCards.map((ex: any, i: number) => (
+            <img
+              key={ex._uid || i}
+              className="bf-exiled-mini"
+              src={ex.image_small || ex.image_normal}
+              alt={ex.name}
+              title={`Exilada: ${ex.name}`}
+              onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+            />
+          ))}
         </div>
       )}
       {/* ── Saga badge ── */}

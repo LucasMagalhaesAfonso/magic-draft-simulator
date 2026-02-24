@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { getCardsBySet } from '../lib/database';
 import * as DraftEngine from '../draft/draft-engine';
-import { buildDeck } from '../draft/bot-ai';
+import { buildDeck, recordHumanPick } from '../draft/bot-ai';
 import { CardImage } from './card/CardImage';
 import type { Card } from '../lib/types';
 import './DraftScreen.css';
@@ -45,7 +45,7 @@ function groupByColor(cards: Card[]): Record<string, Card[]> {
 // ── Main Component ────────────────────────────────────────────────────
 
 export function DraftScreen() {
-  const { selectedSet, setDraftPool, setDeck, setScreen } = useAppStore();
+  const { selectedSet, setDraftPool, setAiDraftPool, setDeck, setScreen } = useAppStore();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [draftState, setDraftState] = useState<DraftEngine.DraftState | null>(null);
@@ -77,10 +77,11 @@ export function DraftScreen() {
           setDraftState({ ...state });
           setCurrentPack(DraftEngine.getPlayerPack());
         },
-        onDraftFinished: (pool) => {
+        onDraftFinished: (pool, botPools) => {
           setDraftState(prev =>
             prev ? { ...prev, finished: true, playerPool: pool } : null
           );
+          if (botPools && botPools.length > 0) setAiDraftPool(botPools[0]);
           setCurrentPack([]);
         },
       });
@@ -102,6 +103,8 @@ export function DraftScreen() {
 
   function handlePickCard(card: Card) {
     if (!draftState || draftState.finished) return;
+    // Record the pick for human learning before the pack is consumed
+    recordHumanPick(card, currentPack);
     DraftEngine.selectCard(card.id);
     DraftEngine.confirmPick();
   }
@@ -112,6 +115,8 @@ export function DraftScreen() {
     if (!state) return;
     const result = buildDeck(state.playerPool);
     setDraftPool(state.playerPool);
+    // Save first bot's pool so GameScreen can build a non-mirror AI deck
+    if (state.bots && state.bots.length > 0) setAiDraftPool(state.bots[0].pool || []);
     setDeck({ mainboard: result.deck, sideboard: result.sideboard, lands: result.lands });
     setScreen('deckbuilder');
   }
@@ -121,14 +126,27 @@ export function DraftScreen() {
     if (!state) return;
     const result = buildDeck(state.playerPool);
     setDraftPool(state.playerPool);
+    // Save first bot's pool so GameScreen can build a non-mirror AI deck
+    if (state.bots && state.bots.length > 0) setAiDraftPool(state.bots[0].pool || []);
     setDeck({ mainboard: result.deck, sideboard: result.sideboard, lands: result.lands });
     setScreen('deckbuilder');
+  }
+
+  function clampTooltip(cx: number, cy: number) {
+    const W = 240, H = 380; // tooltip size + margin
+    let x = cx + 20;
+    let y = cy - 40;
+    if (x + W > window.innerWidth) x = cx - W;
+    if (y + H > window.innerHeight) y = window.innerHeight - H;
+    if (y < 8) y = 8;
+    return { x, y };
   }
 
   function handleMouseEnterCard(card: Card, e: React.MouseEvent) {
     if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
     tooltipTimer.current = setTimeout(() => {
-      setTooltip({ card, x: e.clientX + 20, y: e.clientY - 40 });
+      const { x, y } = clampTooltip(e.clientX, e.clientY);
+      setTooltip({ card, x, y });
     }, 350);
   }
 
@@ -139,7 +157,8 @@ export function DraftScreen() {
 
   function handleMouseMove(e: React.MouseEvent) {
     if (tooltip) {
-      setTooltip(prev => prev ? { ...prev, x: e.clientX + 20, y: e.clientY - 40 } : null);
+      const { x, y } = clampTooltip(e.clientX, e.clientY);
+      setTooltip(prev => prev ? { ...prev, x, y } : null);
     }
   }
 
@@ -256,7 +275,7 @@ export function DraftScreen() {
         </div>
 
         {/* Pool sidebar */}
-        <PoolSidebar pool={pool} tab={poolTab} setTab={setPoolTab} />
+        <PoolSidebar pool={pool} tab={poolTab} setTab={setPoolTab} setTooltip={setTooltip} />
       </div>
 
       {/* Hover tooltip */}
@@ -270,6 +289,7 @@ export function DraftScreen() {
             className="draft-tooltip-img"
             src={tooltip.card.image_normal || tooltip.card.image_small}
             alt={tooltip.card.name}
+            onError={e => { e.currentTarget.src = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'; }}
           />
           <div className="draft-tooltip-info">
             <div className="draft-tooltip-name">{tooltip.card.name}</div>
@@ -290,8 +310,10 @@ function PoolSidebar({
   pool,
   tab,
   setTab,
+  setTooltip,
 }: {
   pool: Card[];
+  setTooltip: (t: { card: Card; x: number; y: number } | null) => void;
   tab: PoolTab;
   setTab: (t: PoolTab) => void;
 }) {
@@ -344,7 +366,15 @@ function PoolSidebar({
                 </div>
                 <div className="draft-pool-cards">
                   {cards.map((card, idx) => (
-                    <div key={`${card.id}-${idx}`} className="draft-pool-item">
+                    <div
+                      key={`${card.id}-${idx}`}
+                      className="draft-pool-item"
+                      onMouseEnter={e => {
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setTooltip({ card, x: rect.left - 230, y: Math.min(rect.top, window.innerHeight - 380) });
+                      }}
+                      onMouseLeave={() => setTooltip(null)}
+                    >
                       <div className="draft-pool-cmc">
                         {Math.round(card.cmc || 0)}
                       </div>

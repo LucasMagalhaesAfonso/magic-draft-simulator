@@ -6,11 +6,15 @@ export type PlaymatId = 'default' | 'forest' | 'ocean' | 'mountain' | 'plains' |
 
 const PLAYMAT_KEY = 'mtg_draft_playmat';
 const PLAYMAT_ART_KEY = 'mtg_draft_playmat_art';
+const PLAYMAT_POS_KEY = 'mtg_draft_playmat_pos';
+const PLAYMAT_SIZE_KEY = 'mtg_draft_playmat_size';
 const LAND_ARTS_KEY = 'mtg_draft_land_arts';
 const SLEEVE_ART_KEY = 'mtg_draft_sleeve_art';
 
 function loadPlaymat(): PlaymatId { return (localStorage.getItem(PLAYMAT_KEY) as PlaymatId) || 'default'; }
 function loadPlaymatArt(): string { return localStorage.getItem(PLAYMAT_ART_KEY) || ''; }
+function loadPlaymatPosition(): string { return localStorage.getItem(PLAYMAT_POS_KEY) || '50% 50%'; }
+function loadPlaymatSize(): number { return parseInt(localStorage.getItem(PLAYMAT_SIZE_KEY) || '0') || 0; }
 function loadLandArts(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(LAND_ARTS_KEY) || '{}'); }
   catch { return {}; }
@@ -46,6 +50,12 @@ interface AppState {
   // Draft result
   draftPool: Card[];
   setDraftPool: (pool: Card[]) => void;
+  aiDraftPool: Card[];
+  setAiDraftPool: (pool: Card[]) => void;
+
+  // Sealed packs (for reveal screen)
+  sealedPacks: Card[][] | null;
+  setSealedPacks: (packs: Card[][] | null) => void;
 
   // Built deck
   deck: DeckList | null;
@@ -68,8 +78,12 @@ interface AppState {
 
   // Playmat
   playmat: PlaymatId;
-  playmatArt: string; // custom art URL
+  playmatArt: string;
+  playmatPosition: string;
+  playmatSize: number;
   setPlaymat: (playmat: PlaymatId, artUrl?: string) => void;
+  setPlaymatPosition: (pos: string) => void;
+  setPlaymatSize: (size: number) => void;
 
   // Land arts: color (W/U/B/R/G) -> selected art URL
   landArts: Record<string, string>;
@@ -90,6 +104,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   draftPool: [],
   setDraftPool: (draftPool) => set({ draftPool }),
+  aiDraftPool: [],
+  setAiDraftPool: (aiDraftPool) => set({ aiDraftPool }),
+
+  sealedPacks: null,
+  setSealedPacks: (sealedPacks) => set({ sealedPacks }),
 
   deck: null,
   setDeck: (deck) => set({ deck }),
@@ -111,11 +130,21 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   playmat: loadPlaymat(),
   playmatArt: loadPlaymatArt(),
+  playmatPosition: loadPlaymatPosition(),
   setPlaymat: (playmat, artUrl = '') => {
     localStorage.setItem(PLAYMAT_KEY, playmat);
     if (artUrl) localStorage.setItem(PLAYMAT_ART_KEY, artUrl);
     else localStorage.removeItem(PLAYMAT_ART_KEY);
     set({ playmat, playmatArt: artUrl });
+  },
+  playmatSize: loadPlaymatSize(),
+  setPlaymatPosition: (pos) => {
+    localStorage.setItem(PLAYMAT_POS_KEY, pos);
+    set({ playmatPosition: pos });
+  },
+  setPlaymatSize: (size) => {
+    localStorage.setItem(PLAYMAT_SIZE_KEY, String(size));
+    set({ playmatSize: size });
   },
 
   landArts: loadLandArts(),

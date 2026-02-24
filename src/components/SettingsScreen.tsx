@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore, type ThemeId, type PlaymatId } from '../store/useAppStore';
+import { aiBrain, type AiBrainStats } from '../engine/ai-brain';
+import { getHumanLearnStats, resetHumanLearn } from '../draft/bot-ai';
 import './SettingsScreen.css';
 
 const PLAYMATS: { id: PlaymatId; label: string; color: string; artUrl: string }[] = [
@@ -20,10 +22,49 @@ const THEMES: { id: ThemeId; label: string; accent: string; bg: string }[] = [
   { id: 'obscura',   label: '✦ Obscura',  accent: '#a8a8a8', bg: 'linear-gradient(135deg, #0a0a0a, #1a1a1a)' },
 ];
 
+
 export function SettingsScreen() {
   const { theme, setTheme, playmat, playmatArt, playmatPosition, playmatSize, setPlaymat, setPlaymatPosition, setPlaymatSize, landArts, setLandArt, resetLandArts, sleeveArt, setSleeveArt } = useAppStore();
   const [sleeveZoom, setSleeveZoom] = useState(false);
   const [customArtUrl, setCustomArtUrl] = useState(playmatArt || '');
+
+  // AI Brain stats
+  const [aiStats, setAiStats] = useState<AiBrainStats>(() => aiBrain.getStats());
+  const [aiResetting, setAiResetting] = useState(false);
+
+  // Draft learning stats
+  const [draftStats, setDraftStats] = useState(() => getHumanLearnStats());
+  const [draftResetting, setDraftResetting] = useState(false);
+
+  useEffect(() => {
+    // Refresh stats every 5 seconds while on this screen
+    const id = setInterval(() => setAiStats(aiBrain.getStats()), 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  function handleResetBrain() {
+    setAiResetting(true);
+    aiBrain.reset().then(() => {
+      setAiStats(aiBrain.getStats());
+      setAiResetting(false);
+    });
+  }
+
+  function handleResetDraftLearn() {
+    setDraftResetting(true);
+    resetHumanLearn();
+    setDraftStats(getHumanLearnStats());
+    setDraftResetting(false);
+  }
+
+  function formatLastTrained(iso: string | null): string {
+    if (!iso) return 'nunca';
+    const d = new Date(iso);
+    const diff = Math.round((Date.now() - d.getTime()) / 1000);
+    if (diff < 60) return `há ${diff}s`;
+    if (diff < 3600) return `há ${Math.round(diff / 60)}min`;
+    return `há ${Math.round(diff / 3600)}h`;
+  }
   // Land art picker
   const [landPicker, setLandPicker] = useState<{ color: string; name: string } | null>(null);
   // Card art search modals
@@ -279,6 +320,85 @@ export function SettingsScreen() {
             onClose={() => setShowSleeveSearch(false)}
           />
         )}
+
+        {/* AI Brain */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">🧠 AI Learning</h2>
+          <p className="settings-desc">A IA aprende com cada partida jogada contra você.</p>
+          <div className="settings-info-grid">
+            <div className="settings-info-item">
+              <span className="settings-info-label">Partidas jogadas</span>
+              <span className="settings-info-value">{aiStats.gamesPlayed}</span>
+            </div>
+            <div className="settings-info-item">
+              <span className="settings-info-label">Taxa de vitória (IA)</span>
+              <span className="settings-info-value">
+                {aiStats.gamesPlayed > 0
+                  ? `${Math.round((aiStats.wins / aiStats.gamesPlayed) * 100)}%`
+                  : '—'}
+              </span>
+            </div>
+            <div className="settings-info-item">
+              <span className="settings-info-label">Exploração atual</span>
+              <span className="settings-info-value ai-brain-epsilon">
+                {Math.round(aiStats.epsilon * 100)}%
+              </span>
+            </div>
+            <div className="settings-info-item">
+              <span className="settings-info-label">Última atualização</span>
+              <span className="settings-info-value">{formatLastTrained(aiStats.lastTrained)}</span>
+            </div>
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              className="btn btn-muted"
+              style={{ fontSize: 13 }}
+              onClick={handleResetBrain}
+              disabled={aiResetting}
+            >
+              {aiResetting ? 'Resetando...' : 'Resetar AI Brain'}
+            </button>
+            {aiStats.gamesPlayed >= 5 && (
+              <span className="ai-brain-badge">
+                {aiStats.gamesPlayed >= 30 ? '🔥 Treinada' : aiStats.gamesPlayed >= 10 ? '📈 Aprendendo' : '🌱 Iniciante'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Draft Learning */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">🎯 Draft Learning</h2>
+          <p className="settings-desc">O bot aprende com suas escolhas no draft, valorizando mais as cartas que você sempre pica e evitando passar boas cartas.</p>
+          <div className="settings-info-grid">
+            <div className="settings-info-item">
+              <span className="settings-info-label">Picks registrados</span>
+              <span className="settings-info-value">{draftStats.totalPicks}</span>
+            </div>
+            <div className="settings-info-item" style={{ gridColumn: '1 / -1' }}>
+              <span className="settings-info-label">Cartas mais picadas</span>
+              <span className="settings-info-value" style={{ fontSize: 11 }}>
+                {draftStats.topPicks.length > 0 ? draftStats.topPicks.join(', ') : '—'}
+              </span>
+            </div>
+            <div className="settings-info-item" style={{ gridColumn: '1 / -1' }}>
+              <span className="settings-info-label">Cartas que você passa</span>
+              <span className="settings-info-value" style={{ fontSize: 11 }}>
+                {draftStats.topPasses.length > 0 ? draftStats.topPasses.join(', ') : '—'}
+              </span>
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <button
+              className="btn btn-muted"
+              style={{ fontSize: 13 }}
+              onClick={handleResetDraftLearn}
+              disabled={draftResetting}
+            >
+              {draftResetting ? 'Resetando...' : 'Resetar Draft Learning'}
+            </button>
+          </div>
+        </div>
 
         {/* Info */}
         <div className="settings-section glass settings-info">

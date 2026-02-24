@@ -365,11 +365,12 @@ export function getLandManaColors(card: GameCard): string[] {
 
   if (colors.length > 0) return colors;
 
-  // "any color" mana
+  // "any color" mana — but skip if it says "spend this mana only" (restricted mana, treat as colorless)
   if (oracleText.includes('add one mana of any color') ||
       oracleText.includes('add mana of any color') ||
       oracleText.includes('add any color') ||
       oracleText.includes('add one mana of any type')) {
+    if (oracleText.includes('spend this mana only')) return ['C'];
     if (card.color_identity && card.color_identity.length > 0) {
       return [...card.color_identity];
     }
@@ -395,6 +396,12 @@ export function getLandManaColors(card: GameCard): string[] {
   // Color identity fallback
   if (card.color_identity && card.color_identity.length > 0) {
     return [...card.color_identity];
+  }
+
+  // If oracle text has no "add" (mana production text), this land produces no mana
+  // e.g. Evolving Wilds only sacrifices to fetch — it never taps for mana
+  if (!oracleText.includes('add ')) {
+    return [];
   }
 
   return ['C'];

@@ -14,6 +14,7 @@ import {
   _threatScore,
   _getAbilityManaCost,
 } from './game-ai-part1';
+import { aiBrain } from './ai-brain';
 
 // Legacy name aliases
 const CardEngine = { ...Cards, ...CardUtils };
@@ -44,13 +45,33 @@ export function orderBlockers(state, playerId) {
   const multiBlocked = CombatSystem.getMultiBlockedAttackers(state.combat);
   for (const attackerUid of multiBlocked) {
     const blockers = state.combat.blockers[attackerUid] || [];
-    // Order: weakest toughness first (easier to kill), then highest power (most threatening)
+    const attackerCard = state.combat.attackers.find(a => a.uid === attackerUid)?.card;
+    const attackerHasFS = attackerCard && (
+      CardEngine.hasKeyword(attackerCard, 'First Strike') ||
+      CardEngine.hasKeyword(attackerCard, 'Double Strike')
+    );
+
     const ordered = [...blockers].sort((a, b) => {
-      const aTough = CardEngine.getToughness(a.card) - a.card._damage;
-      const bTough = CardEngine.getToughness(b.card) - b.card._damage;
-      // Kill the one with less remaining toughness first
+      const aTough = CardEngine.getToughness(a.card) - (a.card._damage || 0);
+      const bTough = CardEngine.getToughness(b.card) - (b.card._damage || 0);
+
+      // First-strike blockers deal damage before attacker can kill them
+      // Put them LAST so we kill the non-FS blockers first (they won't deal FS damage back)
+      const aHasFS = CardEngine.hasKeyword(a.card, 'First Strike') || CardEngine.hasKeyword(a.card, 'Double Strike');
+      const bHasFS = CardEngine.hasKeyword(b.card, 'First Strike') || CardEngine.hasKeyword(b.card, 'Double Strike');
+      if (aHasFS !== bHasFS) return aHasFS ? 1 : -1; // FS blockers go last in damage order
+
+      // If attacker has first strike: kill highest-power non-FS blocker first
+      // (they'll deal back damage in the regular step; kill them before then)
+      if (attackerHasFS) {
+        const aPower = CardEngine.getPower(a.card);
+        const bPower = CardEngine.getPower(b.card);
+        if (aPower !== bPower) return bPower - aPower; // Kill highest power first
+      }
+
+      // Default: kill lowest toughness first (maximize kills)
       if (aTough !== bTough) return aTough - bTough;
-      // If same toughness, kill higher power first
+      // Tiebreak: kill higher power first
       return CardEngine.getPower(b.card) - CardEngine.getPower(a.card);
     });
     CombatSystem.setBlockerOrder(state.combat, attackerUid, ordered.map(b => b.uid));
@@ -72,7 +93,24 @@ export function declareBlockers(state, playerId) {
     const attackerSnaps = attackers.map(a => CombatSim._snapshot(a.card, state));
     const blockerSnaps = blockerCandidates.map(b => CombatSim._snapshot(b, state));
 
-    const best = CombatSim.findBestBlocking(attackerSnaps, blockerSnaps, myLife);
+    const best = CombatSim.findBestBlocking(attackerSnaps, blockerSnaps, myLife, _evaluateBoard(state, playerId));
+
+    // ── NN: record most important blocking decision for training ──────────
+    if (aiBrain.isReady() && Object.keys(best.assignment).length > 0) {
+      try {
+        const _nnBf = aiBrain.extractBoardFeatures(state, playerId);
+        // Re-rank the blocker candidates by NN — pick most valuable assigned blocker to record
+        const assignedBlockerIndices = Object.values(best.assignment).flat() as number[];
+        const assignedBlockers = assignedBlockerIndices
+          .map(bi => blockerCandidates[bi])
+          .filter(Boolean);
+        if (assignedBlockers.length > 0) {
+          const _nnRank = aiBrain.scoreActionsSync(_nnBf, assignedBlockers, 'block');
+          const _best = assignedBlockers[_nnRank[0]];
+          if (_best) aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(_best, 'block'));
+        }
+      } catch { /* non-fatal */ }
+    }
 
     // Apply the assignment
     for (const [aiStr, biArr] of Object.entries(best.assignment)) {
@@ -95,6 +133,23 @@ export function declareBlockers(state, playerId) {
   if (blockCount > 0) {
     state.log.push(`Voce bloqueia com ${blockCount} criatura(s).`);
   }
+}
+
+// =================== CARD ADVANTAGE SOURCE DETECTION ===================
+function _isCardAdvantageSource(creature: any): boolean {
+  const abilities = CardEngine.getActivatedAbilities(creature);
+  for (const ab of abilities) {
+    if ((ab.effects || []).some((e: any) =>
+      e.type === 'draw' || e.type === 'loot' || e.type === 'create_token' || e.type === 'exile_top_play'
+    )) return true;
+  }
+  const triggers = creature._triggers || [];
+  for (const t of triggers) {
+    if ((t.effects || []).some((e: any) =>
+      e.type === 'draw' || e.type === 'create_token'
+    )) return true;
+  }
+  return false;
 }
 
 // =================== LEGACY DECLARE BLOCKERS ===================
@@ -129,7 +184,11 @@ function _legacyDeclareBlockers(state, playerId, blockerCandidates, attackers, m
       const killsAttacker = bPower >= atkToughness || CardEngine.hasKeyword(blocker, 'Deathtouch');
       const blockerSurvives = bToughness > atkPower && !CardEngine.hasKeyword(attacker, 'Deathtouch');
       if ((killsAttacker && blockerSurvives) || (killsAttacker && CardEngine.hasIndestructible(blocker))) {
-        const score = 100 + _creatureValue(attacker);
+        let score = 100 + _creatureValue(attacker);
+        // Vida baixa: priorizar bloquear com lifelink (recupera vida no combate)
+        if (myLife <= 8 && CardEngine.hasKeyword(blocker, 'Lifelink')) {
+          score += 8;
+        }
         if (score > bestScore) { bestScore = score; bestBlocker = blocker; }
       }
     }
@@ -178,7 +237,13 @@ function _legacyDeclareBlockers(state, playerId, blockerCandidates, attackers, m
         .sort((a, b) => CardEngine.getPower(b.card) - CardEngine.getPower(a.card));
       const cheapest = blockerCandidates
         .filter(b => !usedBlockers.has(b._uid))
-        .sort((a, b) => _creatureValue(a) - _creatureValue(b));
+        .sort((a, b) => {
+          if (a._isToken !== b._isToken) return a._isToken ? -1 : 1; // Tokens primeiro
+          const aCA = _isCardAdvantageSource(a) ? 1 : 0;
+          const bCA = _isCardAdvantageSource(b) ? 1 : 0;
+          if (aCA !== bCA) return aCA - bCA; // CA sources por último
+          return _creatureValue(a) - _creatureValue(b);
+        });
       for (const atk of unblockedSorted) {
         if (unblockedDamage < myLife) break;
         if (cheapest.length === 0) break;
@@ -205,9 +270,10 @@ export function _pickBestCardToExileFromHand(state, playerId, cards) {
 // =================== DISCARD ===================
 export function discard(state, playerId, amount) {
   const hand = state.players[playerId].zones.hand;
-  const cards = hand.getAll().sort((a, b) => {
-    const scoreA = _keepScore(a);
-    const scoreB = _keepScore(b);
+  const allCards = hand.getAll();
+  const cards = allCards.slice().sort((a, b) => {
+    const scoreA = _keepScore(a, allCards);
+    const scoreB = _keepScore(b, allCards);
     return scoreA - scoreB;
   });
 
@@ -220,19 +286,47 @@ export function discard(state, playerId, amount) {
 }
 
 // =================== KEEP SCORE ===================
-function _keepScore(card) {
+function _keepScore(card, hand?: any[]) {
   if (CardEngine.isLand(card)) return 0;
   let score = 5;
   if (CardEngine.isCreature(card)) score += 3;
   const effects = CardEngine.getSpellEffects(card);
   if (effects.some(e => e.type === 'destroy' || e.type === 'exile')) score += 5;
-  if (effects.some(e => e.type === 'draw')) score += 2;
+  if (effects.some(e => e.type === 'draw')) score += 3;
   if (effects.some(e => e.type === 'ramp')) score += 2;
   if (effects.some(e => e.type === 'destroy_all' || e.type === 'exile_all')) score += 6;
   if (effects.some(e => e.type === 'create_token')) score += 3;
   if (CardEngine.isAura(card)) score += 2;
   if (CardEngine.isEquipment(card)) score += 2;
+  // Redundância: duplicata é menos valiosa
+  if (hand) {
+    const dupes = hand.filter(c => c.name === card.name && c._uid !== card._uid);
+    if (dupes.length > 0) score -= 3;
+  }
   return score;
+}
+
+// Check if player can afford the ward cost of a card (before targeting it)
+function _canPayWardCost(state: any, playerId: number, card: any): boolean {
+  if (!CardEngine.hasWard(card)) return true;
+  const wardCost = CardEngine.getWardCost(card);
+  if (wardCost <= 0) return true;
+  const pool = state.manaPool[playerId] || {};
+  const total = Object.values(pool).reduce((s: number, v: any) => s + (v || 0), 0) as number;
+  return total >= wardCost;
+}
+
+// Ward-affordability check for targeting: at the time _chooseTargets runs,
+// autoTapForSpell has already tapped lands for the spell cost. So untapped lands
+// represent mana we can STILL pay (extra beyond the spell). If ward costs N and
+// we have ≥N untapped mana remaining, we can afford to target the creature.
+function _canAffordWardAfterSpell(state: any, playerId: number, card: any): boolean {
+  if (!CardEngine.hasWard(card)) return true;
+  const wardCost = CardEngine.getWardCost(card);
+  if (wardCost <= 0) return true;
+  const avail = ManaSystem.getAvailableMana(state, playerId);
+  const availTotal = Object.values(avail).reduce((s: number, v: any) => s + (v || 0), 0) as number;
+  return availTotal >= wardCost;
 }
 
 // =================== CHOOSE TARGETS ===================
@@ -250,7 +344,7 @@ export function _chooseTargets(state, playerId, card) {
   const targets = [];
   const opponentId = playerId === 0 ? 1 : 0;
 
-  // Aura: target own best creature, preferring hexproof/evasive
+  // Aura: target own best creature, preferring hexproof/evasive/synergy
   if (CardEngine.isAura(card)) {
     const myCreatures = state.players[playerId].zones.battlefield.cards
       .filter(c => CardEngine.isCreature(c))
@@ -263,10 +357,16 @@ export function _chooseTargets(state, playerId, card) {
         const aInd = CardEngine.hasIndestructible(a) ? 5 : 0;
         const bInd = CardEngine.hasIndestructible(b) ? 5 : 0;
         if (aInd !== bInd) return bInd - aInd;
-        // Evasion creatures get more value from buffs
+        // Evasion creatures get more value from power/toughness buffs
         const aEva = (CardEngine.hasKeyword(a, 'Flying') ? 3 : 0) + (CardEngine.hasKeyword(a, 'Menace') ? 2 : 0) + (CardEngine.hasKeyword(a, 'Trample') ? 1 : 0);
         const bEva = (CardEngine.hasKeyword(b, 'Flying') ? 3 : 0) + (CardEngine.hasKeyword(b, 'Menace') ? 2 : 0) + (CardEngine.hasKeyword(b, 'Trample') ? 1 : 0);
         if (aEva !== bEva) return bEva - aEva;
+        // Synergy: creatures with attack/combat triggers benefit most from stat buffs
+        const aTriggers = CardEngine.getTriggeredAbilities(a);
+        const bTriggers = CardEngine.getTriggeredAbilities(b);
+        const aSyn = aTriggers.some((t: any) => t.event === 'attacks' || t.event === 'combat_damage_player') ? 2 : 0;
+        const bSyn = bTriggers.some((t: any) => t.event === 'attacks' || t.event === 'combat_damage_player') ? 2 : 0;
+        if (aSyn !== bSyn) return bSyn - aSyn;
         return CardEngine.getPower(b) - CardEngine.getPower(a);
       });
     if (myCreatures.length > 0) {
@@ -278,11 +378,40 @@ export function _chooseTargets(state, playerId, card) {
   for (const effect of effects) {
     switch (effect.type) {
       case 'counter_spell': {
-        // Target the most threatening opponent spell on the stack
+        // Pick the most impactful opponent spell to counter
+        const _scoreSpellThreat = (card: any): number => {
+          if (!card) return 0;
+          const effects = CardEngine.getSpellEffects(card);
+          const tl = (card.type_line || '').toLowerCase();
+          // Board wipes are the highest priority to counter
+          if (effects.some(e => e.type === 'destroy_all' || e.type === 'exile_all' || e.type === 'damage_all')) return 20;
+          // Sweepers / mass removal
+          if (effects.some(e => e.type === 'damage_all_creatures')) return 16;
+          // Single removal on our creatures
+          if (effects.some(e => e.type === 'destroy' || e.type === 'exile')) return 12;
+          // Another counter spell
+          if (effects.some(e => e.type === 'counter_spell')) return 10;
+          // High-value creatures (CMC 4+)
+          if (tl.includes('creature') && (card.cmc || 0) >= 4) return 8 + (card.cmc || 0);
+          // Draw engines / card advantage
+          if (effects.some(e => e.type === 'draw' && (e.amount || 0) >= 2)) return 9;
+          // Bounce / discard
+          if (effects.some(e => e.type === 'bounce' || e.type === 'discard')) return 7;
+          // Buff spells
+          if (effects.some(e => e.type === 'buff')) return 5;
+          // Any creature
+          if (tl.includes('creature')) return 4 + (card.cmc || 0) * 0.5;
+          // Generic
+          return 3;
+        };
+
         const oppItems = state.stack.items.filter((item: any) => item.controller === opponentId);
         if (oppItems.length > 0) {
-          const targetItem = oppItems[oppItems.length - 1];
-          targets.push(targetItem.card); // handleCounterSpell expects the card object directly
+          // Find most threatening spell
+          const bestItem = oppItems.reduce((best, item) => {
+            return _scoreSpellThreat(item.card) > _scoreSpellThreat(best.card) ? item : best;
+          }, oppItems[0]);
+          targets.push(bestItem.card);
         } else if (state._pendingCastOnStack && state._pendingCastOnStack.playerId === opponentId) {
           targets.push(state._pendingCastOnStack.card);
         }
@@ -371,15 +500,11 @@ export function _chooseTargets(state, playerId, card) {
           }
         } else if (effect.target === 'creature' || effect.target === 'any target' || effect.target === 'creature or player' || effect.target === 'creature or planeswalker' || effect.target === 'creature_or_planeswalker') {
           const isCreatureOrPW = effect.target === 'creature or planeswalker' || effect.target === 'creature_or_planeswalker';
-          // Filter for targetable (hexproof/shroud check), sort by threat score, prefer non-ward
+          // Filter for targetable (hexproof/shroud check), skip ward we can't afford, sort by threat
           const opCreatures = state.players[opponentId].zones.battlefield.cards
-            .filter(c => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId))
-            .sort((a, b) => {
-              const aWard = CardEngine.hasWard(a) ? 1 : 0;
-              const bWard = CardEngine.hasWard(b) ? 1 : 0;
-              if (aWard !== bWard) return aWard - bWard;
-              return _threatScore(b) - _threatScore(a);
-            });
+            .filter(c => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId)
+              && _canAffordWardAfterSpell(state, playerId, c))
+            .sort((a, b) => _threatScore(b) - _threatScore(a));
 
           const dmgAmount = effect.amount || 0;
           if (opCreatures.length > 0) {
@@ -565,9 +690,35 @@ export function _chooseTargets(state, playerId, card) {
           }
           break;
         }
-        // Filter opponent creatures
+        if (tgt === 'own_nonland') {
+          // Sunpearl Kirin: bounce own nonland. If optional, only bounce a token (gets draw bonus).
+          // Never target opponent creatures here.
+          if (effect.optional) {
+            const myTokens = state.players[playerId].zones.battlefield.cards
+              .filter((c: any) => c._isToken && !CardEngine.isLand(c) && c._uid !== card?._uid
+                && CardEngine.canBeTargeted(c, playerId));
+            if (effect.draw_if_token && myTokens.length > 0) {
+              targets.push({ type: 'creature', player: playerId, uid: myTokens[0]._uid });
+            }
+            // No token (or no draw bonus): skip bounce entirely
+            break;
+          }
+          // Mandatory: bounce weakest own nonland (minimum loss)
+          const myNonlands = state.players[playerId].zones.battlefield.cards
+            .filter((c: any) => !CardEngine.isLand(c) && c._uid !== card?._uid
+              && CardEngine.canBeTargeted(c, playerId))
+            .sort((a: any, b: any) =>
+              (CardEngine.getPower(a) + CardEngine.getToughness(a)) -
+              (CardEngine.getPower(b) + CardEngine.getToughness(b)));
+          if (myNonlands.length > 0) {
+            targets.push({ type: 'creature', player: playerId, uid: myNonlands[0]._uid });
+          }
+          break;
+        }
+
+        // Filter opponent creatures — skip ward creatures we can't afford to target after the spell cost
         let opCreatures = state.players[opponentId].zones.battlefield.cards
-          .filter(c => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId));
+          .filter((c: any) => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId) && _canAffordWardAfterSpell(state, playerId, c));
 
         // Apply keyword filter if specified (e.g., creature_with_flying)
         if (tgt === 'creature_with_flying') {
@@ -584,22 +735,81 @@ export function _chooseTargets(state, playerId, card) {
           opCreatures = opCreatures.filter(c => CardEngine.getPower(c) <= 3);
         }
 
-        // Sort by threat score
-        opCreatures.sort((a, b) => {
-          const aWard = CardEngine.hasWard(a) ? 1 : 0;
-          const bWard = CardEngine.hasWard(b) ? 1 : 0;
-          if (aWard !== bWard) return aWard - bWard;
-          return _threatScore(b) - _threatScore(a);
-        });
-
-        // For destroy, also skip indestructible
-        if (effect.type === 'destroy') {
-          const killable = opCreatures.filter(c => !CardEngine.hasIndestructible(c));
-          if (killable.length > 0) {
-            targets.push({ type: 'creature', player: opponentId, uid: killable[0]._uid });
+        // Helper: detect if creature has valuable ETB effects (makes bounce more punishing)
+        const _getETBBonus = (c: any): number => {
+          const etb = CardEngine.getETBEffects(c);
+          if (etb.length === 0) return 0;
+          let bonus = 2; // Any ETB is worth bouncing
+          for (const e of etb) {
+            if (e.type === 'draw') bonus += 4;
+            else if (e.type === 'destroy' || e.type === 'exile') bonus += 5;
+            else if (e.type === 'create_token') bonus += 3;
+            else if (e.type === 'damage') bonus += 2;
+            else if (e.type === 'bounce') bonus += 2;
           }
-        } else if (opCreatures.length > 0) {
-          targets.push({ type: 'creature', player: opponentId, uid: opCreatures[0]._uid });
+          return bonus;
+        };
+
+        if (effect.type === 'bounce') {
+          // Bounce: prefer ETB creatures (bouncing them = they recast at full cost, lose ETB value again)
+          opCreatures.sort((a, b) => {
+            const aWard = CardEngine.hasWard(a) ? 1 : 0;
+            const bWard = CardEngine.hasWard(b) ? 1 : 0;
+            if (aWard !== bWard) return aWard - bWard;
+            return (_threatScore(b) + _getETBBonus(b)) - (_threatScore(a) + _getETBBonus(a));
+          });
+          if (opCreatures.length > 0) {
+            targets.push({ type: 'creature', player: opponentId, uid: opCreatures[0]._uid });
+          }
+        } else if (effect.type === 'destroy') {
+          // Destroy: prioritize draw engines and token factories (card advantage sources)
+          const killable = opCreatures.filter(c => !CardEngine.hasIndestructible(c));
+          killable.sort((a, b) => {
+            const aWard = CardEngine.hasWard(a) ? 1 : 0;
+            const bWard = CardEngine.hasWard(b) ? 1 : 0;
+            if (aWard !== bWard) return aWard - bWard;
+            const aBonus = _isCardAdvantageSource(a) ? 4 : 0;
+            const bBonus = _isCardAdvantageSource(b) ? 4 : 0;
+            return (_threatScore(b) + bBonus) - (_threatScore(a) + aBonus);
+          });
+          if (killable.length > 0) {
+            let bestTarget = killable[0];
+            // NN re-ranks top-3 candidates when multiple choices exist
+            if (killable.length >= 2 && aiBrain.isReady()) {
+              try {
+                const _bf = aiBrain.extractBoardFeatures(state, playerId);
+                const top3 = killable.slice(0, 3);
+                const _rank = aiBrain.scoreActionsSync(_bf, top3, 'target');
+                bestTarget = top3[_rank[0]];
+                aiBrain.recordDecision(_bf, aiBrain.extractActionFeatures(bestTarget, 'target'));
+              } catch { bestTarget = killable[0]; }
+            }
+            targets.push({ type: 'creature', player: opponentId, uid: bestTarget._uid });
+          }
+        } else {
+          // Exile: same priority as destroy (draw engines first), but no indestructible concern
+          opCreatures.sort((a, b) => {
+            const aWard = CardEngine.hasWard(a) ? 1 : 0;
+            const bWard = CardEngine.hasWard(b) ? 1 : 0;
+            if (aWard !== bWard) return aWard - bWard;
+            const aBonus = _isCardAdvantageSource(a) ? 4 : 0;
+            const bBonus = _isCardAdvantageSource(b) ? 4 : 0;
+            return (_threatScore(b) + bBonus) - (_threatScore(a) + aBonus);
+          });
+          if (opCreatures.length > 0) {
+            let bestExile = opCreatures[0];
+            // NN re-ranks top-3 candidates when multiple choices exist
+            if (opCreatures.length >= 2 && aiBrain.isReady()) {
+              try {
+                const _bf = aiBrain.extractBoardFeatures(state, playerId);
+                const top3 = opCreatures.slice(0, 3);
+                const _rank = aiBrain.scoreActionsSync(_bf, top3, 'target');
+                bestExile = top3[_rank[0]];
+                aiBrain.recordDecision(_bf, aiBrain.extractActionFeatures(bestExile, 'target'));
+              } catch { bestExile = opCreatures[0]; }
+            }
+            targets.push({ type: 'creature', player: opponentId, uid: bestExile._uid });
+          }
         }
         break;
       }
@@ -683,21 +893,37 @@ export function _chooseTargets(state, playerId, card) {
         break;
       }
 
-      case 'fight': {
+      case 'fight':
+      case 'power_damage': {
         const myCreatures = state.players[playerId].zones.battlefield.cards
           .filter(c => CardEngine.isCreature(c))
           .sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
         const opCreatures = state.players[opponentId].zones.battlefield.cards
-          .filter(c => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId))
-          .sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
+          .filter(c => (CardEngine.isCreature(c) || CardEngine.isPlaneswalker(c)) && CardEngine.canBeTargeted(c, playerId));
 
         if (opCreatures.length > 0 && myCreatures.length > 0) {
           const bestPower = CardEngine.getPower(myCreatures[0]);
-          const killable = opCreatures.find(c =>
-            CardEngine.getToughness(c) <= bestPower
+          // Prefer killable targets (we survive, they die)
+          const killable = opCreatures.filter(c =>
+            CardEngine.getToughness(c) - (c._damage || 0) <= bestPower && !CardEngine.hasIndestructible(c)
           );
-          const target = killable || opCreatures[opCreatures.length - 1];
-          targets.push({ type: 'creature', player: opponentId, uid: target._uid });
+
+          if (killable.length > 0) {
+            // Among killable: prioritize card advantage sources (draw engines, token factories)
+            killable.sort((a, b) => {
+              const aWard = CardEngine.hasWard(a) ? 1 : 0;
+              const bWard = CardEngine.hasWard(b) ? 1 : 0;
+              if (aWard !== bWard) return aWard - bWard;
+              const aBonus = _isCardAdvantageSource(a) ? 4 : 0;
+              const bBonus = _isCardAdvantageSource(b) ? 4 : 0;
+              return (_threatScore(b) + bBonus) - (_threatScore(a) + aBonus);
+            });
+            targets.push({ type: 'creature', player: opponentId, uid: killable[0]._uid });
+          } else {
+            // Nothing killable — pick weakest to minimize our creature's damage taken
+            opCreatures.sort((a, b) => CardEngine.getToughness(a) - CardEngine.getToughness(b));
+            targets.push({ type: 'creature', player: opponentId, uid: opCreatures[0]._uid });
+          }
         }
         break;
       }
@@ -923,7 +1149,16 @@ export function _chooseTargets(state, playerId, card) {
     }
   }
 
-  return targets;
+  // Ward check: remove targets we can't afford to pay ward for
+  // (Ward is paid by the targeting player after targeting; if we can't pay, spell gets countered)
+  const filteredTargets = targets.filter(tgt => {
+    if (!tgt || !tgt.uid) return true; // Player/stack targets don't have ward
+    const targetCard = state.players[tgt.player]?.zones.battlefield.get(tgt.uid);
+    if (!targetCard) return true;
+    return _canPayWardCost(state, playerId, targetCard);
+  });
+
+  return filteredTargets;
 }
 
 // =================== AI INSTANT PRIORITY ===================
@@ -949,41 +1184,87 @@ export function playInstantPhase(state, playerId, phase) {
     return { card, score };
   }).sort((a, b) => b.score - a.score);
 
-  for (const { card, score } of scored) {
-    if (score <= 5) break; // Threshold: not worth casting
+  // Lower threshold at end_step — mana not spent is tempo wasted
+  const scoreThreshold = phase === 'end_step' ? 3 : 5;
 
-    // Calcular CMC reduzido para instants
-    const { cmc: instantReducedCmc } = GameState.getEffectiveCmcWithReduction(state, playerId, card);
-    if (!ManaSystem.canAfford(state, playerId, card, null, instantReducedCmc)) continue;
+  // end_step: loop multiple times to burn all spare mana (re-score after each cast)
+  let endStepCasts = 0;
+  const endStepGuard = 6;
+  let endStepContinue = true;
 
-    GameState.autoTapForSpell(state, playerId, card.mana_cost, instantReducedCmc, card);
-    const targets = _chooseTargets(state, playerId, card);
+  while (endStepContinue) {
+    endStepContinue = false; // Will be set true only if we successfully cast in end_step
 
-    // Fire creature_targeted_by_opponent trigger for each target
-    if (targets && targets.length > 0) {
-      for (const target of targets) {
-        if (target.player === 0) { // Targeting opponent's creatures
-          GameState.fireTrigger(state, 'creature_targeted_by_opponent', { playerId: 0 });
+    // Re-score playable cards (mana pool changes each cast)
+    const currentPlayable = phase === 'end_step'
+      ? GameState.getPlayableCards(state, playerId).filter(c => {
+          const tl = (c.type_line || '').toLowerCase();
+          return tl.includes('instant') || CardEngine.hasKeyword(c, 'Flash');
+        })
+      : playable; // Non end_step: use original list
+
+    const currentScored = phase === 'end_step'
+      ? currentPlayable.map(card => ({
+          card,
+          score: _scoreInstant(card, state, playerId, phase,
+            state.players[playerId].zones.battlefield.cards.filter(c => CardEngine.isCreature(c)),
+            state.players[opponentId].zones.battlefield.cards.filter(c => CardEngine.isCreature(c)))
+        })).sort((a, b) => b.score - a.score)
+      : scored;
+
+    // AiBrain: re-rank candidates above threshold with neural network
+    let _nnIterList = currentScored;
+    {
+      const _above = currentScored.filter((x: any) => x.score > scoreThreshold);
+      if (_above.length > 1 && aiBrain.isReady()) {
+        const _nnBf = aiBrain.extractBoardFeatures(state, playerId);
+        const _nnRank = aiBrain.scoreActionsSync(_nnBf, _above.map((x: any) => x.card), 'instant');
+        const _nnSorted = _nnRank.map((i: number) => _above[i]);
+        if (_nnSorted.length > 0) {
+          aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(_nnSorted[0].card, 'instant'));
+          _nnIterList = [..._nnSorted, ...currentScored.filter((x: any) => x.score <= scoreThreshold)];
         }
       }
     }
+    for (const { card, score } of _nnIterList) {
+      if (score <= scoreThreshold) break; // Threshold: not worth casting
 
-    const result = GameState.castSpell(state, playerId, card._uid, targets);
-    if (result.success) {
-      if (!state._aiActions) state._aiActions = [];
-      let targetDesc = '';
+      // Calcular CMC reduzido para instants
+      const { cmc: instantReducedCmc } = GameState.getEffectiveCmcWithReduction(state, playerId, card);
+      if (!ManaSystem.canAfford(state, playerId, card, null, instantReducedCmc)) continue;
+
+      GameState.autoTapForSpell(state, playerId, card.mana_cost, instantReducedCmc, card);
+      const targets = _chooseTargets(state, playerId, card);
+
+      // Fire creature_targeted_by_opponent trigger for each target
       if (targets && targets.length > 0) {
-        const tgt = targets[0];
-        const tgtCard = state.players[tgt.player].zones.battlefield.get(tgt.uid);
-        if (tgtCard) targetDesc = ` em ${tgtCard.name}`;
+        for (const target of targets) {
+          if (target.player === 0) { // Targeting opponent's creatures
+            GameState.fireTrigger(state, 'creature_targeted_by_opponent', { playerId: 0 });
+          }
+        }
       }
-      state._aiActions.push({
-        type: 'cast',
-        card: { name: card.name, image_normal: card.image_normal, image_small: card.image_small, type_line: card.type_line, mana_cost: card.mana_cost },
-        description: `Oponente joga ${card.name}${targetDesc} (instant)`,
-        targetDesc
-      });
-      break; // One instant per priority window
+
+      const result = GameState.castSpell(state, playerId, card._uid, targets);
+      if (result.success) {
+        if (!state._aiActions) state._aiActions = [];
+        let targetDesc = '';
+        if (targets && targets.length > 0) {
+          const tgt = targets[0];
+          const tgtCard = state.players[tgt.player].zones.battlefield.get(tgt.uid);
+          if (tgtCard) targetDesc = ` em ${tgtCard.name}`;
+        }
+        state._aiActions.push({
+          type: 'cast',
+          card: { name: card.name, image_normal: card.image_normal, image_small: card.image_small, type_line: card.type_line, mana_cost: card.mana_cost },
+          description: `Oponente joga ${card.name}${targetDesc} (instant)`,
+          targetDesc
+        });
+        if (phase === 'end_step' && ++endStepCasts < endStepGuard) {
+          endStepContinue = true; // Try to cast another spell with remaining mana
+        }
+        break; // Move to next while loop iteration (re-score)
+      }
     }
   }
 
@@ -1023,7 +1304,9 @@ function _tryActivatedAbilitiesInCombat(state, playerId, phase) {
         if (!ManaSystem.canAfford(state, playerId, fakeCard)) continue;
       }
 
-      // Only use combat-relevant abilities
+      // Use combat-relevant abilities (+ draw/token/defensive in end_step/upkeep)
+      const myLife = state.players[playerId].life;
+      const lowLife = myLife <= 8;
       let useful = false;
       for (const eff of ability.effects) {
         if (eff.type === 'damage' && oppCreatures.length > 0) useful = true;
@@ -1031,6 +1314,26 @@ function _tryActivatedAbilitiesInCombat(state, playerId, phase) {
         if (eff.type === 'buff_self' && (phase === 'post_blockers' || phase === 'combat_damage')) useful = true;
         if (eff.type === 'regenerate' && (phase === 'post_blockers' || phase === 'combat_damage')) useful = true;
         if (eff.type === 'grant' && (phase === 'post_blockers' || phase === 'combat_damage')) useful = true;
+        // End_step: burn spare mana on draw/token/counter abilities
+        if (phase === 'end_step') {
+          if (eff.type === 'draw') useful = true;
+          if (eff.type === 'create_token') useful = true;
+          if (eff.type === 'loot') useful = true;
+          if (eff.type === 'counter_self') useful = true;
+          if (eff.type === 'grant_counter' || eff.type === 'grant_counters') useful = true;
+          if (eff.type === 'scry' || eff.type === 'surveil') useful = true;
+        }
+        // Upkeep: reactive lifegain and scry when relevant
+        if (phase === 'upkeep') {
+          if ((eff.type === 'gainLife' || eff.type === 'drain') && lowLife) useful = true;
+          if (eff.type === 'scry' || eff.type === 'surveil') useful = true;
+          if (eff.type === 'draw') useful = true; // Always draw when we can
+        }
+        // Combat_begin: regenerate/indestructible for our creatures
+        if (phase === 'combat_begin') {
+          if (eff.type === 'regenerate') useful = true;
+          if (eff.type === 'gainLife' && lowLife) useful = true;
+        }
       }
       if (!useful) continue;
 
@@ -1068,29 +1371,43 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
   const hasRemoval = effects.some(e => e.type === 'destroy' || e.type === 'exile' || e.type === 'damage');
   const hasBuff = effects.some(e => e.type === 'buff');
   const hasDraw = effects.some(e => e.type === 'draw');
-  const hasTap = effects.some(e => e.type === 'tap');
+  const hasTap = effects.some(e => e.type === 'tap' || e.type === 'tap_target');
   const hasBounce = effects.some(e => e.type === 'bounce');
-  const hasScry = effects.some(e => e.type === 'scry' || e.type === 'surveil');
+  const hasScry = effects.some(e => e.type === 'scry' || e.type === 'surveil' || e.type === 'look_top');
   const hasToken = effects.some(e => e.type === 'create_token');
+  const hasLoot = effects.some(e => e.type === 'loot');
+  const hasMill = effects.some(e => e.type === 'mill');
+  const hasLifegain = effects.some(e => e.type === 'gainLife' || e.type === 'drain');
   const myHandSize = state.players[playerId].zones.hand.count();
+  const myLife = state.players[playerId].life;
+  const oppDeckSize = state.players[playerId === 0 ? 1 : 0].zones.library?.count?.() ?? 99;
 
   if (phase === 'combat_begin') {
     // Before attackers declared — tap threats or remove them
+    const totalOppPower = oppCreatures.reduce((s, c) => s + CardEngine.getPower(c), 0);
+    const incomingLethal = totalOppPower >= myLife;
+    const lethalMult = incomingLethal ? 1.8 : 1.0; // Greatly boost defensive spells when at lethal risk
     if (hasTap) {
       const untappedThreats = oppCreatures.filter(c => !c._tapped);
       if (untappedThreats.length > 0) {
         const biggestThreat = Math.max(...untappedThreats.map(c => _threatScore(c)), 0);
-        score += 4 + biggestThreat * 0.5;
+        score += (4 + biggestThreat * 0.5) * lethalMult;
       }
     }
     if (hasRemoval && oppCreatures.length > 0) {
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
-      score += 4 + biggestThreat * 0.5;
+      score += (4 + biggestThreat * 0.5) * lethalMult;
     }
     if (hasBounce && oppCreatures.length > 0) {
       // Bounce before combat is almost as good as removal — prevents attack entirely
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
-      score += 4 + biggestThreat * 0.5;
+      score += (4 + biggestThreat * 0.5) * lethalMult;
+    }
+    if (hasLifegain && incomingLethal) {
+      // Lifegain when facing lethal is critical — even a few points keeps us alive
+      const gainEffect = effects.find(e => e.type === 'gainLife' || e.type === 'drain');
+      const lifeGained = gainEffect?.amount || 3;
+      score += Math.min(lifeGained * 2, 16); // Up to +16 for survival lifegain
     }
   }
 
@@ -1100,23 +1417,40 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
     const amDefender = combat && state.activePlayer !== playerId;
 
     if (amDefender) {
+      // Check if incoming damage is lethal
+      const incomingDmg = combat ? combat.attackers.reduce((s, a) => s + CardEngine.getPower(a.card), 0) : 0;
+      const incomingLethal = incomingDmg >= myLife;
+      const lethalMult = incomingLethal ? 1.6 : 1.0;
+
       // Defender: tap/remove/bounce attackers to reduce incoming damage
       if (hasTap && combat && combat.attackers.length > 0) {
-        // Tap biggest attacker to prevent it from dealing damage
         const biggestAtk = Math.max(...combat.attackers.map(a => CardEngine.getPower(a.card)), 0);
-        score += 8 + biggestAtk;
+        score += (8 + biggestAtk) * lethalMult;
       }
       if (hasRemoval && combat && combat.attackers.length > 0) {
         const biggestAtk = Math.max(...combat.attackers.map(a => _threatScore(a.card)), 0);
-        score += 8 + biggestAtk;
+        score += (8 + biggestAtk) * lethalMult;
       }
       if (hasBounce && combat && combat.attackers.length > 0) {
         const biggestAtk = Math.max(...combat.attackers.map(a => _threatScore(a.card)), 0);
-        score += 7 + biggestAtk * 0.8;
+        score += (7 + biggestAtk * 0.8) * lethalMult;
+      }
+      if (hasLifegain && incomingLethal) {
+        const gainEffect = effects.find(e => e.type === 'gainLife' || e.type === 'drain');
+        const lifeGained = gainEffect?.amount || 3;
+        score += Math.min(lifeGained * 2, 14);
       }
     } else {
-      // Attacker: buff before blockers declared (less common, keep low score)
-      if (hasBuff) score += 3;
+      // Attacker: buff an unblockable/evasion creature before blockers declared
+      if (hasBuff && combat) {
+        const hasEvasionAttacker = combat.attackers.some(a => {
+          const c = a.card;
+          return CardEngine.hasKeyword(c, 'flying') || CardEngine.hasKeyword(c, 'menace') ||
+                 CardEngine.hasKeyword(c, 'trample') || CardEngine.hasKeyword(c, 'intimidate');
+        });
+        // Buff is worth it if we have evasion attackers (opponent can't cleanly block)
+        score += hasEvasionAttacker ? 6 : 3;
+      }
     }
   }
 
@@ -1203,10 +1537,63 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
         score += 3; // All blocked, less urgent
       }
     }
+    // Damage-as-combat-assist: check if damage spell can kill a specific attacker/blocker in combat
+    const dmgEffect = effects.find(e => e.type === 'damage' && e.target !== 'player');
+    if (dmgEffect && combat) {
+      const dmgAmount = dmgEffect.amount || 0;
+      const myBf = state.players[playerId].zones.battlefield;
+      // Check: can our damage kill an unblocked ATTACKER that's hitting us?
+      const amDefending = combat && state.activePlayer !== playerId;
+      if (amDefending && combat.attackers.length > 0) {
+        for (const atk of combat.attackers) {
+          const atkRemainingTough = CardEngine.getToughness(atk.card) - (atk.card._damage || 0);
+          if (atkRemainingTough <= dmgAmount && CardEngine.canBeTargeted(atk.card, playerId)) {
+            const isUnblocked = (combat.blockers[atk.uid] || []).length === 0;
+            // Killing an unblocked attacker is top priority (prevents player damage)
+            score += isUnblocked
+              ? 10 + CardEngine.getPower(atk.card) // Kill unblocked attacker — huge tempo
+              : 5 + _threatScore(atk.card) * 0.4;  // Kill blocked attacker — saves our blocker
+            break;
+          }
+        }
+      }
+      // Check: can we finish off a blocker that's blocking our creature?
+      // (our creature deals some damage, we add damage spell to get the kill)
+      if (!amDefending) {
+        for (const [atkUid, blockerArr] of Object.entries(combat.blockers || {})) {
+          const ourAtk = combat.attackers.find((a: any) => a.uid === atkUid);
+          if (!ourAtk || !myBf.get(ourAtk.card._uid)) continue;
+          for (const b of (blockerArr as any[])) {
+            // Our attacker hits this blocker; how much damage does it take?
+            const ourAtkPower = CardEngine.getPower(ourAtk.card);
+            const blkRemainingTough = CardEngine.getToughness(b.card) - (b.card._damage || 0) - ourAtkPower;
+            if (blkRemainingTough > 0 && blkRemainingTough <= dmgAmount && CardEngine.canBeTargeted(b.card, playerId)) {
+              // Combo: attacker + damage spell kills the blocker together, saving our creature
+              score += 7 + _creatureValue(ourAtk.card) * 0.5;
+              break;
+            }
+          }
+        }
+      }
+    }
+    // Draw/scry during combat damage: low priority but burn spare mana
+    if (hasDraw) {
+      if (myHandSize <= 1) score += 6;
+      else if (myHandSize <= 3) score += 4;
+      else score += 2;
+    }
+    if (hasScry) {
+      score += myHandSize <= 2 ? 4 : 2;
+    }
+    if (hasLoot) {
+      score += myHandSize <= 2 ? 3 : 1;
+    }
   }
 
   if (phase === 'upkeep') {
     // Opponent's upkeep — bounce before they draw, remove/tap before they can attack
+    const totalOppPower = oppCreatures.reduce((s, c) => s + CardEngine.getPower(c), 0);
+    const criticalLife = myLife <= 5;
     if (hasBounce && oppCreatures.length > 0) {
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
       score += 6 + biggestThreat * 0.5;
@@ -1222,6 +1609,11 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
       // Removal before their attack step is always valuable — baseline above threshold
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
       score += 6 + biggestThreat * 0.5;
+    }
+    if (hasLifegain && criticalLife && totalOppPower > 0) {
+      const gainEffect = effects.find(e => e.type === 'gainLife' || e.type === 'drain');
+      const lifeGained = gainEffect?.amount || 3;
+      score += Math.min(lifeGained * 1.5, 10); // Modest bonus — upkeep lifegain is less urgent than combat
     }
   }
 
@@ -1248,16 +1640,32 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
 
   if (phase === 'end_step') {
     // End of opponent's turn — use remaining mana efficiently
+    const criticalLife = myLife <= 5;
+    const lowLife = myLife <= 10;
     if (hasDraw) {
       if (myHandSize <= 1) score += 12; // Desperate for cards
       else if (myHandSize <= 3) score += 9;
       else score += 6;
     }
-    if (hasScry) {
+    if (hasLoot) {
+      // Loot is weaker than draw but still good — especially good end-step to fix hand
       if (myHandSize <= 2) score += 7;
       else score += 5;
     }
+    if (hasScry) {
+      if (myHandSize <= 2) score += 7;
+      else score += 4;
+    }
+    if (hasMill && oppDeckSize <= 15) score += 5; // Mill is good when opponent is low on cards
+    else if (hasMill) score += 3;
     if (hasToken) score += 7;
+    if (hasLifegain) {
+      const gainEffect = effects.find(e => e.type === 'gainLife' || e.type === 'drain');
+      const lifeGained = gainEffect?.amount || 3;
+      if (criticalLife) score += Math.min(lifeGained * 2, 12); // Critical life: high priority
+      else if (lowLife && oppCreatures.length > 0) score += Math.min(lifeGained, 6); // Low life + threats
+      else score += 2; // Otherwise minimal value at end step
+    }
     if (hasRemoval && oppCreatures.length > 0) {
       // End of turn removal is safe (no tempo loss) — always worth it vs any creature
       const biggestThreat = Math.max(...oppCreatures.map(c => _threatScore(c)), 0);
@@ -1406,7 +1814,7 @@ export function _findBestSpellOrder(state, playerId) {
     .filter(c => CardEngine.isCreature(c));
   const myCreatures = bf.cards.filter(c => CardEngine.isCreature(c));
 
-  // Quick score for ordering
+  // Quick score for ordering — order prioritizes setups over payoffs
   const quickScored = playable.map(card => {
     let s = card.cmc || 0;
     const effects = CardEngine.getSpellEffects(card);
@@ -1416,6 +1824,27 @@ export function _findBestSpellOrder(state, playerId) {
     if (effects.some(e => e.type === 'draw')) s += 4;
     const tl = (card.type_line || '').toLowerCase();
     if (tl.includes('instant') && effects.some(e => e.type === 'buff')) s -= 15;
+
+    // SEQUENCING: cost-reduction sources should play BEFORE spells that benefit from reduction
+    if (effects.some(e => e.type === 'anthem')) {
+      // Anthems should play first — creatures entering AFTER get the bonus
+      const creaturesInHand = state.players[playerId].zones.hand.getAll()
+        .filter(c => CardEngine.isCreature(c) && c._uid !== card._uid);
+      s += creaturesInHand.length * 3; // Big priority bonus when creatures waiting
+    }
+
+    // ETB board-count effects: play MORE creatures first to maximize ETB trigger
+    const etbEffects = CardEngine.getETBEffects(card);
+    const etbCountsCreatures = etbEffects.some(e =>
+      // e.g. "deal damage equal to number of dragons you control"
+      e.condition === 'control_dragon' || e.amount_from === 'creature_count' ||
+      e.type === 'fight' // fight scales with our creature power
+    );
+    if (etbCountsCreatures) {
+      // Other creatures should play before this one
+      s -= 4; // defer so other creatures play first
+    }
+
     return { card, score: s };
   }).sort((a, b) => b.score - a.score);
 
@@ -1533,11 +1962,26 @@ export function _shouldUseCombatTrick(state, playerId, trickCard, combatState) {
   // Check our creatures in combat
   const myBf = state.players[playerId].zones.battlefield;
 
+  // Check unblocked attackers — pump for extra damage or lethal
+  const oppLife = state.players[opponentId].life;
+  const myUnblockedAtks = combatState.attackers.filter(atk =>
+    myBf.get(atk.uid) && (combatState.blockers[atk.uid] || []).length === 0
+  );
+  if (myUnblockedAtks.length > 0) {
+    const totalUnblockedPower = myUnblockedAtks.reduce((s, atk) => s + CardEngine.getPower(atk.card), 0);
+    // Would the buff cause lethal damage this turn?
+    if (totalUnblockedPower + buffPower >= oppLife) return true;
+    // Is opponent at low life AND buff deals significant extra damage?
+    if (oppLife <= 8 && buffPower >= 2) return true;
+    // Is opponent at very low life AND any extra damage matters?
+    if (oppLife <= 4 && buffPower >= 1) return true;
+  }
+
   // Check attackers we control
   for (const atk of combatState.attackers) {
     if (!myBf.get(atk.uid)) continue; // not our creature
     const blockers = combatState.blockers[atk.uid] || [];
-    if (blockers.length === 0) continue; // unblocked, trick not needed
+    if (blockers.length === 0) continue; // unblocked, handled above
 
     const atkCard = atk.card;
     const power = CardEngine.getPower(atkCard);

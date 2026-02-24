@@ -74,20 +74,27 @@ export function isKindred(card: GameCard): boolean {
 // ============================================
 
 export function hasKeyword(card: GameCard, keyword: string, gameState: EngineGameState | null = null): boolean {
-  const kwLower = keyword.toLowerCase();
+  // Normalize: treat underscores as spaces ("double_strike" === "double strike")
+  const kwLower = keyword.toLowerCase().replace(/_/g, ' ');
+
+  const normalize = (k: string) => k.toLowerCase().replace(/_/g, ' ');
 
   // Check regular keywords
-  if ((card.keywords || []).some(k => k && typeof k === 'string' && k.toLowerCase() === kwLower)) {
+  if ((card.keywords || []).some(k => k && typeof k === 'string' && normalize(k) === kwLower)) {
     return true;
   }
 
-  // Check keyword counters
+  // Check keyword counters (stored as-is, try both formats)
   if (card._counters?.[kwLower] && card._counters[kwLower] > 0) {
+    return true;
+  }
+  const kwUnderscore = kwLower.replace(/ /g, '_');
+  if (card._counters?.[kwUnderscore] && card._counters[kwUnderscore] > 0) {
     return true;
   }
 
   // Check temporary keywords (end-of-turn grants)
-  if (card._tempKeywords?.some(k => k && typeof k === 'string' && k.toLowerCase() === kwLower)) {
+  if (card._tempKeywords?.some(k => k && typeof k === 'string' && normalize(k) === kwLower)) {
     return true;
   }
 
@@ -97,9 +104,9 @@ export function hasKeyword(card: GameCard, keyword: string, gameState: EngineGam
     if (cardController !== null) {
       const battlefield = gameState.players[cardController].zones.battlefield.cards;
       for (const granter of battlefield) {
-        if (granter._grantAttackingTokens && typeof granter._grantAttackingTokens === 'string' &&
-            granter._grantAttackingTokens.toLowerCase() === kwLower) {
-          return true;
+        if (granter._grantAttackingTokens) {
+          const granted = String(granter._grantAttackingTokens).split(',').map((k: string) => k.trim().toLowerCase());
+          if (granted.includes(kwLower)) return true;
         }
       }
     }
@@ -112,12 +119,8 @@ export function hasKeyword(card: GameCard, keyword: string, gameState: EngineGam
       const battlefield = gameState.players[cardController].zones.battlefield.cards;
       for (const granter of battlefield) {
         if (granter._grantDragons) {
-          const grantedKeywords = Array.isArray(granter._grantDragons)
-            ? granter._grantDragons
-            : [granter._grantDragons];
-          if (grantedKeywords.some(kw => typeof kw === 'string' && kw.toLowerCase() === kwLower)) {
-            return true;
-          }
+          const grantedKeywords = String(granter._grantDragons).split(',').map((k: string) => k.trim().toLowerCase());
+          if (grantedKeywords.includes(kwLower)) return true;
         }
       }
     }
@@ -150,8 +153,16 @@ export function hasCreatureType(card: GameCard, type: string): boolean {
   if (hasChangeling(card)) return true;
   const typeLine = card.type_line || '';
   if (!typeLine.includes('—')) return false;
-  const subtypes = typeLine.split('—').pop()!.trim().toLowerCase();
-  return subtypes.includes(type.toLowerCase());
+  // Handle DFC/adventure cards: "Creature — Dragon // Instant — Omen"
+  // Check each face's subtype section separately
+  const typeLower = type.toLowerCase();
+  const faces = typeLine.split('//');
+  for (const face of faces) {
+    if (!face.includes('—')) continue;
+    const subtypes = face.split('—').pop()!.trim().toLowerCase();
+    if (subtypes.includes(typeLower)) return true;
+  }
+  return false;
 }
 
 export function hasLandType(card: GameCard, type: string): boolean {
@@ -204,7 +215,7 @@ export function getToughness(card: GameCard): number {
 export function canAttack(card: GameCard): boolean {
   if (!isCreature(card)) return false;
   if (card._tapped) return false;
-  if (hasKeyword(card, 'Defender')) return false;
+  if (hasKeyword(card, 'Defender') && !hasKeyword(card, 'Can_attack')) return false;
   if (card._summoningSick && !hasKeyword(card, 'Haste')) return false;
   return true;
 }
@@ -264,6 +275,7 @@ export function getCardColors(card: GameCard): string[] {
 // ============================================
 
 export function findCardController(gameState: EngineGameState, card: GameCard): number | null {
+  if (!gameState || !gameState.players) return null;
   for (let pid = 0; pid < gameState.players.length; pid++) {
     const bf = gameState.players[pid].zones.battlefield.cards;
     if (bf.some(c => c._uid === card._uid)) {
@@ -314,7 +326,8 @@ export function canBeTargeted(card: GameCard, byPlayerId: number, gameState: Eng
 
   if (hasKeyword(card, 'Hexproof', gameState)) {
     // Hexproof only prevents targeting by opponents
-    const controller = findCardController(gameState!, card);
+    if (!gameState) return false; // Can't determine controller, assume protected
+    const controller = findCardController(gameState, card);
     if (controller !== null && controller !== byPlayerId) return false;
   }
 

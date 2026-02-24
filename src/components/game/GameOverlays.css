@@ -60,12 +60,155 @@
   cursor: not-allowed;
 }
 
-/* ── Scry / Surveil ── */
+/* ── Scry / Surveil — Arena style ── */
+
+.scry-arena-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: rgba(4, 3, 14, 0.9);
+  backdrop-filter: blur(10px);
+  padding: 24px 32px;
+}
+
+.scry-arena-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.scry-arena-title {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--gold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scry-arena-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.scry-arena-zones {
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+}
+
+.scry-arena-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  min-width: 180px;
+}
+
+.scry-zone-label {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 6px 18px;
+  border-radius: 20px;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid currentColor;
+}
+
+.scry-zone-empty {
+  width: 180px;
+  height: 252px;
+  border: 2px dashed rgba(255,255,255,0.15);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.25);
+  font-size: 13px;
+}
+
+.scry-arena-cards {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.scry-arena-card {
+  position: relative;
+  cursor: pointer;
+  border-radius: 10px;
+  overflow: visible;
+  text-align: center;
+  transition: transform 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.scry-arena-card:hover {
+  transform: translateY(-6px);
+}
+
+/* Override card-large size inside scry to 180×252 (slightly smaller than 240×335) */
+.scry-arena-card .card-large {
+  width: 180px !important;
+  height: 252px !important;
+}
+.scry-arena-card .card-large img {
+  width: 180px !important;
+  height: 252px !important;
+}
+
+.scry-keep .card-large {
+  box-shadow: 0 0 0 3px #2ecc71, 0 6px 24px rgba(46,204,113,0.35);
+  border-radius: 10px;
+}
+
+.scry-away-card .card-large {
+  box-shadow: 0 0 0 3px #e74c3c, 0 6px 24px rgba(231,76,60,0.35);
+  border-radius: 10px;
+  opacity: 0.85;
+}
+
+.scry-away-card:hover .card-large {
+  opacity: 1;
+}
+
+.scry-arena-card-label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.6);
+  border: 1px solid currentColor;
+}
+
+.scry-arena-confirm {
+  font-size: 16px;
+  padding: 10px 40px;
+  border-radius: 10px;
+  min-width: 200px;
+}
+
+/* Shared card grid — used by Discard, CreatureChoice, BounceMulti, etc. */
 .scry-cards {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
+  align-items: flex-start;
 }
 
 .scry-card-slot {
@@ -77,21 +220,9 @@
   text-align: center;
   overflow: hidden;
 }
-
-.scry-card-slot:hover {
-  border-color: var(--gold);
-  transform: translateY(-4px);
-}
-
-.scry-card-slot.scry-away {
-  border-color: var(--danger);
-  opacity: 0.75;
-}
-
-.scry-card-slot.scry-away:hover {
-  border-color: var(--danger);
-  opacity: 1;
-}
+.scry-card-slot:hover { border-color: var(--gold); transform: translateY(-4px); }
+.scry-card-slot.scry-away { border-color: var(--danger); opacity: 0.75; }
+.scry-card-slot.scry-away:hover { opacity: 1; }
 
 .scry-card-label {
   padding: 4px 8px;
@@ -211,8 +342,18 @@
   color: #000;
 }
 
+.modal-mode-label {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #f5c842;
+  min-width: 52px;
+  margin-right: 4px;
+}
+
 .modal-mode-desc {
   flex: 1;
+  font-size: 0.78rem;
+  opacity: 0.9;
 }
 
 /* ── Targeting prompt (top banner, not a full overlay) ── */
@@ -254,6 +395,13 @@
   50%       { box-shadow: 0 0 0 3px var(--gold), 0 0 20px rgba(240,192,64,0.8); }
 }
 
+/* Dim non-targetable cards during targeting mode */
+.bf-card.not-targetable {
+  opacity: 0.35;
+  pointer-events: none;
+  filter: grayscale(40%);
+}
+
 /* Player life becomes targetable */
 .life-targetable {
   cursor: crosshair;
@@ -264,27 +412,40 @@
 
 /* ── Graveyard Overlay ── */
 .gy-panel {
-  max-width: 640px;
+  max-width: min(96vw, 1100px);
+  width: min(96vw, 1100px);
+  max-height: 90vh;
+  height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .gy-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-  gap: 8px;
-  max-height: 55vh;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+  flex: 1;
   overflow-y: auto;
+  padding-right: 4px;
 }
 
 .gy-card-slot {
   text-align: center;
-  cursor: default;
+  cursor: pointer;
   position: relative;
+}
+
+.gy-card-slot img {
+  width: 100%;
+  border-radius: 6px;
+  display: block;
 }
 
 .gy-card-name {
   font-size: 10px;
   color: var(--text-secondary);
-  margin-top: 3px;
+  margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -292,7 +453,7 @@
 
 .gy-activate-btn {
   position: absolute;
-  bottom: 20px;
+  bottom: 22px;
   left: 50%;
   transform: translateX(-50%);
   font-size: 10px;
@@ -302,15 +463,16 @@
 
 .gy-zoom {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  bottom: 24px;
+  right: 24px;
   z-index: 400;
   pointer-events: none;
+  filter: drop-shadow(0 4px 24px rgba(0,0,0,0.85));
 }
 
 .gy-zoom-img {
-  width: 220px;
-  border-radius: 12px;
+  width: 260px;
+  border-radius: 14px;
   box-shadow: var(--shadow-lg);
 }
 

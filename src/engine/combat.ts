@@ -254,13 +254,19 @@ export function fireAttackTriggers(
 ): string[] {
   const log: string[] = [];
 
-  for (const { uid, card: attacker } of combatState.attackers) {
+  // Snapshot attackers BEFORE firing triggers — tokens created attacking during resolution
+  // (e.g. War Effort mobilize) would be added to combatState.attackers mid-loop and
+  // re-trigger the same "attacks" event, causing an infinite loop.
+  const attackersSnapshot = [...combatState.attackers];
+  const initialCount = attackersSnapshot.length;
+
+  for (const { uid, card: attacker } of attackersSnapshot) {
     // Fire "attacks" trigger
     const atkLogs = gameState.fireTrigger('attacks', {
       cardUid: uid,
       card: attacker,
       controllerId: attackingPlayerId,
-      attackingCreatureCount: combatState.attackers.length,
+      attackingCreatureCount: initialCount,
     });
     log.push(...atkLogs);
 
@@ -306,21 +312,54 @@ export function resolveCombatDamage(
 ): string[] {
   const log: string[] = [];
 
-  // First strike damage phase
+  // First strike damage phase (attackers AND blockers with First/Double Strike)
   const firstStrikers = combatState.attackers.filter(a =>
     hasKeyword(a.card, 'First Strike', gameState) ||
     hasKeyword(a.card, 'Double Strike', gameState)
   );
-
-  if (firstStrikers.length > 0) {
-    const firstStrikeLog = resolveDamagePhase(
-      firstStrikers, combatState, attackingPlayer, defendingPlayer, gameState, true
+  // Check if any blocker has First/Double Strike (affects non-FS attackers too)
+  const anyFSBlocker = combatState.attackers.some(a => {
+    const blockers = combatState.blockers[a.uid] || [];
+    return blockers.some(b =>
+      hasKeyword(b.card, 'First Strike', gameState) || hasKeyword(b.card, 'Double Strike', gameState)
     );
-    log.push(...firstStrikeLog);
+  });
+
+  if (firstStrikers.length > 0 || anyFSBlocker) {
+    // FS attackers deal damage (and their FS blockers deal back)
+    if (firstStrikers.length > 0) {
+      const firstStrikeLog = resolveDamagePhase(
+        firstStrikers, combatState, attackingPlayer, defendingPlayer, gameState, true
+      );
+      log.push(...firstStrikeLog);
+    }
+
+    // FS blockers deal damage to non-FS attackers (attacker doesn't retaliate yet)
+    for (const attackEntry of combatState.attackers) {
+      if (hasKeyword(attackEntry.card, 'First Strike', gameState) ||
+          hasKeyword(attackEntry.card, 'Double Strike', gameState)) continue; // already handled above
+      if (attackEntry.card._damage >= getToughness(attackEntry.card)) continue; // attacker already dead
+      const blockers = combatState.blockers[attackEntry.uid] || [];
+      for (const { card: blocker } of blockers) {
+        if (!hasKeyword(blocker, 'First Strike', gameState) && !hasKeyword(blocker, 'Double Strike', gameState)) continue;
+        if (blocker._damage >= getToughness(blocker)) continue;
+        const bPower = getPower(blocker);
+        if (bPower <= 0) continue;
+        dealDamageToCreature(blocker, attackEntry.card, bPower);
+        if (hasKeyword(blocker, 'Deathtouch', gameState) && bPower > 0 && !hasKeyword(blocker, 'Wither', gameState)) {
+          attackEntry.card._damage = getToughness(attackEntry.card);
+        }
+        if (hasKeyword(blocker, 'Lifelink') && bPower > 0) {
+          defendingPlayer.life += bPower;
+        }
+        log.push(`${blocker.name} (first strike) causa ${bPower} de dano a ${attackEntry.card.name}.`);
+      }
+    }
+
     cleanupDead(gameState);
   }
 
-  // Regular damage phase
+  // Regular damage phase (non-FS attackers + DS attackers; FS-only blockers don't deal again)
   const regularAttackers = combatState.attackers.filter(a => {
     const card = a.card;
     if (card._damage >= getToughness(card)) return false;
@@ -337,6 +376,38 @@ export function resolveCombatDamage(
     regularAttackers, combatState, attackingPlayer, defendingPlayer, gameState, false
   );
   log.push(...regularLog);
+
+  // First-strike attackers that survived are still hit by their non-first-strike blockers
+  // in the regular damage phase. They don't deal damage again (they already did in first-strike
+  // phase), but their blockers that lack first strike still get to retaliate.
+  const survivingFirstStrikers = firstStrikers.filter(a =>
+    a.card._damage < getToughness(a.card)
+  );
+  for (const attackEntry of survivingFirstStrikers) {
+    const blockers = combatState.blockers[attackEntry.uid] || [];
+    for (const { card: blocker } of blockers) {
+      if (
+        blocker._damage >= getToughness(blocker) ||
+        hasKeyword(blocker, 'First Strike', gameState) ||
+        hasKeyword(blocker, 'Double Strike', gameState)
+      ) {
+        continue; // Dead blockers or first-strike blockers already dealt in phase 1
+      }
+      const blockerPower = getPower(blocker);
+      if (blockerPower <= 0) continue;
+
+      dealDamageToCreature(blocker, attackEntry.card, blockerPower);
+      if (hasKeyword(blocker, 'Deathtouch', gameState)) {
+        if (!hasKeyword(blocker, 'Wither', gameState)) {
+          attackEntry.card._damage = getToughness(attackEntry.card);
+        }
+      }
+      if (hasKeyword(blocker, 'Lifelink') && blockerPower > 0) {
+        defendingPlayer.life += blockerPower;
+      }
+      log.push(`${blocker.name} causa ${blockerPower} de dano a ${attackEntry.card.name} (golpe normal).`);
+    }
+  }
 
   // Cleanup
   cleanupDead(gameState);
@@ -362,6 +433,12 @@ export function resolveDamagePhase(
   for (const attackEntry of attackers) {
     const { uid, card: attacker, attackTarget } = attackEntry;
     const blockers = combatState.blockers[uid] || [];
+
+    // Skip attackers removed from battlefield before damage (killed by combat tricks)
+    const attackerOnBf = gameState.players[0].zones.battlefield.cards.some((c: any) => c._uid === uid) ||
+                         gameState.players[1].zones.battlefield.cards.some((c: any) => c._uid === uid);
+    if (!attackerOnBf) continue;
+
     const attackPower = getPower(attacker);
 
     if (blockers.length === 0) {
@@ -463,7 +540,12 @@ export function resolveDamagePhase(
       for (const { card: blocker } of orderedBlockers) {
         if (remainingAttackPower <= 0) break;
 
-        const blockerToughness = getToughness(blocker) - blocker._damage;
+        // Skip blockers removed from battlefield before damage (bounced, exiled, or killed by spells)
+        const blockerOnBf = gameState.players[0].zones.battlefield.cards.some((c: any) => c._uid === blocker._uid) ||
+                            gameState.players[1].zones.battlefield.cards.some((c: any) => c._uid === blocker._uid);
+        if (!blockerOnBf) continue; // Attacker stays "blocked" but no damage exchanged
+
+        const blockerToughness = Math.max(0, getToughness(blocker) - blocker._damage);
         const blockerPower = getPower(blocker);
 
         let dmgToBlocker = Math.min(remainingAttackPower, blockerToughness);
@@ -483,12 +565,13 @@ export function resolveDamagePhase(
           }
         }
 
-        // Blocker deals damage to attacker
-        if (
-          !isFirstStrike ||
-          hasKeyword(blocker, 'First Strike', gameState) ||
-          hasKeyword(blocker, 'Double Strike', gameState)
-        ) {
+        // Blocker deals damage to attacker.
+        // In FS phase: only FS/DS blockers deal damage.
+        // In regular phase: FS-only blockers already dealt in the FS-blocker sub-phase; only non-FS or DS blockers deal here.
+        const blockerDeals = isFirstStrike
+          ? (hasKeyword(blocker, 'First Strike', gameState) || hasKeyword(blocker, 'Double Strike', gameState))
+          : (!hasKeyword(blocker, 'First Strike', gameState) || hasKeyword(blocker, 'Double Strike', gameState));
+        if (blockerDeals) {
           dealDamageToCreature(blocker, attacker, blockerPower);
           if (hasKeyword(blocker, 'Deathtouch', gameState) && blockerPower > 0) {
             if (!hasKeyword(blocker, 'Wither', gameState)) {

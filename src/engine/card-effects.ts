@@ -50,8 +50,8 @@ export const CardEffectsDB: Record<string, any> = {
   "craterhoof behemoth": {
     static: [{ type: "has_keyword", keywords: ["haste"] }],
     etb: [
-      { type: "buff", power: "creature_count", toughness: "creature_count", target: "own_creatures", duration: "permanent" },
-      { type: "grant", keywords: ["trample"], target: "own_creatures", duration: "permanent" }
+      { type: "buff", power: "creature_count", toughness: "creature_count", target: "all_own_creatures", duration: "end_of_turn" },
+      { type: "grant", keywords: ["trample"], target: "own_creatures", duration: "end_of_turn" }
     ]
   },
 
@@ -66,6 +66,11 @@ export const CardEffectsDB: Record<string, any> = {
   "dispelling exhale": {
     additional_costs: [{ type: "behold", subtype: "Dragon", optional: true }],
     cast: [{ type: "counter_spell", target: "spell", unless_pay: 2, unless_pay_with_behold: 4 }]
+  },
+
+  "twin bolt": {
+    // 2 damage divided as you choose among one or two targets
+    cast: [{ type: "damage_divided", amount: 2, target: "any" }]
   },
 
   // =================== TARKIR DRAGONSTORM - SORCERIES ===================
@@ -134,7 +139,7 @@ export const CardEffectsDB: Record<string, any> = {
   // =================== TARKIR DRAGONSTORM - CREATURES WITH ETB ===================
 
   "abzan monument": {
-    etb: [{ type: "ramp", landType: "basic", to_hand: true }],
+    etb: [{ type: "ramp", landType: "basic", landTypes: ["Plains", "Swamp", "Forest"], to_hand: true }],
     activated: [{ cost: { mana: "1WBG", tap: true, sacrifice: true }, sorcerySpeed: true, effects: [{ type: "create_token", power: "greatest_toughness", toughness: "greatest_toughness", name: "Spirit" }] }]
   },
 
@@ -179,7 +184,8 @@ export const CardEffectsDB: Record<string, any> = {
     etb: [
       { type: "tap", target: "opponent_creature" },
       { type: "stun_counter", amount: 1, target: "same" }
-    ]
+    ],
+    graveyard: [{ cost: { mana: "2U", exile: true }, effects: [{ type: "tap", target: "opponent_creature" }, { type: "stun", amount: 1, target: "opponent_creature" }], sorcerySpeed: true }]
   },
 
   "disruptive stormbrood": {
@@ -205,6 +211,33 @@ export const CardEffectsDB: Record<string, any> = {
 
   // =================== TARKIR DRAGONSTORM - CREATURES WITH TRIGGERS ===================
 
+  "champion of dusan": {
+    static: [{ type: "has_keyword", keywords: ["trample"] }],
+    graveyard: [{
+      cost: { mana: "1G", exile: true },
+      sorcerySpeed: true,
+      effects: [
+        { type: "counter", counter: "+1/+1", amount: 1, target: "creature" },
+        { type: "grant", keywords: ["Trample"], target: "same", duration: "permanent" }
+      ]
+    }]
+  },
+
+  "eshki dragonclaw": {
+    static: [{ type: "has_keyword", keywords: ["vigilance", "trample"] }, { type: "ward", amount: 1 }],
+    triggered: [
+      {
+        event: "combat_begin",
+        self: false,
+        condition: "cast_creature_and_noncreature",
+        effects: [
+          { type: "draw", amount: 1 },
+          { type: "counter_self", counter: "+1/+1", amount: 2 }
+        ]
+      }
+    ]
+  },
+
   "ambling stormshell": {
     static: [{ type: "has_keyword", keywords: ["ward"] }],
     triggered: [
@@ -214,7 +247,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "anafenza, unyielding lineage": {
-    triggered: [{ event: "other_creature_dies", effects: [{ type: "endure", amount: 2 }] }],
+    triggered: [{ event: "other_creature_dies", condition: "nontoken", effects: [{ type: "endure", amount: 2 }] }],
     static: [{ type: "has_keyword", keywords: ["first strike", "flash"] }]
   },
 
@@ -292,6 +325,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "kheru goldkeeper": {
     triggered: [{ event: "cards_leave_graveyard", effects: [{ type: "create_token", name: "Treasure", power: 0, toughness: 1 }] }],
+    activated: [{ cost: { mana: "2BGU", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 2, target: "creature" }, { type: "counter", counter: "flying", amount: 1, target: "creature" }], sorcerySpeed: true }],
     static: [{ type: "has_keyword", keywords: ["flying"] }]
   },
 
@@ -306,7 +340,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "marshal of the lost": {
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "buff", power: "X", toughness: "X", target: "creature", duration: "end_of_turn", note: "X = attacking creatures" }] }],
+    triggered: [{ event: "attacks", self: false, once_per_turn: true, effects: [{ type: "buff", power: "attacking_count", toughness: "attacking_count", target: "creature", duration: "end_of_turn" }] }],
     static: [{ type: "has_keyword", keywords: ["deathtouch"] }]
   },
 
@@ -319,7 +353,7 @@ export const CardEffectsDB: Record<string, any> = {
   "abzan devotee": {
     activated: [
       { cost: { mana: "1", once_per_turn: true }, effects: [{ type: "add_mana", color: "WBG", choose: 1 }] },
-      { cost: { mana: "2B", zone: "graveyard" }, effects: [{ type: "return_to_hand" }] }
+      { cost: { mana: "{2}{B}", zone: "graveyard" }, effects: [{ type: "return_to_hand" }] }
     ]
   },
 
@@ -385,36 +419,6 @@ export const CardEffectsDB: Record<string, any> = {
     activated: [{ cost: { mana: "3U", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 2, target: "creature" }], sorcerySpeed: true }]
   },
 
-  "constrictor sage": {
-    etb: [{ type: "tap", target: "opponent_creature" }],
-    activated: [{ cost: { mana: "2U", zone: "graveyard", exile: true }, effects: [{ type: "tap", target: "opponent_creature" }, { type: "stun", amount: 1, target: "opponent_creature" }], sorcerySpeed: true }]
-  },
-
-  "naga fleshcrafter": {
-    etb: [{ type: "clone_optional", target: "creature" }],
-    activated: [{ cost: { mana: "2U", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_nonlegendary_creature" }], sorcerySpeed: true }]
-  },
-
-  "champion of dusan": {
-    static: [{ type: "has_keyword", keywords: ["trample"] }],
-    activated: [{ cost: { mana: "1G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "grant_counter", counter: "trample", target: "own_creature" }], sorcerySpeed: true }]
-  },
-
-  "lasyd prowler": {
-    etb: [{ type: "mill", amount: "lands_count", optional: true }],
-    activated: [{ cost: { mana: "1G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: "lands_in_gy_count", target: "creature" }], sorcerySpeed: true }]
-  },
-
-  "sage of the fang": {
-    etb: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }],
-    activated: [{ cost: { mana: "3G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "creature" }, { type: "double_counters", target: "own_creature" }], sorcerySpeed: true }]
-  },
-
-  "sagu pummeler": {
-    static: [{ type: "has_keyword", keywords: ["reach"] }],
-    activated: [{ cost: { mana: "4G", zone: "graveyard", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: 2, target: "creature" }, { type: "grant_counter", counter: "reach", target: "own_creature" }], sorcerySpeed: true }]
-  },
-
   // =================== TARKIR DRAGONSTORM - MOBILIZE ===================
 
   "avenger of the fallen": {
@@ -447,7 +451,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "reigning victor": {
-    etb: [{ type: "buff", power: 1, toughness: 0, target: "creature", duration: "end_of_turn" }, { type: "grant", keywords: ["indestructible"], target: "creature", duration: "end_of_turn" }],
+    etb: [{ type: "buff", power: 1, toughness: 0, target: "own_creature", duration: "end_of_turn" }, { type: "grant", keywords: ["indestructible"], target: "own_creature", duration: "end_of_turn" }],
     triggered: [
       { event: "attacks", self: true, mechanic: "mobilize", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 1, attacking: true, sacrificeAtEndStep: true }] }
     ]
@@ -462,7 +466,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "cori-steel cutter": {
     static: [{ type: "grant", power: 1, toughness: 1, keywords: ["trample", "haste"], target: "equipped" }],
-    triggered: [{ event: "second_spell", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Monk", keywords: ["prowess"] }, { type: "attach", target: "token" }] }]
+    triggered: [{ event: "second_spell", effects: [{ type: "create_token", power: 1, toughness: 1, name: "Monk", keywords: ["prowess"] }, { type: "attach", target: "token", optional: true }] }]
   },
 
   "dragon sniper": {
@@ -665,7 +669,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "perennation": {
-    cast: [{ type: "return_from_graveyard", target: "any", with_counters: ["hexproof", "indestructible"] }]
+    cast: [{ type: "return_from_graveyard", target: "permanent", optional: true, with_counters: ["hexproof", "indestructible"] }]
   },
 
   "rot-curse rakshasa": {
@@ -852,7 +856,7 @@ export const CardEffectsDB: Record<string, any> = {
   "piercing exhale": {
     additional_costs: [{ type: "behold", subtype: "Dragon", optional: true }],
     cast: [
-      { type: "fight", target: "own_creature", vs: "creature_or_planeswalker" },
+      { type: "power_damage", source: "own_creature", target: "creature_or_planeswalker" },
       { type: "surveil", amount: 2, condition: "if_beheld_dragon" }
     ]
   },
@@ -977,7 +981,11 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   "kishla trawlers": {
-    etb: [{ type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true, optional: true }]
+    // "You may exile a creature from your GY. When you do, return target instant or sorcery to hand."
+    etb: [
+      { type: "exile_from_graveyard", target: "creature", optional: true, choose_cards: true },
+      { type: "return_from_graveyard", target: "instant_or_sorcery", to_hand: true, optional: true, condition: "if_exiled" }
+    ]
   },
 
   "sibsig appraiser": {
@@ -999,7 +1007,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "veteran ice climber": {
     static: [{ type: "has_keyword", keywords: ["vigilance"] }, { type: "unblockable" }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "mill", amount: "power", target: "opponent" }] }]
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "mill", amount: "power", target: "any_player" }] }]
   },
 
   // --- Blue spells & enchantments ---
@@ -1049,7 +1057,7 @@ export const CardEffectsDB: Record<string, any> = {
   // --- Planeswalker (simplified) ---
 
   "ugin, eye of the storms": {
-    etb: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }],
+    cast: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }],
     triggered: [{ event: "cast_colorless", effects: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }] }],
     activated: [
       { cost: { loyalty: 2 }, effects: [{ type: "gainLife", amount: 3 }, { type: "draw", amount: 1 }] },
@@ -1125,11 +1133,11 @@ export const CardEffectsDB: Record<string, any> = {
     activated: [{ cost: { tap: true, sacrifice: true }, effects: [{ type: "ramp", target: "basic_land", tapped: true }] }]
   },
   "cori mountain monastery": {
-    static: [{ type: "enters_tapped_conditional" }],
+    static: [{ type: "enters_tapped_conditional", unless: ["Plains", "Island"] }],
     activated: [{ cost: { mana: "3R", tap: true }, effects: [{ type: "exile_top_play", amount: 1, optional: true }] }]
   },
   "dalkovan encampment": {
-    static: [{ type: "enters_tapped_conditional" }],
+    static: [{ type: "enters_tapped_conditional", unless: ["Swamp", "Mountain"] }],
     activated: [{ cost: { mana: "2W", tap: true }, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Warrior", count: 2, attacking: true, sacrificeAtEndStep: true }] }]
   },
   "great arashin city": {
@@ -1137,14 +1145,18 @@ export const CardEffectsDB: Record<string, any> = {
     activated: [{ cost: { mana: "1B", tap: true, exile_gy_creature: true }, effects: [{ type: "create_token", power: 1, toughness: 1, name: "Spirit" }] }]
   },
   "kishla village": {
-    static: [{ type: "enters_tapped_conditional" }],
+    static: [{ type: "enters_tapped_conditional", unless: ["Island", "Swamp"] }],
     activated: [{ cost: { mana: "3G", tap: true }, effects: [{ type: "surveil", amount: 2 }] }]
   },
   "maelstrom of the spirit dragon": {
-    activated: [{ cost: { mana: "4", tap: true, sacrifice: true }, effects: [{ type: "search_library", target: "dragon" }] }]
+    activated: [
+      { cost: { tap: true }, effects: [{ type: "add_mana", color: "C", amount: 1 }] },
+      { cost: { tap: true }, effects: [{ type: "add_mana", color: "any", amount: 1 }] },
+      { cost: { mana: "4", tap: true, sacrifice: true }, effects: [{ type: "search_library", target: "dragon", allow_choice: true }], sorcerySpeed: true }
+    ]
   },
   "mistrise village": {
-    static: [{ type: "enters_tapped_conditional" }],
+    static: [{ type: "enters_tapped_conditional", unless: ["Mountain", "Forest"] }],
     activated: [{ cost: { mana: "U", tap: true }, effects: [{ type: "grant", keywords: ["uncounterable"], target: "next_spell" }] }]
   },
 
@@ -1181,7 +1193,7 @@ export const CardEffectsDB: Record<string, any> = {
     activated: [{ cost: { mana: "2BGU", tap: true, sacrifice: true }, condition: "main_phase", effects: [{ type: "create_token", power: 2, toughness: 2, name: "Zombie Druid", count: 2 }] }]
   },
   "temur monument": {
-    etb: [{ type: "ramp", target: "basic_land", to_hand: true }],
+    etb: [{ type: "ramp", target: "basic_land", to_hand: true, colors: ["G", "U", "R"] }],
     activated: [{ cost: { mana: "3GUR", tap: true, sacrifice: true }, effects: [{ type: "create_token", power: 5, toughness: 5, name: "Elephant" }] }]
   },
   "watcher of the wayside": {
@@ -1190,7 +1202,7 @@ export const CardEffectsDB: Record<string, any> = {
   "herd heirloom": {
     activated: [
       { cost: { tap: true }, effects: [{ type: "add_mana", color: "any", restriction: "creature_only" }] },
-      { cost: { tap: true }, effects: [{ type: "grant", keywords: ["trample"], target: "own_creature_power4", duration: "end_of_turn" }, { type: "grant", keywords: ["combat_draw"], target: "own_creature_power4", duration: "end_of_turn" }] }
+      { cost: { tap: true }, effects: [{ type: "grant", keywords: ["trample", "combat_draw"], target: "own_creature_power4", duration: "end_of_turn" }] }
     ],
     triggered: [{ event: "combat_damage_player", condition: "has_combat_draw", effects: [{ type: "draw", amount: 1 }] }]
   },
@@ -1206,7 +1218,7 @@ export const CardEffectsDB: Record<string, any> = {
     triggered: [{ event: "dragon_enters", effects: [{ type: "bounce_self" }] }]
   },
   "encroaching dragonstorm": {
-    etb: [{ type: "ramp", amount: 2, target: "basic_land" }],
+    etb: [{ type: "ramp", amount: 2, target: "basic_land", tapped: true }],
     triggered: [{ event: "dragon_enters", effects: [{ type: "bounce_self" }] }]
   },
 
@@ -1266,7 +1278,7 @@ export const CardEffectsDB: Record<string, any> = {
       chooseOnETB: true,
       modes: [
         { label: "Sultai", effects: [{ type: "triggered", event: "counter_placed", effects: [{ type: "draw", amount: 1 }], once_per_turn: true }] },
-        { label: "Abzan", effects: [{ type: "triggered", event: "attacks", effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "attacking_creature" }, { type: "grant", keywords: ["menace"], target: "attacking_creature", duration: "end_of_turn" }] }] }
+        { label: "Abzan", effects: [{ type: "triggered", event: "attacks", condition: "attacks_alone", effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "attacking_creature" }, { type: "grant", keywords: ["menace"], target: "attacking_creature", duration: "end_of_turn" }] }] }
       ]
     }
   },
@@ -1351,6 +1363,7 @@ export const CardEffectsDB: Record<string, any> = {
     cast: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }, { type: "grant", keywords: ["hexproof"], target: "creature", duration: "end_of_turn" }]
   },
   "inevitable defeat": {
+    cantBeCountered: true,
     cast: [{ type: "exile", target: "nonland_permanent" }, { type: "drain", amount: 3 }]
   },
   "new way forward": {
@@ -1366,11 +1379,11 @@ export const CardEffectsDB: Record<string, any> = {
   // =================== TDM - SORCERIES ===================
 
   "winternight stories": {
-    cast: [{ type: "draw", amount: 3 }, { type: "discard", amount: 2, condition: "unless_creature", optional: true }],
+    cast: [{ type: "draw", amount: 3 }, { type: "discard", amount: 2 }],
     harmonize: "{4}{U}"
   },
   "strategic betrayal": {
-    cast: [{ type: "strategic_betrayal", target: "opponent" }]
+    cast: [{ type: "strategic_betrayal" }]
   },
   "worthy cost": {
     additional_costs: [{ type: "sacrifice", target: "creature" }],
@@ -1661,7 +1674,7 @@ export const CardEffectsDB: Record<string, any> = {
     static: [{ type: "has_keyword", keywords: ["flying", "ward"] }]
   },
   "stormshriek feral": {
-    cast: [{ type: "loot", draw: 2, discard: 1 }],
+    cast: [{ type: "discard", amount: 1 }, { type: "draw", amount: 2 }],
     omen: true,
     activated: [{ cost: { mana: "1R" }, effects: [{ type: "buff", power: 1, toughness: 0, target: "self", duration: "end_of_turn" }] }],
     static: [{ type: "has_keyword", keywords: ["flying", "haste"] }]

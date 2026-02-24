@@ -1,6 +1,6 @@
 // token-images.ts — Scryfall token image fetcher with localStorage cache
 
-const CACHE_KEY = 'token_image_cache_v1';
+const CACHE_KEY = 'token_image_cache_v7'; // v7: TDM-first query strategy
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 interface CacheEntry { url: string; ts: number; }
@@ -31,9 +31,17 @@ function saveToStorage(key: string, url: string) {
   } catch {}
 }
 
+function cacheKey(name: string, preferredSet?: string): string {
+  return preferredSet ? `${name.toLowerCase()}_${preferredSet.toLowerCase()}` : name.toLowerCase();
+}
+
 // Sync lookup (returns null if not yet fetched)
-export function getTokenImageUrl(name: string): string | null {
+export function getTokenImageUrl(name: string, preferredSet?: string): string | null {
   loadStorage();
+  // When preferredSet is given, ONLY return set-specific cache — never fall back to wrong-set cache
+  if (preferredSet) {
+    return memCache.get(cacheKey(name, preferredSet)) || null;
+  }
   return memCache.get(name.toLowerCase()) || null;
 }
 
@@ -46,44 +54,73 @@ export function preloadTokenImage(
   preferredSet?: string,
 ): Promise<string | null> {
   loadStorage();
-  const key = name.toLowerCase();
+  const key = cacheKey(name, preferredSet);
 
   if (memCache.has(key)) return Promise.resolve(memCache.get(key)!);
   if (inFlight.has(key)) return inFlight.get(key)!;
 
   const promise = (async (): Promise<string | null> => {
     try {
-      const q = encodeURIComponent(`!"${name}" type:token`);
-      const resp = await fetch(
-        `https://api.scryfall.com/cards/search?q=${q}&order=released&unique=prints`,
-      );
-      if (!resp.ok) return null;
+      let url: string | null = null;
 
-      const data = await resp.json();
-      if (!data.data?.length) return null;
-
-      let best = data.data[0];
-
-      // Prefer matching set (e.g. "tdm" for Tarkir Dragonstorm tokens)
+      // Step 1: If preferredSet given, try a set-specific query first (e.g. set:tdm)
       if (preferredSet) {
-        const m = data.data.find((c: any) => c.set === preferredSet.toLowerCase());
-        if (m) best = m;
+        const setQ = encodeURIComponent(`set:${preferredSet} type:token name:"${name}"`);
+        try {
+          const setResp = await fetch(
+            `https://api.scryfall.com/cards/search?q=${setQ}&order=released`,
+          );
+          if (setResp.ok) {
+            const setData = await setResp.json();
+            if (setData.data?.length) {
+              // Pick color match if possible, else first result
+              let best = setData.data[0];
+              if (colors.length > 0) {
+                const m = setData.data.find(
+                  (c: any) =>
+                    Array.isArray(c.colors) &&
+                    c.colors.length === colors.length &&
+                    colors.every((col: string) => c.colors.includes(col)),
+                );
+                if (m) best = m;
+              }
+              url = best?.image_uris?.normal || null;
+            }
+          }
+        } catch { /* ignore, fall through to generic search */ }
       }
 
-      // Then prefer color match
-      if (colors.length > 0) {
-        const m = data.data.find(
-          (c: any) =>
-            Array.isArray(c.colors) &&
-            c.colors.length === colors.length &&
-            colors.every((col: string) => c.colors.includes(col)),
+      // Step 2: Fall back to any-set search if no set-specific result found
+      if (!url) {
+        const q = encodeURIComponent(`!"${name}" type:token`);
+        const resp = await fetch(
+          `https://api.scryfall.com/cards/search?q=${q}&order=released&unique=prints`,
         );
-        if (m) best = m;
-      }
+        if (!resp.ok) return null;
 
-      // Use normal image — shows the full token card (border, art, name, type)
-      // art_crop is landscape and looks bad in the portrait card frame
-      const url: string | null = best?.image_uris?.normal || null;
+        const data = await resp.json();
+        if (!data.data?.length) return null;
+
+        let best = data.data[0];
+
+        if (colors.length > 0) {
+          const m = data.data.find(
+            (c: any) =>
+              Array.isArray(c.colors) &&
+              c.colors.length === colors.length &&
+              colors.every((col: string) => c.colors.includes(col)),
+          );
+          if (m) best = m;
+        }
+
+        if (preferredSet) {
+          // Also check if fallback search accidentally has a set match
+          const setMatch = data.data.find((c: any) => c.set === preferredSet.toLowerCase());
+          if (setMatch) best = setMatch;
+        }
+
+        url = best?.image_uris?.normal || null;
+      }
 
       if (url) {
         memCache.set(key, url);

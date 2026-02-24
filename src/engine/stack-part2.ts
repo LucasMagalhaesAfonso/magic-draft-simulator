@@ -46,7 +46,7 @@ export function handleBuffAll(
       });
     }
   }
-  log.push(`Todas as suas criaturas recebem buff ate o fim do turno.`);
+  log.push(`All your creatures get buffed until end of turn.`);
 }
 
 export function handleBlight(
@@ -106,7 +106,7 @@ export function handleGrantHaste(
     hasteCreatures.sort((a: any, b: any) => CardEngine.getPower(b) - CardEngine.getPower(a));
     const hasteTarget = hasteCreatures[0];
     hasteTarget._summoningSick = false;
-    log.push(`${hasteTarget.name} ganha Haste!`);
+    log.push(`${hasteTarget.name} gains Haste!`);
   }
 }
 
@@ -122,9 +122,9 @@ export function handleGrantHarmonize(
     gySpells.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
     const grantedSpell = gySpells[0];
     grantedSpell._harmonizeGranted = true;
-    log.push(`${grantedSpell.name} ganha harmonize (custo: ${grantedSpell.mana_cost}).`);
+    log.push(`${grantedSpell.name} gains harmonize (cost: ${grantedSpell.mana_cost}).`);
   } else {
-    log.push('Nenhum instant/sorcery no cemiterio para ganhar harmonize.');
+    log.push('No instant/sorcery in graveyard to gain harmonize.');
   }
 }
 
@@ -140,7 +140,7 @@ export function handleStun(
     const stunCreature = state.players[stunTarget.player].zones.battlefield.get(stunTarget.uid);
     if (stunCreature) {
       stunCreature._stunCounters = (stunCreature._stunCounters || 0) + stunAmt;
-      log.push(`${stunCreature.name} recebe ${stunAmt} stun counter(s).`);
+      log.push(`${stunCreature.name} gets ${stunAmt} stun counter(s).`);
     }
   }
 }
@@ -154,7 +154,7 @@ export function handleStunCounterSelf(
   const stunAmt = effect.amount || 1;
   if (card) {
     card._stunCounters = (card._stunCounters || 0) + stunAmt;
-    log.push(`${card.name} recebe ${stunAmt} stun counter(s).`);
+    log.push(`${card.name} gets ${stunAmt} stun counter(s).`);
   }
 }
 
@@ -179,8 +179,8 @@ export function handleThreaten(
       stolenCard._tempKeywords = stolenCard._tempKeywords || [];
       if (!stolenCard._tempKeywords.includes('Haste')) stolenCard._tempKeywords.push('Haste');
       state.players[controller].zones.battlefield.add(stolenCard);
-      const ctrlLabel = controller === 0 ? 'Voce' : 'Oponente';
-      log.push(`${ctrlLabel} rouba ${stolenCard.name} ate o fim do turno!`);
+      const ctrlLabel = controller === 0 ? 'You' : 'Opponent';
+      log.push(`${ctrlLabel} steal${controller === 0 ? '' : 's'} ${stolenCard.name} until end of turn!`);
     }
   }
 }
@@ -202,7 +202,7 @@ export function handleClash(
   const oppCard = oppLib.drawFromTop();
 
   if (!myCard && !oppCard) {
-    log.push('Clash: ambas bibliotecas vazias.');
+    log.push('Clash: both libraries are empty.');
     return null;
   }
 
@@ -225,18 +225,18 @@ export function handleClash(
       targets,
     };
     state.waitingForInput = { type: 'clash', playerId: controller };
-    const myName = myCard ? myCard.name : '(vazio)';
-    const oppName = oppCard ? oppCard.name : '(vazio)';
+    const myName = myCard ? myCard.name : '(empty)';
+    const oppName = oppCard ? oppCard.name : '(empty)';
     log.push(
-      `Clash! Voce revela ${myName} (${myCmc}), oponente revela ${oppName} (${oppCmc}).`
+      `Clash! You reveal ${myName} (${myCmc}), opponent reveals ${oppName} (${oppCmc}).`
     );
-    log.push(won ? 'Voce vence o clash!' : 'Oponente vence o clash.');
+    log.push(won ? 'You win the clash!' : 'Opponent wins the clash.');
     return log; // Pause — wait for human to choose top/bottom
   } else {
-    const myName = myCard ? myCard.name : '(vazio)';
-    const oppName = oppCard ? oppCard.name : '(vazio)';
+    const myName = myCard ? myCard.name : '(empty)';
+    const oppName = oppCard ? oppCard.name : '(empty)';
     log.push(
-      `Clash! ${controller === 0 ? 'Voce revela' : 'IA revela'} ${myName} (${myCmc}) vs ${oppName} (${oppCmc}).`
+      `Clash! ${controller === 0 ? 'You reveal' : 'AI reveals'} ${myName} (${myCmc}) vs ${oppName} (${oppCmc}).`
     );
 
     if (myCard) {
@@ -252,12 +252,12 @@ export function handleClash(
 
     const aiWon = controller === 1 ? oppCmc > myCmc : won;
     if (aiWon) {
-      log.push(`${controller === 0 ? 'Voce vence' : 'IA vence'} o clash!`);
+      log.push(`${controller === 0 ? 'You win' : 'AI wins'} the clash!`);
       if (effect.bonus && effect.bonus.length > 0) {
         effects.splice(ei + 1, 0, ...effect.bonus);
       }
     } else {
-      log.push(`${controller === 0 ? 'Voce perde' : 'IA perde'} o clash.`);
+      log.push(`${controller === 0 ? 'You lose' : 'AI loses'} the clash.`);
     }
   }
   return null;
@@ -271,26 +271,20 @@ export function handleCounterSpell(
   log: string[]
 ): string[] | null {
   const opponent = controller === 0 ? 1 : 0;
-  console.log(`[COUNTER_SPELL RESOLVE] Targets:`, targets, `Controller: ${controller}`);
-
   if (!targets || targets.length === 0) {
-    log.push('Counter spell requer um alvo (spell na stack).');
-    console.log(`[COUNTER_SPELL] FAILED: No targets`);
+    log.push('Counter spell requires a target (spell on the stack).');
     return null;
   }
 
-  const targetSpell = targets[0];
+  // targets[0] may be the card object directly, or a wrapper with .card/.uid
+  const targetSpell = targets[0]?.card ?? targets[0];
   if (!targetSpell || !targetSpell.name) {
-    log.push('Alvo invalido para counter.');
-    console.log(`[COUNTER_SPELL] FAILED: Invalid target`, targetSpell);
+    log.push('Invalid target for counter.');
     return null;
   }
-  console.log(`[COUNTER_SPELL] Targeting: ${targetSpell.name}`);
-
   // Surrak, Elusive Hunter — "This spell can't be countered"
-  if (targetSpell.card?._uncounterable) {
-    log.push(`${targetSpell.card.name} nao pode ser anulado.`);
-    console.log(`[COUNTER_SPELL] FAILED: ${targetSpell.card.name} is uncounterable`);
+  if (targetSpell._uncounterable) {
+    log.push(`${targetSpell.name} can't be countered.`);
     return null;
   }
 
@@ -298,7 +292,7 @@ export function handleCounterSpell(
     const spellCMC = targetSpell.cmc || 0;
     if (spellCMC > effect.max_mana_value) {
       log.push(
-        `${targetSpell.name} tem mana value ${spellCMC}, nao pode ser anulado (max ${effect.max_mana_value}).`
+        `${targetSpell.name} has mana value ${spellCMC}, can't be countered (max ${effect.max_mana_value}).`
       );
       return null;
     }
@@ -306,16 +300,17 @@ export function handleCounterSpell(
 
   if (effect.unless_pay !== undefined) {
     const wasDragonBeheld = !!(state._beholding && state._beholding[controller]);
-    const baseCost = effect.unless_pay;
-    const costWithBehold = effect.unless_pay_with_behold || baseCost;
+    // If unless_pay is "X", use the actual X value that was paid (e.g. Spectral Denial)
+    const basePayNum = effect.unless_pay === 'X' ? (state._currentXValue || 0) : effect.unless_pay;
+    const baseCost = basePayNum;
+    const costWithBehold = effect.unless_pay_with_behold !== undefined
+      ? (effect.unless_pay_with_behold === 'X' ? (state._currentXValue || 0) : effect.unless_pay_with_behold)
+      : baseCost;
     const finalCost = wasDragonBeheld ? costWithBehold : baseCost;
     const costStr = `{${finalCost}}`;
 
     const fakeCard = { mana_cost: costStr, cmc: finalCost };
     const canPay = ManaSystem.canAfford(state, opponent, fakeCard);
-    console.log(
-      `[COUNTER_SPELL] Unless pay {${finalCost}}: canPay=${canPay}, beheld=${wasDragonBeheld}`
-    );
 
     if (canPay) {
       if (state.players[opponent].isHuman && opponent === 0) {
@@ -338,17 +333,15 @@ export function handleCounterSpell(
         );
         const label = wasDragonBeheld ? `{${finalCost}} (Dragon beheld)` : `{${finalCost}}`;
         log.push(
-          `${targetSpell.name} nao foi anulado (${opponent === 0 ? 'Voce' : 'IA'} pagou ${label}).`
+          `${targetSpell.name} was not countered (${opponent === 0 ? 'You' : 'AI'} paid ${label}).`
         );
-        console.log(`[COUNTER_SPELL] AI paid ${label} to save ${targetSpell.name}`);
         return null; // Don't counter
       }
     }
   }
 
   targetSpell._countered = true;
-  console.log(`[COUNTER_SPELL] SUCCESS! ${targetSpell.name} marked as _countered=true`);
-  log.push(`${targetSpell.name} foi anulado.`);
+  log.push(`${targetSpell.name} is countered.`);
   return null;
 }
 
@@ -367,16 +360,16 @@ export function handleEndure(
       const token = CardEngine.createToken(controller, 1, 1, 'Spirit', []);
       state.players[controller].zones.battlefield.add(token);
     }
-    log.push(`Endure ${endureAmt}: cria ${endureAmt} Spirit(s) 1/1.`);
+    log.push(`Endure ${endureAmt}: creates ${endureAmt} 1/1 Spirit(s).`);
   } else if (state.players[controller].isHuman) {
     state._pendingEndure = { cardUid: card._uid, amount: endureAmt, controllerId: controller };
     state.waitingForInput = { type: 'endure_choice', playerId: controller };
-    log.push(`Endure ${endureAmt} - escolha entre contadores ou tokens.`);
+    log.push(`Endure ${endureAmt} - choose between counters or tokens.`);
     return log;
   } else {
     if (!endureCard._counters) endureCard._counters = { '+1/+1': 0, '-1/-1': 0 };
     endureCard._counters['+1/+1'] += endureAmt;
-    log.push(`${endureCard.name} endure ${endureAmt}: +${endureAmt} contadores +1/+1.`);
+    log.push(`${endureCard.name} endure ${endureAmt}: +${endureAmt} +1/+1 counters.`);
   }
   return null;
 }
@@ -392,7 +385,7 @@ export function handleLoseLife(
   state.players[loseTarget].life -= effect.amount || 0;
   GameState._checkWinner(state);
   log.push(
-    `${loseTarget === controller ? 'Voce perde' : 'Oponente perde'} ${effect.amount} vida.`
+    `${loseTarget === controller ? 'You lose' : 'Opponent loses'} ${effect.amount} life.`
   );
 }
 
@@ -406,7 +399,7 @@ export function handleGainLife(
   const gainTarget = effect.target === 'opponent' ? opponent : controller;
   state.players[gainTarget].life += effect.amount || 0;
   log.push(
-    `${gainTarget === controller ? 'Voce ganha' : 'Oponente ganha'} ${effect.amount} vida.`
+    `${gainTarget === controller ? 'You gain' : 'Opponent gains'} ${effect.amount} life.`
   );
 }
 
@@ -423,7 +416,7 @@ export function handleDrain(
   state.players[controller].life += drainAmt;
   GameState._checkWinner(state);
   log.push(
-    `Drain ${drainAmt}: oponente perde ${drainAmt} vida, voce ganha ${drainAmt} vida.`
+    `Drain ${drainAmt}: opponent loses ${drainAmt} life, you gain ${drainAmt} life.`
   );
   const drainGainLogs = GameState.fireTrigger(state, 'gain_life', { playerId: controller });
   log.push(...drainGainLogs);
@@ -448,12 +441,12 @@ export function handleLoot(
   }
   if (drawnCards.length === 0) return null;
 
-  log.push(`Compra ${drawnCards.length} carta(s) (loot).`);
+  log.push(`Draw ${drawnCards.length} card(s) (loot).`);
 
   if (state.players[controller].isHuman) {
     state._pendingLoot = { amount: discardAmt, controller };
     state.waitingForInput = { type: 'discard_for_loot', playerId: controller };
-    log.push(`Escolha ${discardAmt} carta(s) para descartar.`);
+    log.push(`Choose ${discardAmt} card(s) to discard.`);
     return log;
   } else {
     const handCards = state.players[controller].zones.hand
@@ -467,7 +460,7 @@ export function handleLoot(
       const worst = handCards.shift();
       state.players[controller].zones.hand.remove(worst._uid);
       state.players[controller].zones.graveyard.add(worst);
-      log.push(`Descarta ${worst.name} (loot).`);
+      log.push(`Discards ${worst.name} (loot).`);
     }
   }
   return null;
@@ -485,7 +478,7 @@ export function handleRummage(
   const handSize = state.players[controller].zones.hand.count();
 
   if (handSize === 0) {
-    log.push('Sem cartas na mao para descartar.');
+    log.push('No cards in hand to discard.');
     return null;
   }
 
@@ -511,7 +504,7 @@ export function handleRummage(
       if (worst) {
         hand.remove(worst._uid);
         state.players[controller].zones.graveyard.add(worst);
-        log.push(`Descarta ${worst.name} (rummage).`);
+        log.push(`Discards ${worst.name} (rummage).`);
       }
     }
     if (toDiscard > 0) {
@@ -519,9 +512,9 @@ export function handleRummage(
         const drawn = state.players[controller].zones.library.drawFromTop();
         if (drawn) hand.add(drawn);
       }
-      log.push(`Compra ${toDiscard} carta(s) (rummage).`);
+      log.push(`Draws ${toDiscard} card(s) (rummage).`);
     } else if (isOptional) {
-      log.push('Oponente opta por nao descartar.');
+      log.push('Opponent chooses not to discard.');
     }
   }
   return null;
@@ -538,7 +531,7 @@ export function handleBounceSelf(
     state.players[controller].zones.battlefield.remove(bsCard._uid);
     GameState._unregisterCardTriggers(state, bsCard._uid);
     state.players[controller].zones.hand.add(bsCard);
-    log.push(`${bsCard.name} volta para a mao do dono.`);
+    log.push(`${bsCard.name} returns to its owner's hand.`);
   }
 }
 
@@ -573,18 +566,18 @@ export function handleLookTop(
         selected: [],
       };
       state.waitingForInput = { type: 'look_top_land_choice', playerId: controller };
-      log.push(`Escolha qual(is) terreno(s) colocar na mao (até ${pickCount}).`);
+      log.push(`Choose which land(s) to put into hand (up to ${pickCount}).`);
       return log;
     } else {
       const toHand = lands.slice(0, pickCount);
       const toBottom = [...lands.slice(pickCount), ...nonLands];
       toHand.forEach((c: any) => {
         state.players[controller].zones.hand.add(c);
-        log.push(`${c.name} (terreno) vai para a mao.`);
+        log.push(`${c.name} (land) goes to hand.`);
       });
       toBottom.forEach((c: any) => lib.addToBottom(c));
       if (lands.length === 0)
-        log.push(`Nenhum terreno encontrado entre as ${looked.length} cartas do topo.`);
+        log.push(`No land found among the top ${looked.length} cards.`);
     }
   } else if (effect.rest_to === 'graveyard') {
     const pickCount = effect.pick || 1;
@@ -598,7 +591,7 @@ export function handleLookTop(
         playerId: controller,
       };
       state.waitingForInput = { type: 'look_top_choice', playerId: controller };
-      log.push(`Escolha ${pickCount} carta(s) para a mao.`);
+      log.push(`Choose ${pickCount} card(s) for hand.`);
       return log;
     } else {
       looked.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
@@ -606,10 +599,10 @@ export function handleLookTop(
       const rest = looked.slice(pickCount);
       picked.forEach((c: any) => {
         state.players[controller].zones.hand.add(c);
-        log.push(`${c.name} vai para a mao.`);
+        log.push(`${c.name} goes to hand.`);
       });
       rest.forEach((c: any) => state.players[controller].zones.graveyard.add(c));
-      if (rest.length > 0) log.push(`${rest.length} carta(s) vao para o cemiterio.`);
+      if (rest.length > 0) log.push(`${rest.length} card(s) go to the graveyard.`);
     }
   } else if (effect.put_onto_battlefield && effect.condition === 'noncreature_nonland_mv3') {
     const putCount = effect.put_onto_battlefield || 0;
@@ -630,7 +623,7 @@ export function handleLookTop(
       };
       state.waitingForInput = { type: 'look_top_permanent_choice', playerId: controller };
       log.push(
-        `Escolha até ${putCount} permanentes nao-criatura nao-terreno (CMC <= 3) para colocar no campo.`
+        `Choose up to ${putCount} noncreature nonland permanents (CMC <= 3) to put onto the battlefield.`
       );
       return log;
     } else {
@@ -639,11 +632,11 @@ export function handleLookTop(
       const toBottom = [...candidates.slice(putCount), ...rest];
       toBf.forEach((c: any) => {
         state.players[controller].zones.battlefield.add(c);
-        log.push(`${c.name} entra no campo.`);
+        log.push(`${c.name} enters the battlefield.`);
       });
       const shuffled = toBottom.sort(() => Math.random() - 0.5);
       shuffled.forEach((c: any) => lib.addToBottom(c));
-      if (toBf.length === 0) log.push(`Nenhum permanente elegivel encontrado.`);
+      if (toBf.length === 0) log.push(`No eligible permanent found.`);
     }
   } else if (effect.rest_to === 'bottom') {
     const pickCount = effect.pick || 1;
@@ -660,7 +653,7 @@ export function handleLookTop(
       };
       state.waitingForInput = { type: 'look_top_choice', playerId: controller };
       log.push(
-        `Escolha ${pickCount} carta(s) para a mao (as outras vao para o fundo do deck).`
+        `Choose ${pickCount} card(s) for hand (the rest go to the bottom of library).`
       );
       return log;
     } else {
@@ -669,14 +662,14 @@ export function handleLookTop(
       const rest = looked.slice(pickCount);
       picked.forEach((c: any) => {
         state.players[controller].zones.hand.add(c);
-        log.push(`${c.name} vai para a mao.`);
+        log.push(`${c.name} goes to hand.`);
       });
       rest.forEach((c: any) => lib.addToBottom(c));
-      if (rest.length > 0) log.push(`${rest.length} carta(s) vao para o fundo do deck.`);
+      if (rest.length > 0) log.push(`${rest.length} card(s) go to the bottom of library.`);
     }
   } else {
     looked.reverse().forEach((c: any) => lib.addToTop(c));
-    log.push(`Olhou ${looked.length} carta(s) do topo.`);
+    log.push(`Looked at the top ${looked.length} card(s).`);
   }
   return null;
 }
@@ -702,15 +695,15 @@ export function handleDamageAll(
         creature._damagedThisTurn = true;
         if (creature._damage >= CardEngine.getToughness(creature)) {
           dying.push(creature);
-          log.push(`${creature.name} recebe ${dmgAllAmt} dano e morre.`);
+          log.push(`${creature.name} takes ${dmgAllAmt} damage and dies.`);
         } else {
-          log.push(`${creature.name} recebe ${dmgAllAmt} dano.`);
+          log.push(`${creature.name} takes ${dmgAllAmt} damage.`);
         }
       }
 
       for (const pw of planeswalkers) {
         GameState.damagePlaneswalker(state, pw, dmgAllAmt, pid);
-        log.push(`${pw.name} recebe ${dmgAllAmt} dano.`);
+        log.push(`${pw.name} takes ${dmgAllAmt} damage.`);
       }
 
       dying.forEach((c: any) => GameState.creatureDies(state, c, pid));
@@ -725,9 +718,9 @@ export function handleDamageAll(
         creature._damagedThisTurn = true;
         if (creature._damage >= CardEngine.getToughness(creature)) {
           dying.push(creature);
-          log.push(`${creature.name} recebe ${dmgAllAmt} dano e morre.`);
+          log.push(`${creature.name} takes ${dmgAllAmt} damage and dies.`);
         } else {
-          log.push(`${creature.name} recebe ${dmgAllAmt} dano.`);
+          log.push(`${creature.name} takes ${dmgAllAmt} damage.`);
         }
       }
       dying.forEach((c: any) => GameState.creatureDies(state, c, pid));
@@ -763,7 +756,7 @@ export function handleUntapAll(
       c._tapped = false;
     }
   });
-  log.push(`Desvirou todos os permanentes${effect.target ? ' (' + effect.target + ')' : ''}.`);
+  log.push(`Untapped all permanents${effect.target ? ' (' + effect.target + ')' : ''}.`);
 }
 
 export function handleDiscardHand(
@@ -782,8 +775,8 @@ export function handleDiscardHand(
     dhHand.remove(c._uid);
     dhGy.add(c);
   });
-  const who = dhTarget === 0 ? 'Voce descarta' : 'Oponente descarta';
-  log.push(`${who} toda a mao (${count} carta(s)).`);
+  const who = dhTarget === 0 ? 'You discard' : 'Opponent discards';
+  log.push(`${who} entire hand (${count} card(s)).`);
 }
 
 export function handleRevealHand(
@@ -796,9 +789,9 @@ export function handleRevealHand(
   const rhTarget = effect.target === 'opponent' ? opponent : controller;
   const rhCards = state.players[rhTarget].zones.hand.getAll();
   if (rhCards.length > 0) {
-    log.push(`Mao revelada: ${rhCards.map((c: any) => c.name).join(', ')}.`);
+    log.push(`Hand revealed: ${rhCards.map((c: any) => c.name).join(', ')}.`);
   } else {
-    log.push('Mao vazia.');
+    log.push('Hand is empty.');
   }
 }
 
@@ -829,7 +822,7 @@ export function handleExileGraveyard(
     egGy.remove(c._uid);
     egExile.add(c);
   });
-  if (egCards.length > 0) log.push(`${egCards.length} carta(s) exilada(s) do cemiterio.`);
+  if (egCards.length > 0) log.push(`${egCards.length} card(s) exiled from graveyard.`);
 }
 
 export function handleExileFromGraveyard(
@@ -869,17 +862,23 @@ export function handleExileFromGraveyard(
   const efgGy = state.players[efgPid].zones.graveyard;
   const efgExile = state.players[efgPid].zones.exile;
   const efgAmt = resolveAmount(effect.amount) || 1;
-  const efgCards = efgGy.getAll();
+  let efgCards = efgGy.getAll();
+  // Filter by type when specified
+  if (effect.target === 'creature') {
+    efgCards = efgCards.filter((c: any) => CardEngine.isCreature(c));
+  } else if (effect.target === 'noncreature') {
+    efgCards = efgCards.filter((c: any) => !CardEngine.isCreature(c) && !CardEngine.isLand(c));
+  }
 
   if (efgCards.length > 0) {
     if (effect.choose_cards && controller === 0) {
       let maxAmount: number, minAmount: number;
-      if (effect.exact_amount && effect.optional) {
+      if (effect.optional || effect.up_to_max) {
         maxAmount = efgAmt;
         minAmount = 0;
-      } else if (effect.up_to_max) {
+      } else if (effect.exact_amount) {
         maxAmount = efgAmt;
-        minAmount = 0;
+        minAmount = efgAmt;
       } else {
         maxAmount = efgAmt;
         minAmount = efgAmt;
@@ -905,7 +904,7 @@ export function handleExileFromGraveyard(
         const picked = efgCards[efgI];
         efgGy.remove(picked._uid);
         efgExile.add(picked);
-        log.push(`${picked.name} exilado do cemiterio.`);
+        log.push(`${picked.name} exiled from graveyard.`);
       }
       if (pickedCount > 0) {
         state._exiledThisResolution = true;
@@ -927,7 +926,7 @@ export function handleExileTop(
     const topCard = etLib.drawFromTop();
     if (topCard) {
       etExile.add(topCard);
-      log.push(`${topCard.name} exilado do topo da biblioteca.`);
+      log.push(`${topCard.name} exiled from the top of library.`);
     }
   }
 }
@@ -964,13 +963,13 @@ export function handleBounceToLibraryTop(
     const btlCreature = btlBf.get(btlTarget.uid);
     if (btlCreature) {
       if (!CardEngine.canBeTargeted(btlCreature, controller)) {
-        log.push(`${btlCreature.name} nao pode ser alvo (hexproof/shroud).`);
+        log.push(`${btlCreature.name} can't be targeted (hexproof/shroud).`);
         return;
       }
       btlBf.remove(btlCreature._uid);
       GameState._unregisterCardTriggers(state, btlCreature._uid);
       state.players[btlTarget.player].zones.library.addToTop(btlCreature);
-      log.push(`${btlCreature.name} colocado no topo da biblioteca.`);
+      log.push(`${btlCreature.name} put on top of library.`);
     }
   }
 }
@@ -988,12 +987,12 @@ export function handleReturnLandFromMill(
     rlmGy.remove(land._uid);
     if (effect.to_hand) {
       state.players[controller].zones.hand.add(land);
-      log.push(`${land.name} volta do cemiterio para a mao.`);
+      log.push(`${land.name} returns from graveyard to hand.`);
     } else {
       const bfLand = CardEngine.prepareForBattlefield(land);
       bfLand._tapped = true;
       state.players[controller].zones.battlefield.add(bfLand);
-      log.push(`${land.name} volta do cemiterio para o campo virado.`);
+      log.push(`${land.name} returns from graveyard to the battlefield tapped.`);
     }
   }
 }
@@ -1011,7 +1010,7 @@ export function handleRegenerate(
     const regCreature = state.players[regTarget.player].zones.battlefield.get(regTarget.uid);
     if (regCreature) {
       regCreature._regenerateShield = true;
-      log.push(`${regCreature.name} ganha escudo de regeneracao.`);
+      log.push(`${regCreature.name} gains regeneration shield.`);
     }
   } else {
     const regBf = state.players[controller].zones.battlefield;
@@ -1026,13 +1025,13 @@ export function handleRegenerate(
         goblins.forEach((g: any) => {
           g._regenerateShield = true;
         });
-        log.push(`Goblins ganham escudo de regeneracao.`);
+        log.push(`Goblins gain regeneration shield.`);
       }
     } else {
       const selfCard = regBf.get(card._uid);
       if (selfCard) {
         selfCard._regenerateShield = true;
-        log.push(`${selfCard.name} ganha escudo de regeneracao.`);
+        log.push(`${selfCard.name} gains regeneration shield.`);
       }
     }
   }
@@ -1050,7 +1049,7 @@ export function handleCounterSelfIfNoDraw(
     if (csifCard) {
       if (!csifCard._counters) csifCard._counters = { '+1/+1': 0, '-1/-1': 0 };
       csifCard._counters[effect.counter || '+1/+1'] += 1;
-      log.push(`${csifCard.name} recebe +1/+1 counter (nenhuma carta comprada extra).`);
+      log.push(`${csifCard.name} gets +1/+1 counter (no extra card drawn).`);
     }
   }
 }
@@ -1124,7 +1123,7 @@ export function handleGrant(
     if (!gCard._tempKeywords) gCard._tempKeywords = [];
     const granted: string[] = [];
     for (const kw of kwList) {
-      const kwCap = kw.charAt(0).toUpperCase() + kw.slice(1);
+      const kwCap = kw.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
       if (!gCard.keywords.includes(kwCap)) gCard.keywords.push(kwCap);
       if (grantDuration === 'end_of_turn') {
         gCard._tempKeywords.push({ keyword: kwCap, appliedTurn: state.turn, duration: grantDuration });
@@ -1141,11 +1140,11 @@ export function handleGrant(
       const gCreature = state.players[gTarget.player].zones.battlefield.get(gTarget.uid);
       if (gCreature) {
         if (!CardEngine.canBeTargeted(gCreature, controller)) {
-          log.push(`${gCreature.name} nao pode ser alvo (hexproof/shroud).`);
+          log.push(`${gCreature.name} can't be targeted (hexproof/shroud).`);
           continue;
         }
         const granted = applyGrant(gCreature);
-        log.push(`${gCreature.name} ganha ${granted}.`);
+        log.push(`${gCreature.name} gains ${granted}.`);
       }
     }
   } else if (effect.target === 'creatures_with_counters') {
@@ -1156,7 +1155,7 @@ export function handleGrant(
     );
     for (const c of withCounters) {
       const granted = applyGrant(c);
-      log.push(`${c.name} ganha ${granted}.`);
+      log.push(`${c.name} gains ${granted}.`);
     }
   } else if (effect.target === 'own_creatures' || effect.target === 'all_creatures') {
     // Grant to all own creatures (or all creatures)
@@ -1165,7 +1164,18 @@ export function handleGrant(
     for (const c of creatures) {
       applyGrant(c);
     }
-    if (creatures.length > 0) log.push(`Todas as criaturas ganham ${kwList.join(', ')}.`);
+    if (creatures.length > 0) log.push(`All creatures gain ${kwList.join(', ')}.`);
+  } else if (effect.target === 'own_creature' || effect.target === 'creature') {
+    // Grant to a single own creature (pick best, same as the buff auto-pick)
+    const ownBf = state.players[controller].zones.battlefield.cards.filter(
+      (c: any) => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, controller)
+    );
+    if (ownBf.length > 0) {
+      ownBf.sort((a: any, b: any) => CardEngine.getPower(b) - CardEngine.getPower(a));
+      const gTarget = ownBf[0];
+      const granted = applyGrant(gTarget);
+      log.push(`${gTarget.name} gains ${granted}.`);
+    }
   } else if (effect.target === 'opponent_creature' || effect.target === 'opponent_creatures') {
     // Grant keyword(s) to an opponent's creature (e.g. Summit Intimidator: "can't block this turn")
     const oppId = controller === 0 ? 1 : 0;
@@ -1175,18 +1185,18 @@ export function handleGrant(
       oppBf.sort((a: any, b: any) => CardEngine.getPower(b) - CardEngine.getPower(a));
       const gTarget = oppBf[0];
       const granted = applyGrant(gTarget);
-      log.push(`${gTarget.name} ganha ${granted} (oponente).`);
+      log.push(`${gTarget.name} gains ${granted} (opponent).`);
     }
   } else if (effect.target === 'next_spell') {
     // Grant uncounterable/etc. to next spell cast this turn
     state._nextSpellGrant = kwList;
-    log.push(`Proximo feitico ganha ${kwList.join(', ')}.`);
+    log.push(`Next spell gains ${kwList.join(', ')}.`);
   } else {
     // Default: grant to self (the card itself on the battlefield)
     const gSelf = state.players[controller].zones.battlefield.get(card._uid);
     if (gSelf) {
       const granted = applyGrant(gSelf);
-      log.push(`${gSelf.name} ganha ${granted}.`);
+      log.push(`${gSelf.name} gains ${granted}.`);
     }
   }
 }
@@ -1212,7 +1222,7 @@ export function handleRegisterTempTrigger(
 
   state._tempTriggers.push(tempTrigger);
   log.push(
-    `Trigger temporario registrado: ${effect.event}${effect.once ? ' (uma vez)' : ''}.`
+    `Temporary trigger registered: ${effect.event}${effect.once ? ' (once)' : ''}.`
   );
 }
 
@@ -1237,7 +1247,7 @@ export function handleGrantAll(
     c._tempKeywords.push(gaKwCap);
     if (gaKwCap === 'Haste') c._summoningSick = false;
   });
-  log.push(`Todas as criaturas ganham ${gaKwCap} ate o fim do turno.`);
+  log.push(`All creatures gain ${gaKwCap} until end of turn.`);
 }
 
 export function handleGrantCounters(
@@ -1253,7 +1263,7 @@ export function handleGrantCounters(
       const gcCreature = state.players[gcTarget.player].zones.battlefield.get(gcTarget.uid);
       if (!gcCreature) continue;
       if (!CardEngine.canBeTargeted(gcCreature, controller)) {
-        log.push(`${gcCreature.name} nao pode ser alvo (hexproof/shroud).`);
+        log.push(`${gcCreature.name} can't be targeted (hexproof/shroud).`);
         continue;
       }
       if (!gcCreature._counters) gcCreature._counters = { '+1/+1': 0, '-1/-1': 0 };
@@ -1267,7 +1277,7 @@ export function handleGrantCounters(
           if (!gcCreature.keywords.includes(kwCap)) gcCreature.keywords.push(kwCap);
           if (kwCap === 'Haste') gcCreature._summoningSick = false;
         }
-        log.push(`${gcCreature.name} recebe contadores: ${effect.counters.join(', ')}.`);
+        log.push(`${gcCreature.name} gets counters: ${effect.counters.join(', ')}.`);
       } else {
         // Standard numeric counter — resolve "X" dynamically
         const gcAmt = effect.amount === 'X' ? (state._currentXValue || 1) : (effect.amount || 1);
@@ -1279,7 +1289,7 @@ export function handleGrantCounters(
           const kwCap = gcType.charAt(0).toUpperCase() + gcType.slice(1);
           if (!gcCreature.keywords.includes(kwCap)) gcCreature.keywords.push(kwCap);
         }
-        log.push(`${gcCreature.name} recebe ${gcAmt} contador(es) ${gcType}.`);
+        log.push(`${gcCreature.name} gets ${gcAmt} ${gcType} counter(s).`);
       }
     }
   }
@@ -1289,7 +1299,8 @@ export function handleExileTopPlay(
   state: any,
   effect: any,
   controller: number,
-  log: string[]
+  log: string[],
+  sourceCardUid?: string
 ): void {
   const fromGraveyard = effect.from === 'graveyard';
   const etpLib = state.players[controller].zones.library;
@@ -1318,11 +1329,9 @@ export function handleExileTopPlay(
           !CardEngine.isCreature(c) && !CardEngine.isLand(c) && (c.cmc || 0) <= 3;
       }
 
-      if (effect.max_mv) {
-        const originalFilter = filter;
-        filter = (c: any) => originalFilter(c) && (c.cmc || 0) <= effect.max_mv;
-      }
-
+      // NOTE: max_mv is intentionally NOT used as a filter here.
+      // For Breaching Dragonstorm: exile the first nonland regardless of CMC,
+      // then freeCast is conditional on CMC <= max_mv (set below).
       const candidates = etpLib.cards.filter(filter);
       if (candidates.length > 0) {
         cardFound = effect.random
@@ -1344,25 +1353,34 @@ export function handleExileTopPlay(
       state.players[controller].zones.exile.add(cardFound);
       if (!state._exiledPlayable) state._exiledPlayable = {};
 
+      // freeCast: true if effect.free AND card's CMC is within max_mv (or no max_mv limit)
+      const isFree = !!(effect.free && (!effect.max_mv || (cardFound.cmc || 0) <= effect.max_mv));
       state._exiledPlayable[cardFound._uid] = {
         card: cardFound,
         controller,
         turn: state.turn,
-        freeCast: effect.free || false,
-        duration: effect.duration || 'permanent',
+        freeCast: isFree,
+        duration: effect.duration || 'end_of_turn',
+        toHand: effect.optional === true, // if optional, put card back to hand when expired
       };
-      console.log(
-        `[BREACHING DEBUG] Exiled ${cardFound.name}, freeCast: ${effect.free || false}, cmc: ${cardFound.cmc}, duration: ${effect.duration || 'permanent'}`
-      );
 
-      const who = state.players[controller].isHuman ? 'Voce exila' : 'Oponente exila';
+      // Track exiled card under source permanent for visual display (card peeking from under permanent)
+      if (sourceCardUid) {
+        const srcCard = state.players[controller].zones.battlefield.get(sourceCardUid);
+        if (srcCard) {
+          if (!srcCard._exiledCards) srcCard._exiledCards = [];
+          srcCard._exiledCards.push({ name: cardFound.name, image_uris: cardFound.image_uris, image_small: cardFound.image_small, _uid: cardFound._uid });
+        }
+      }
+
+      const who = state.players[controller].isHuman ? 'You exile' : 'Opponent exiles';
       const playableText = effect.free
-        ? ' (pode jogar de graca neste turno)'
-        : ' (pode jogar neste turno)';
+        ? ' (may play for free this turn)'
+        : ' (may play this turn)';
       log.push(`${who} ${cardFound.name}${playableText}.`);
     } else if (effect.condition) {
-      const who = state.players[controller].isHuman ? 'Voce' : 'Oponente';
-      log.push(`${who} nao encontra carta valida na biblioteca.`);
+      const who = state.players[controller].isHuman ? 'You' : 'Opponent';
+      log.push(`${who} find${state.players[controller].isHuman ? '' : 's'} no valid card in library.`);
     }
   }
 }
@@ -1373,20 +1391,19 @@ export function handleSearchLibrary(
   controller: number,
   log: string[]
 ): string[] | null {
-  console.log('[SEARCH_LIBRARY] Starting search_library effect', effect);
-
   // Support effect.controller: "opponent" (e.g., Magmatic Hellkite - opponent searches their library)
   const opponent = controller === 0 ? 1 : 0;
   const resolvedController = effect.controller === 'opponent' ? opponent : controller;
 
   const slLib = state.players[resolvedController].zones.library;
   const bf = state.players[resolvedController].zones.battlefield;
-  console.log('[SEARCH_LIBRARY] Library size:', slLib.cards.length);
 
   let slFilter: (c: any) => boolean;
   if (effect.target === 'creature') {
     slFilter = (c: any) => CardEngine.isCreature(c);
-  } else if (effect.target === 'land' || effect.target === 'basic_land') {
+  } else if (effect.target === 'basic_land') {
+    slFilter = (c: any) => CardEngine.isBasicLand(c);
+  } else if (effect.target === 'land') {
     slFilter = (c: any) => CardEngine.isLand(c);
   } else if (effect.target === 'named_card' && (effect.name || effect.names)) {
     if (effect.name) {
@@ -1399,12 +1416,10 @@ export function handleSearchLibrary(
   }
 
   const slCandidates = slLib.cards.filter(slFilter);
-  console.log('[SEARCH_LIBRARY] Candidates found:', slCandidates.length);
 
   if (slCandidates.length === 0) {
     slLib.shuffle();
-    log.push('Nenhuma carta encontrada na biblioteca.');
-    console.log('[SEARCH_LIBRARY] No candidates, breaking');
+    log.push('No card found in library.');
     return null;
   }
 
@@ -1412,6 +1427,13 @@ export function handleSearchLibrary(
   let toHand = effect.to_hand !== false;
   let toBattlefield = false;
   let tappedDest = effect.tapped || false;
+
+  // Explicit to_battlefield flag overrides default to_hand behavior
+  if (effect.to_battlefield) {
+    toBattlefield = true;
+    toHand = false;
+    toTop = false;
+  }
 
   // dragon_condition: branch on whether controller has a Dragon (condition field renamed
   // to avoid stack-part1 from treating it as a gate condition and skipping the effect)
@@ -1434,8 +1456,6 @@ export function handleSearchLibrary(
     }
   }
 
-  console.log('[SEARCH_LIBRARY] Controller:', resolvedController, 'isHuman:', state.players[resolvedController].isHuman);
-
   if (state.players[resolvedController].isHuman && slCandidates.length > 0) {
     const landOptions: any[] = [];
     const seenNames = new Set<string>();
@@ -1445,7 +1465,6 @@ export function handleSearchLibrary(
         landOptions.push(c);
       }
     }
-    console.log('[SEARCH_LIBRARY] Setting up human choice. Options:', landOptions.length);
     state._pendingSearch = {
       candidates: landOptions,
       controller: resolvedController,
@@ -1459,13 +1478,11 @@ export function handleSearchLibrary(
     state.waitingForInput = { type: 'search_library', playerId: resolvedController };
     log.push(
       effect.optional
-        ? 'Escolha uma carta da sua biblioteca (ou declinar).'
-        : 'Escolha uma carta da sua biblioteca.'
+        ? 'Choose a card from your library (or decline).'
+        : 'Choose a card from your library.'
     );
-    console.log('[SEARCH_LIBRARY] Waiting for input set. Returning log.');
     return log;
   } else {
-    console.log('[SEARCH_LIBRARY] AI path - auto-picking best card');
     slCandidates.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
     const picked = slCandidates[0];
     const idx = slLib.cards.indexOf(picked);
@@ -1474,10 +1491,10 @@ export function handleSearchLibrary(
     if (toHand) {
       state.players[resolvedController].zones.hand.add(picked);
       slLib.shuffle();
-      log.push(`Busca ${picked.name} da biblioteca para a mao.`);
+      log.push(`Searches for ${picked.name} and puts it into hand.`);
     } else if (toTop) {
       slLib.cards.unshift(picked);
-      log.push(`Busca ${picked.name} e coloca no topo do grimorio.`);
+      log.push(`Searches for ${picked.name} and puts it on top of library.`);
     } else if (toBattlefield) {
       const bfCard = CardEngine.prepareForBattlefield(picked);
       bfCard._tapped = tappedDest;
@@ -1485,17 +1502,16 @@ export function handleSearchLibrary(
       bfCard._ownerId = resolvedController;
       // Apply stun counter if specified (e.g. Magmatic Hellkite)
       if (effect.stun_counter) {
-        if (!bfCard._counters) bfCard._counters = {};
-        bfCard._counters['stun'] = (bfCard._counters['stun'] || 0) + effect.stun_counter;
+        bfCard._stunCounters = (bfCard._stunCounters || 0) + effect.stun_counter;
       }
       bf.add(bfCard);
       GameState._registerCardTriggers(state, bfCard, resolvedController);
       slLib.shuffle();
-      log.push(`Busca ${picked.name} e coloca no campo${tappedDest ? ' virado' : ''}.`);
+      log.push(`Searches for ${picked.name} and puts it onto the battlefield${tappedDest ? ' tapped' : ''}.`);
     } else {
       state.players[resolvedController].zones.hand.add(picked);
       slLib.shuffle();
-      log.push(`Busca ${picked.name} da biblioteca para a mao.`);
+      log.push(`Searches for ${picked.name} and puts it into hand.`);
     }
   }
   return null;
@@ -1516,10 +1532,10 @@ export function handleSearchLibraryToGraveyard(
     if (idx !== -1) sltgLib.cards.splice(idx, 1);
     sltgGy.add(picked);
     sltgLib.shuffle();
-    log.push(`Busca ${picked.name} e coloca no cemiterio.`);
+    log.push(`Searches for ${picked.name} and puts it into graveyard.`);
   } else {
     sltgLib.shuffle();
-    log.push('Nenhuma carta encontrada.');
+    log.push('No card found.');
   }
 }
 
@@ -1566,6 +1582,8 @@ export function handleCreateTokenCopy(
     token.oracle_text = sourceCreature.oracle_text;
     token.mana_cost = sourceCreature.mana_cost;
     token.cmc = sourceCreature.cmc;
+    if (sourceCreature.image_small) token.image_small = sourceCreature.image_small;
+    if (sourceCreature.image_normal) token.image_normal = sourceCreature.image_normal;
     if (effect.tapped) token._tapped = true;
     if (effect.attacking && state.combat && state.combat.phase !== 'none') {
       token._attacking = true;
@@ -1575,9 +1593,9 @@ export function handleCreateTokenCopy(
     }
     state.players[controller].zones.battlefield.add(token);
     GameState._registerCardTriggers(state, token, controller);
-    log.push(`Cria copia de ${sourceCreature.name}.`);
+    log.push(`Creates a copy of ${sourceCreature.name}.`);
   } else {
-    log.push('Nenhuma criatura para copiar.');
+    log.push('No creature to copy.');
   }
 }
 
@@ -1614,7 +1632,7 @@ export function handleBecomeCopy(
       if (Object.keys(preservedCounters).length > 0) selfCreature._counters = preservedCounters;
       if (preservedAttachments.length > 0) selfCreature._attachments = preservedAttachments;
 
-      log.push(`${card.name} vira uma copia de ${templateCreature.name}.`);
+      log.push(`${card.name} becomes a copy of ${templateCreature.name}.`);
     }
   }
 }
@@ -1662,7 +1680,7 @@ export function handleMassClone(
         creature.cmc = templateCreature.cmc;
       });
 
-      log.push(`Outras criaturas viram copias de ${templateCreature.name} ate o fim do turno.`);
+      log.push(`Other creatures become copies of ${templateCreature.name} until end of turn.`);
     }
   }
 }
@@ -1682,7 +1700,7 @@ export function handleGainControl(
       gcCreature._originalOwner = gcTarget.player;
       state.players[controller].zones.battlefield.add(gcCreature);
       GameState._registerCardTriggers(state, gcCreature, controller);
-      log.push(`Ganha controle de ${gcCreature.name}!`);
+      log.push(`Gains control of ${gcCreature.name}!`);
     }
   }
 }
@@ -1723,7 +1741,7 @@ export function handleAnthem(
     });
   }
   log.push(
-    `Anthem: todas as criaturas ganham +${anthemPower}/+${anthemTough}${
+    `Anthem: all creatures get +${anthemPower}/+${anthemTough}${
       effect.keywords ? ' ' + effect.keywords.join(', ') : ''
     }.`
   );
@@ -1750,7 +1768,7 @@ export function handleTriggered(
     };
     if (!state._triggers) state._triggers = [];
     state._triggers.push(trigger);
-    log.push(`${card.name}: habilidade ativada registrada (${effect.event}).`);
+    log.push(`${card.name}: triggered ability registered (${effect.event}).`);
   }
 }
 
@@ -1876,8 +1894,43 @@ export function handleAttach(
   card: any,
   controller: number,
   targets: any[],
-  log: string[]
+  log: string[],
+  effect?: any
 ): void {
+  // If effect specifies target: "token", attach the triggering card (equipment) to the last created token
+  // e.g. Cori-Steel Cutter: "You may attach Cori-Steel Cutter to that [Monk] token."
+  if (effect?.target === 'token' && state._lastCreatedToken) {
+    const equipmentCard = state.players[controller].zones.battlefield.get(card._uid);
+    const creatureToken = state.players[controller].zones.battlefield.get(state._lastCreatedToken);
+
+    if (equipmentCard && creatureToken) {
+      // If optional and human player, ask for confirmation
+      if (effect?.optional && state.players[controller].isHuman) {
+        state._pendingAttachChoice = {
+          controller,
+          tokenUid: card._uid,          // equipment to attach
+          targetUid: state._lastCreatedToken, // creature to attach to
+          tokenName: equipmentCard.name,
+          targetName: creatureToken.name
+        };
+        state.waitingForInput = { type: 'attach_choice', playerId: controller };
+        log.push(`${creatureToken.name} criado. Deseja equipar ${equipmentCard.name} nele?`);
+        state._lastCreatedToken = null;
+        return;
+      }
+
+      // Auto-equip (AI or not optional): equipment attaches to creature token
+      equipmentCard._attachedTo = creatureToken._uid;
+      if (!creatureToken._attachments) creatureToken._attachments = [];
+      creatureToken._attachments.push(equipmentCard._uid);
+      GameState._applyEquipmentEffects(equipmentCard, creatureToken);
+      log.push(`${equipmentCard.name} equipado em ${creatureToken.name}.`);
+      state._lastCreatedToken = null;
+    }
+    return;
+  }
+
+  // Normal attach: target a creature
   if (targets && targets.length > 0) {
     const attTarget = targets[0];
     const attCreature = state.players[attTarget.player].zones.battlefield.get(attTarget.uid);
@@ -1954,25 +2007,44 @@ export function handleExileGraveyardCastCopy(
 ): void {
   const egccGy = state.players[controller].zones.graveyard;
   const egccExile = state.players[controller].zones.exile;
+  const egccBf = state.players[controller].zones.battlefield;
   let egccCandidates = egccGy.getAll().filter((c: any) => !CardEngine.isLand(c));
   if (effect.target === 'nonland_mv3_or_less') {
     egccCandidates = egccCandidates.filter((c: any) => (c.cmc || 0) <= 3);
   }
-  if (egccCandidates.length > 0) {
-    egccCandidates.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
-    const picked = egccCandidates[0];
-    egccGy.remove(picked._uid);
-    egccExile.add(picked);
-    const copyEffects = CardEngine.getSpellEffects(picked);
-    if (copyEffects.length > 0) {
-      effects.splice(ei + 1, 0, ...copyEffects);
-      log.push(`Exila ${picked.name} do cemiterio e joga copia de graca!`);
-    } else {
-      log.push(`Exila ${picked.name} do cemiterio.`);
-    }
-  } else {
+  if (egccCandidates.length === 0) {
     log.push('Nenhuma carta valida no cemiterio.');
+    return;
   }
+
+  // If human controller and multiple options, show overlay for choice
+  if (controller === 0 && state.players[0].isHuman && egccCandidates.length > 1) {
+    GameState._setupGraveyardCastChoice(state, controller, egccCandidates, (picked: any) => {
+      if (!picked) return;
+      egccGy.remove(picked._uid);
+      egccExile.add(picked);
+      egccBf.add(picked);
+      const etbEffects = CardEngine.getETBEffects(picked);
+      if (etbEffects.length > 0) {
+        effects.splice(ei + 1, 0, ...etbEffects);
+      }
+      log.push(`Exila ${picked.name} do cemiterio e joga copia de graca!`);
+    });
+    log.push(`Escolha uma criatura do cemiterio para exilar e jogar.`);
+    return;
+  }
+
+  // AI or single option: auto-pick highest CMC
+  egccCandidates.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
+  const picked = egccCandidates[0];
+  egccGy.remove(picked._uid);
+  egccExile.add(picked);
+  egccBf.add(picked);
+  const etbEffects = CardEngine.getETBEffects(picked);
+  if (etbEffects.length > 0) {
+    effects.splice(ei + 1, 0, ...etbEffects);
+  }
+  log.push(`Exila ${picked.name} do cemiterio e joga copia de graca!`);
 }
 
 // ============================================================
@@ -2305,7 +2377,7 @@ export function dispatch(
       handleGrantCounters(state, effect, controller, targets, log);
       return null;
     case 'exile_top_play':
-      handleExileTopPlay(state, effect, controller, log);
+      handleExileTopPlay(state, effect, controller, log, card?._uid);
       return null;
     case 'exile_top_choose':
     case 'behold_dragon':
@@ -2353,7 +2425,7 @@ export function dispatch(
       handleBecomeCreature(state, effect, card, controller, log);
       return null;
     case 'attach':
-      handleAttach(state, card, controller, targets, log);
+      handleAttach(state, card, controller, targets, log, effect);
       return null;
     case 'exile_top_opponent':
       handleExileTopOpponent(state, effect, controller, log);

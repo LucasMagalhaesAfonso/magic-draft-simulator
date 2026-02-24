@@ -230,7 +230,8 @@ export function creatureValue(snap: CreatureSnapshot): number {
 export function findBestBlocking(
   attackerSnaps: CreatureSnapshot[],
   blockerSnaps: CreatureSnapshot[],
-  myLife: number
+  myLife: number,
+  boardScore: number = 0
 ): BlockingResult {
   if (attackerSnaps.length === 0) {
     return {
@@ -270,7 +271,9 @@ export function findBestBlocking(
       score += creatureValue(attackerSnaps[ai]) * 1.5;
     }
     for (const bi of result.deadBlockers) {
-      score -= creatureValue(blockerSnaps[bi]) * 1.2;
+      // Context-aware: when behind, losing blockers in trades is more acceptable
+      const blockerLossMult = boardScore < -10 ? 0.8 : boardScore > 10 ? 1.4 : 1.2;
+      score -= creatureValue(blockerSnaps[bi]) * blockerLossMult;
     }
 
     if (result.playerDamage >= myLife) score -= 200;
@@ -451,6 +454,45 @@ export function findBestBlocking(
     bestAssignment = {};
   }
 
+  // === PRESERVE DEFENDERS: Don't sacrifice a large % of blockers if not at lethal risk ===
+  // If best assignment kills >= half our valuable blockers and doesn't prevent lethal, try
+  // a conservative pass that only uses tokens/weakest blockers to chump lethal threats.
+  const bestResult = simulateCombat(attackerSnaps, bestAssignment, blockerSnaps);
+  const killedHighVal = [...bestResult.deadBlockers].filter(bi =>
+    creatureValue(blockerSnaps[bi]) >= 5 && !blockerSnaps[bi].isToken
+  ).length;
+  const totalHighValBlockers = blockerSnaps.filter(b => creatureValue(b) >= 5 && !b.isToken).length;
+  const wouldLoseHalfArmy = totalHighValBlockers >= 2 && killedHighVal >= Math.ceil(totalHighValBlockers / 2);
+  const atLethalRisk = bestResult.playerDamage >= myLife || noBlockEval.result.playerDamage >= myLife;
+
+  if (wouldLoseHalfArmy && !atLethalRisk) {
+    // Try conservative: use tokens AND weak non-token creatures (value ≤ 2) to reduce damage
+    // This avoids sacrificing the whole army when cheap blockers can absorb some hits
+    const conservativeAssignment: Record<number, number[]> = {};
+    const cheapBlockers = blockerSnaps
+      .map((b, i) => ({ i, val: creatureValue(b) }))
+      .sort((a, b) => a.val - b.val); // cheapest first
+    const usedCons = new Set<number>();
+    for (let ai = 0; ai < Math.min(attackerSnaps.length, 6); ai++) {
+      const legalCheap = cheapBlockers.filter(b =>
+        legalBlockers[ai].includes(b.i) &&
+        !usedCons.has(b.i) &&
+        (blockerSnaps[b.i].isToken || b.val <= 2) // Include tokens AND weak non-tokens
+      );
+      if (legalCheap.length > 0) {
+        conservativeAssignment[ai] = [legalCheap[0].i];
+        usedCons.add(legalCheap[0].i);
+      }
+    }
+    const consEval = scoreAssignment(conservativeAssignment);
+    // Accept conservative plan if it doesn't let through more than 50% extra damage
+    if (consEval.result.playerDamage < myLife &&
+        consEval.result.playerDamage <= bestResult.playerDamage * 1.5) {
+      bestAssignment = conservativeAssignment;
+      bestScore = consEval.score;
+    }
+  }
+
   return {
     assignment: bestAssignment,
     score: bestScore,
@@ -467,7 +509,8 @@ export function findBestAttackers(
   oppBlockers: CreatureSnapshot[],
   oppLife: number,
   myLife: number,
-  boardScore: number
+  boardScore: number,
+  hasCombatTrick: boolean = false
 ): AttackResult {
   if (myCreatures.length === 0) return { attackerIndices: [], score: 0 };
 
@@ -544,6 +587,24 @@ export function findBestAttackers(
 
     if (c.isToken) score += 1;
 
+    // Tempo attack bonus: tokens/cheap creatures that trade favorably with bigger blockers
+    if (canBeBlockedBy.length > 0) {
+      for (const blk of canBeBlockedBy) {
+        const weKillBlocker = c.power >= blk.toughness || c.deathtouch;
+        if (weKillBlocker) {
+          const myVal = creatureValue(c);
+          const theirVal = creatureValue(blk);
+          if (theirVal > myVal + 1) {
+            // Favorable trade: we kill something more valuable than us
+            // Extra bonus for tokens (expendable) trading up
+            const tradeBonus = (theirVal - myVal) + (c.isToken ? 2 : 0);
+            score += Math.min(tradeBonus, 8); // Cap to avoid over-committing
+            break; // Only count the best favorable trade
+          }
+        }
+      }
+    }
+
     // Risk assessment
     if (!c.indestructible && !c.vigilance && canBeBlockedBy.length > 0) {
       const bestBlocker = [...canBeBlockedBy].sort((a, b) => {
@@ -560,10 +621,35 @@ export function findBestAttackers(
         if (blockerDies) {
           const myVal = creatureValue(c);
           const theirVal = creatureValue(bestBlocker);
-          if (myVal > theirVal + 3) score -= 8;
-          else if (myVal > theirVal + 1) score -= 4;
+          // Context-aware trade: when losing badly, any trade that removes their threat is good
+          if (boardScore < -15) {
+            // Desperate: accept any trade — removing their threat > keeping our creature
+            if (myVal > theirVal + 6) score -= 4;
+          } else if (boardScore < -5) {
+            // Behind: be more willing to trade
+            if (myVal > theirVal + 5) score -= 6;
+            else if (myVal > theirVal + 2) score -= 2;
+          } else if (hasCombatTrick) {
+            // We have a trick — maybe we won't die at all; reduce mutual kill penalty
+            if (myVal > theirVal + 5) score -= 5; // Still avoid very bad trades
+            else if (myVal > theirVal + 2) score -= 2;
+            // else: roughly even trade is fine with a trick in hand
+          } else {
+            // Neutral/winning: standard evaluation
+            if (myVal > theirVal + 3) score -= 8;
+            else if (myVal > theirVal + 1) score -= 4;
+          }
+          // Bonus: removing a creature with triggered abilities is extra good
+          if (bestBlocker.card) {
+            const oppTriggers = (bestBlocker.card as any)._triggers;
+            if (oppTriggers && oppTriggers.length >= 2) score += 3; // Remove draw engine / token machine
+          }
         } else {
-          score -= 8 + creatureValue(c) * 0.6;
+          // Our creature dies without killing theirs — bad
+          // But if we have a combat trick, it might save this creature — reduce penalty
+          const trickMult = hasCombatTrick ? 0.4 : 1.0;
+          const severityMult = boardScore > 10 ? 1.2 : boardScore < -10 ? 0.6 : 1.0;
+          score -= (8 + creatureValue(c) * 0.6) * severityMult * trickMult;
         }
       }
     }
@@ -580,7 +666,7 @@ export function findBestAttackers(
 
   if (attackerIndices.length > 0) {
     const selectedSnaps = attackerIndices.map(i => candidates[i]);
-    const simResult = findBestBlocking(selectedSnaps, oppBlockers, oppLife);
+    const simResult = findBestBlocking(selectedSnaps, oppBlockers, oppLife, boardScore);
 
     let totalScore = simResult.result.playerDamage * 2;
     for (const ai of simResult.result.deadAttackers) {
@@ -595,7 +681,7 @@ export function findBestAttackers(
       const topN = scores.filter(s => s.score >= threshold + 2).map(s => s.idx);
       if (topN.length > 0 && topN.length < attackerIndices.length) {
         const topSnaps = topN.map(i => candidates[i]);
-        const topResult = findBestBlocking(topSnaps, oppBlockers, oppLife);
+        const topResult = findBestBlocking(topSnaps, oppBlockers, oppLife, boardScore);
         let topScore = topResult.result.playerDamage * 2;
         for (const ai of topResult.result.deadAttackers) {
           topScore -= creatureValue(topSnaps[ai]) * 1.5;
@@ -623,6 +709,40 @@ export function findBestAttackers(
       }
 
       return { attackerIndices: [], score: totalScore };
+    }
+
+    // Counter-attack lethal check: if we attack (tapping non-vigilant creatures),
+    // will the opponent be able to deal lethal to us on the counter-attack?
+    const finalAttackers = attackerIndices.map(i => candidates[i]);
+    // Remaining defenders after attack: vigilant attackers + creatures not in candidates
+    const remainingDefenders = myCreatures.filter(c =>
+      c.vigilance || !finalAttackers.includes(c)
+    );
+    // Calculate opponent's unblocked power against remaining defenders
+    let oppCounterPower = 0;
+    for (const opp of oppBlockers) {
+      const canBeBlocked = remainingDefenders.some(def => {
+        if (opp.flying && !def.flying && !def.reach) return false;
+        if (def.power <= 0) return false; // 0-power defenders are ineffective
+        return true;
+      });
+      if (!canBeBlocked) oppCounterPower += opp.power;
+    }
+    // If opponent can deal lethal on counter-attack, only send safe/free attackers
+    if (oppCounterPower >= myLife) {
+      const safeAttackers = scores.filter(s => {
+        const c = candidates[s.idx];
+        if (c.vigilance || c.indestructible) return true; // safe to attack
+        const canBeBlockedBy = oppBlockers.some(b => {
+          if (c.flying && !b.flying && !b.reach) return false;
+          return true;
+        });
+        return !canBeBlockedBy; // unblockable — no risk of retaliation
+      }).map(s => s.idx);
+      if (safeAttackers.length > 0) {
+        return { attackerIndices: safeAttackers, score: totalScore };
+      }
+      return { attackerIndices: [], score: 0 };
     }
 
     return { attackerIndices, score: totalScore };

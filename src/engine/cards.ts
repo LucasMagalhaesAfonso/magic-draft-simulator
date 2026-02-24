@@ -136,14 +136,39 @@ export function getActivatedAbilities(card: GameCard): ActivatedAbility[] {
 export function getManaAbilities(card: GameCard): ActivatedAbility[] {
   const all = getActivatedAbilities(card);
   return all.filter(ability =>
-    ability.effects?.some(e => e.type === 'add_mana')
+    ability.effects?.some(e => e.type === 'add_mana') &&
+    !(ability.cost as any)?.mana  // exclude {N}: Add abilities (filtering, not net mana gain)
+  );
+}
+
+/** Filter/Devotee abilities: cost mana to produce colored mana (e.g. {1}: add {W/B/G}).
+ *  These convert generic pool mana into specific colored mana — not net mana gain.
+ *  Excluded from getManaAbilities to avoid double-counting total mana.
+ */
+export function getFilterManaAbilities(card: GameCard): ActivatedAbility[] {
+  const all = getActivatedAbilities(card);
+  return all.filter(ability =>
+    ability.effects?.some(e => e.type === 'add_mana') &&
+    (ability.cost as any)?.mana != null &&
+    !(ability.cost as any)?.tap  // pure mana-cost filter (not tap+mana)
   );
 }
 
 export function getLoyaltyAbilities(card: GameCard): ActivatedAbility[] {
   const db = getPreprocessedEffects(card);
   if (db && db.activated) {
-    return db.activated.filter(a => (a.cost as any)?.loyalty !== undefined);
+    const loyaltyAbilities = db.activated.filter(a => (a.cost as any)?.loyalty !== undefined);
+    // Extract oracle text lines for each loyalty ability and attach as ab.text
+    const oracleText = card.oracle_text || '';
+    const loyaltyLines = oracleText.split('\n').filter(line =>
+      /^[+\-−]\d+:|^0:/.test(line.trim())
+    );
+    loyaltyAbilities.forEach((ab: any, idx: number) => {
+      if (!ab.text && loyaltyLines[idx]) {
+        ab.text = loyaltyLines[idx].trim();
+      }
+    });
+    return loyaltyAbilities;
   }
   return [];
 }
@@ -369,11 +394,16 @@ export function getEntersTappedUnlessCondition(card: GameCard): string[] | null 
 
   const conditionText = match[1];
   const types: string[] = [];
-  const landMatches = conditionText.match(/(?:a |an )?([A-Z][a-z]+)/g);
+  // Use lowercase regex since text is already lowercased
+  const landMatches = conditionText.match(/(?:a |an )?([a-z]+)/gi);
   if (landMatches) {
     landMatches.forEach(m => {
       const type = m.replace(/^(?:a |an )\s*/i, '').trim();
-      if (!types.includes(type)) types.push(type);
+      // Skip conjunctions and articles
+      if (['or', 'and', 'a', 'an', 'or'].includes(type.toLowerCase())) return;
+      // Capitalize first letter for consistency with land type checks
+      const capitalized = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+      if (!types.includes(capitalized)) types.push(capitalized);
     });
   }
   return types.length > 0 ? types : null;
@@ -391,14 +421,9 @@ export function canCastWithConditionalFlash(card: GameCard, state: EngineGameSta
   if (!conditionalFlash) return false;
 
   if (conditionalFlash.condition === 'behold_dragon') {
-    const bf = state.players[playerId].zones.battlefield.cards;
-    const hasDragonBF = bf.some(c => isCreature(c) && hasCreatureType(c, 'Dragon'));
-    const hand = state.players[playerId].zones.hand;
-    const handCards = hand.cards ?? (hand as any).getAll?.() ?? [];
-    const hasDragonHand = handCards.some((c: GameCard) =>
-      hasCreatureType(c, 'Dragon') && c._uid !== card._uid
-    );
-    return hasDragonBF || hasDragonHand;
+    // Check if the player has a Dragon in hand (can pay behold cost to flash this in)
+    const hand = (state as any).players?.[playerId]?.zones?.hand?.getAll?.() ?? [];
+    return hand.some((c: any) => isDragon(c));
   }
   return false;
 }
@@ -626,8 +651,8 @@ export function createToken(
     color_identity: [],
     rarity: 'common' as any,
     keywords,
-    set_code: '',
-    set_name: '',
+    set_code: 'TDM',
+    set_name: 'Tarkir: Dragonstorm',
     collector_number: '',
     image_small: '',
     image_normal: '',

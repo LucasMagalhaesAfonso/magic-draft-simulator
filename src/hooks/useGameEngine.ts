@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Card } from '../lib/types';
 import { VfxManager } from '../components/game/VfxLayer';
 import { setVfxBridge } from '../engine/vfx-bridge';
+import { aiBrain } from '../engine/ai-brain';
 
 // ── Register VFX bridge so engine can trigger animations ──────────────────
 setVfxBridge((type, targetUid) => VfxManager.play(type as any, targetUid));
@@ -46,11 +47,11 @@ function dbCardToGameCard(card: Card, uid: string): any {
   // but the DB stores it as card.back_face. Normalize here.
   if (card.layout === 'adventure' && (card as any).back_face?.name) {
     gc.adventure = (card as any).back_face;
-    // Scryfall stores combined mana_cost "{5}{B} // {1}{B}" for adventure cards.
-    // parseCost would sum both faces → wrong CMC. Strip to creature face cost only.
-    if (gc.mana_cost && gc.mana_cost.includes('//')) {
-      gc.mana_cost = gc.mana_cost.split('//')[0].trim();
-    }
+  }
+  // Scryfall stores combined mana_cost "{5}{B} // {1}{B}" for adventure/omen cards
+  // (both from DB back_face and from JSON card_faces). Strip to face 0 cost only.
+  if (gc.mana_cost && gc.mana_cost.includes('//')) {
+    gc.mana_cost = gc.mana_cost.split('//')[0].trim();
   }
   return gc;
 }
@@ -75,16 +76,35 @@ function snapshot(gs: any) {
     try { return zone.getAll ? zone.getAll() : []; } catch { return []; }
   }
 
-  // Augment graveyard cards with _graveyardAbilities so the UI can show Renew/Harmonize buttons
-  function graveyardCards(zone: any) {
+  // Augment graveyard cards with _graveyardAbilities and harmonize metadata
+  function graveyardCards(zone: any, pid: number) {
     const cards = zoneCards(zone);
     if (!_Cards) return cards;
     return cards.map((card: any) => {
       const abilities = _Cards!.getGraveyardAbilities(card);
+      const harmonizeCost = _Cards!.getHarmonizeCost(card);
+      let result = card;
       if (abilities.length > 0) {
-        return { ...card, _graveyardAbilities: abilities };
+        result = { ...result, _graveyardAbilities: abilities };
       }
-      return card;
+      if (harmonizeCost) {
+        // Check affordability so the sidebar shows correctly enabled/disabled state
+        // Must factor in creature tap discount (best untapped creature power)
+        let canCast = false;
+        try {
+          if (_Mana) {
+            const hCmc = _Cards!.getHarmonizeCMC(card);
+            const bfCards: any[] = gs.players[pid]?.zones?.battlefield?.cards || [];
+            const bestCreaturePower = bfCards
+              .filter((c: any) => _Cards!.isCreature(c) && !c._tapped)
+              .reduce((best: number, c: any) => Math.max(best, _Cards!.getPower(c) || 0), 0);
+            const effectiveCmc = Math.max(0, hCmc - bestCreaturePower);
+            canCast = _Mana!.canAfford(gs, pid, { mana_cost: harmonizeCost, cmc: effectiveCmc } as any, harmonizeCost, effectiveCmc);
+          }
+        } catch { canCast = true; }
+        result = { ...result, _harmonizeCost: harmonizeCost, _harmonizeCanCast: canCast };
+      }
+      return result;
     });
   }
 
@@ -99,9 +119,12 @@ function snapshot(gs: any) {
     stackItems: (gs.stack?.items || []).map((item: any) => ({
       cardName: item.card?.name || item.spell?.name || item.type || 'Effect',
       controller: item.controller ?? -1,
-      imageUrl: item.card?.image_small || item.card?.image_normal || '',
+      imageUrl: item.card?.image_normal || item.card?.image_small || '',
+      imageSmall: item.card?.image_small || '',
       typeLine: item.card?.type_line || '',
+      card: item.card || null,
     })),
+    pendingCastCard: (gs as any)._pendingCastOnStack?.card || null,
 
     players: [
       {
@@ -110,7 +133,7 @@ function snapshot(gs: any) {
         isHuman: true,
         hand: zoneCards(p0.zones.hand),
         battlefield: zoneCards(p0.zones.battlefield),
-        graveyard: graveyardCards(p0.zones.graveyard),
+        graveyard: graveyardCards(p0.zones.graveyard, 0),
         exile: zoneCards(p0.zones.exile),
         libraryCount: p0.zones.library?.count ? p0.zones.library.count() : 0,
         manaPool: gs.manaPool[0] || {},
@@ -121,7 +144,7 @@ function snapshot(gs: any) {
         isHuman: false,
         hand: zoneCards(p1.zones.hand),
         battlefield: zoneCards(p1.zones.battlefield),
-        graveyard: graveyardCards(p1.zones.graveyard),
+        graveyard: graveyardCards(p1.zones.graveyard, 1),
         exile: zoneCards(p1.zones.exile),
         libraryCount: p1.zones.library?.count ? p1.zones.library.count() : 0,
         manaPool: gs.manaPool[1] || {},
@@ -150,6 +173,9 @@ function snapshot(gs: any) {
     mulliganDone: gs.mulliganDone || [false, false],
     mulliganCount: gs.mulliganCount || [0, 0],
 
+    // Trigger toast notifications
+    triggerToastQueue: gs._triggerToastQueue || [],
+
     // Pre-computed set of UIDs for cards the human player can currently play.
     // Uses the engine's getPlayableCards which accounts for cost reductions
     // (e.g., Bell-Ringer's second_spell discount), convoke, adventures, etc.
@@ -166,6 +192,14 @@ function snapshot(gs: any) {
 
 // ── Hook ────────────────────────────────────────────────────────────────────
 
+export interface TriggerToastItem {
+  id: number;
+  cardName: string;
+  imageUrl: string | null;
+  controllerId: number;
+  effectDesc: string;
+}
+
 export interface GameSnapshot {
   phase: string;
   turn: number;
@@ -178,6 +212,8 @@ export interface GameSnapshot {
   combat: { attackers: string[]; blockers: Record<string, string> };
   mulliganDone: boolean[];
   mulliganCount: number[];
+  triggerToastQueue: TriggerToastItem[];
+  _aiActions?: any[];
 }
 
 export interface GameActions {
@@ -197,7 +233,7 @@ export interface GameActions {
   resolveChooseTarget(targets: any[]): void;
   resolvePostModalTarget(target: any): void;
   activateGraveyardAbility(cardUid: string, abilityIdx: number): void;
-  activateBattlefieldAbility(cardUid: string, abilityIdx: number): void;
+  activateBattlefieldAbility(cardUid: string, abilityIdx: number, xValue?: number): void;
   activateFetchLand(cardUid: string): void;
 
   // Blocking
@@ -218,11 +254,14 @@ export interface GameActions {
   // Simple resolve functions
   resolveManaColor(color: string): void;
   resolveEndure(choice: string): void;
-  resolveMillLand(choice: string): void;
+  resolveMillLand(choice: string, landUid?: string): void;
   resolveBlight(creatureUid: string): void;
   resolveBuffChoiceAction(creatureUid: string): void;
+  resolveGrantTargetChoice(creatureUid: string): void;
   resolveDistributeCountersAction(distribution: Record<string, number>): void;
   resolveHandExile(cardUid: string): void;
+  resolveGraveyardCastChoice(cardUid: string): void;
+  resolveAttachChoice(shouldEquip: boolean): void;
   resolvePlayerChoice(chosenPlayerId: number): void;
   resolveTriggerCostAction(choice: string): void;
   resolveUnlessPayAction(shouldPay: boolean): void;
@@ -233,7 +272,7 @@ export interface GameActions {
   resolveLegendaryChoice(choice: 'keep_new' | 'cancel'): void;
   resolveTargetChoiceSingle(uid: string): void;
   resolveBeholdChoice(uid: string | null): void;
-  resolveOrderBlockers(): void;
+  resolveOrderBlockers(manualOrder?: Record<string, string[]>): void;
   resolveUnknownInput(): void;
 
   // Discard overlays
@@ -257,8 +296,17 @@ export interface GameActions {
   // ETB tap target choice
   resolveETBTapTarget(targetUids: string[]): void;
 
+  // ETB cant_block target choice (Summit Intimidator etc.)
+  resolveETBCantBlockTarget(targetUid: string | null): void;
+
   // ETB exile target choice
   resolveETBExileTarget(targetUids: string[]): void;
+
+  // ETB counter target choice (Sage of the Fang etc.)
+  resolveETBCounterTarget(targetUid: string | null): void;
+
+  // ETB "any target" damage choice (Sonic Shrieker etc.)
+  resolveETBDamageTarget(target: { type: 'creature' | 'player'; uid?: string; player?: number }): void;
 
   // ETB clone target choice (Naga Fleshcrafter)
   resolveETBCloneTarget(targetUid: string | null): void;
@@ -281,6 +329,12 @@ export interface GameActions {
   // Confirm optional
   resolveConfirmOptional(confirmed: boolean): void;
 
+  // Ward payment confirm (human targeting a ward creature)
+  resolveWardConfirm(pay: boolean): void;
+
+  // Grant counter target (Alchemist's Assistant etc.)
+  resolveGrantCounterTarget(cardUid: string): void;
+
   // Multi-buff choice
   resolveMultiBuffChoiceAction(creatureUids: string[]): void;
 
@@ -296,8 +350,17 @@ export interface GameActions {
   // Graveyard card choice (which specific cards to exile)
   resolveGraveyardCardChoice(cardUids: string[]): void;
 
+  // Delve card exile choice
+  resolveDelveChoice(selectedUids: string[]): void;
+
   // Restart game with same decks
   restartGame(): void;
+
+  // Stop at specific phases during opponent's turn
+  setStopAtPhases(phases: string[]): void;
+
+  // Stop at specific phases during human's own turn
+  setMyStopPhases(phases: string[]): void;
 }
 
 export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
@@ -307,6 +370,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
   const gsRef = useRef<any>(null);
   const aiRunningRef = useRef(false);
   const mountedRef = useRef(true);
+  const trainedForGameRef = useRef(false);
 
   // Pending timers — cleared on unmount to prevent memory leaks
   const pendingTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
@@ -341,6 +405,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
   // This function only provides a short visual pause so "AI thinking..." shows briefly
   const runAI = useCallback(async (delayMs = 400) => {
     if (aiRunningRef.current || !gsRef.current) return;
+    const gs = gsRef.current;
+    console.log(`[AI] Starting AI turn, phase=${gs.phase}, waitingForInput=${gs.waitingForInput?.type}, stack=${gs.stack?.items?.length}`);
     aiRunningRef.current = true;
     await new Promise(r => setTimeout(r, delayMs));
     aiRunningRef.current = false;
@@ -355,21 +421,49 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
   //   - upkeep (with _upkeepProcessed flag) → skips saga/triggers, gives priority, advances
   //   - other phases → continues the current phase from where it paused
   const afterResolve = useCallback((gs: any) => {
+    console.log(`[LOOP] afterResolve, phase=${gs.phase}, waitingForInput=${gs.waitingForInput?.type}, stack=${gs.stack?.items?.length}, winner=${gs.winner}`);
+    // AI untap visual pause: render the untapped state, then continue AI turn
+    if (gs.waitingForInput?.type === 'ai_untap_visual' && _GS) {
+      refresh();
+      safeTimeout(() => {
+        if (!gsRef.current || !_GS) return;
+        gsRef.current.waitingForInput = null;
+        _GS.reprocessCurrentPhase(gsRef.current);
+        refresh();
+      }, 350);
+      return;
+    }
     if (!gs.waitingForInput && !gs.winner && _GS) {
       const ap = gs.activePlayer;
       if (!gs.players[ap]?.isHuman) {
         // AI's turn — brief visual delay then continue so "thinking..." shows
         safeTimeout(() => {
           if (!gsRef.current || !_GS) return;
+          console.log(`[LOOP] AI step (afterResolve delay), phase=${gsRef.current.phase}, waitingForInput=${gsRef.current.waitingForInput?.type}, stack=${gsRef.current.stack?.items?.length}`);
           _GS.reprocessCurrentPhase(gsRef.current);
           refresh();
         }, 300);
       } else {
         // Human's turn — continue immediately (restores main_phase WFI, etc.)
+        console.log(`[LOOP] Human reprocess, phase=${gs.phase}, waitingForInput=${gs.waitingForInput?.type}`);
         _GS.reprocessCurrentPhase(gs);
       }
     }
   }, [refresh]);
+
+  // ── AI Brain: train when game ends ──────────────────────────────────────
+  useEffect(() => {
+    if (snap?.winner != null && !trainedForGameRef.current) {
+      trainedForGameRef.current = true;
+      // AI is player 1; won = AI won
+      const aiWon = snap.winner === 1;
+      aiBrain.trainOnGame(aiWon).catch((e) => console.warn('[AiBrain] trainOnGame error:', e));
+    }
+    // Reset flag on new game (winner goes back to null)
+    if (snap?.winner == null) {
+      trainedForGameRef.current = false;
+    }
+  }, [snap?.winner]);
 
   // Initialize
   useEffect(() => {
@@ -507,6 +601,17 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else {
           _GS.advancePhase(gs);
         }
+        // AI untap visual pause: render untapped state, then continue AI turn
+        if (gs.waitingForInput?.type === 'ai_untap_visual') {
+          refresh();
+          safeTimeout(() => {
+            if (!gsRef.current || !_GS) return;
+            gsRef.current.waitingForInput = null;
+            _GS.reprocessCurrentPhase(gsRef.current);
+            refresh();
+          }, 350);
+          return;
+        }
         refresh();
         // If now AI turn, show brief "thinking" state then run AI loop
         const ap = gs.activePlayer;
@@ -546,6 +651,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
         // Compute effective mana cost (conditional cost like Dragon's Prey +{2} for dragons)
         let tapCost = card.mana_cost;
+        // Strip combined adventure/omen cost e.g. "{3}{B} // {X}{B}{B}" → use front face only.
+        // Scryfall stores combined costs for adventure/omen cards; parseCost would sum both faces.
+        if (tapCost && tapCost.includes('//')) {
+          tapCost = tapCost.split('//')[0].trim();
+        }
         // For hybrid costs, use the minimum viable CMC (parseCost.total) rather than Scryfall CMC.
         // e.g. {2/W}{2/B}{2/G}: Scryfall cmc=6 but minimum payment is 3 (one colored per hybrid).
         let tapCmc = card.cmc;
@@ -554,6 +664,48 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           if (_parsedForHybrid.hybrids && _parsedForHybrid.hybrids.length > 0) {
             tapCmc = _parsedForHybrid.total; // hybrid minimum
           }
+        }
+        // Apply cost reduction from getPlayableCards (e.g. self_cost_reduction for Focus the Mind)
+        if (card._costReduced && card._effectiveCmc !== undefined && card._effectiveCmc < tapCmc) {
+          tapCmc = card._effectiveCmc;
+        }
+        // X spells: tap ALL available mana so X is maximized (not just fixed cost portion)
+        if (tapCost && tapCost.includes('{X}') && _Mana) {
+          const bf = gs.players[pid].zones.battlefield;
+          const availPool: Record<string, number> = { ...(gs.manaPool[pid] || {}) };
+          bf.cards
+            .filter((c: any) => (c.type_line || '').toLowerCase().includes('land') && !c._tapped)
+            .forEach((land: any) => {
+              const colors = _Mana.getLandManaColors(land);
+              colors.forEach((color: string) => { availPool[color] = (availPool[color] || 0) + 1; });
+            });
+          const totalAvailable = (Object.values(availPool) as number[]).reduce((s: number, v) => s + (v as number), 0);
+          tapCmc = Math.max(tapCmc, totalAvailable);
+        }
+
+        // Delve interactive: if human has a delve granter and GY non-lands, pause for choice
+        // (only if delve wasn't already resolved in a previous resolveDelveChoice call)
+        if (_Mana && gs._pendingDelveReduction === undefined) {
+          const delveGranter = gs.players[pid].zones.battlefield.cards.find((c: any) => c._grantDelve);
+          if (delveGranter) {
+            const gyNonLands = (gs.players[pid].zones.graveyard.cards || []).filter((c: any) =>
+              !(c.type_line || '').toLowerCase().includes('land')
+            );
+            if (gyNonLands.length > 0 && tapCmc > 0) {
+              const parsedCost = _Mana.parseCost(tapCost);
+              const genericPortion = parsedCost.generic || 0;
+              if (genericPortion > 0) {
+                gs._pendingDelveChoice = { playerId: pid, cardUid, targets, gyNonLands, maxDelve: Math.min(gyNonLands.length, genericPortion) };
+                gs.waitingForInput = { type: 'delve_choice', playerId: pid };
+                refresh();
+                return;
+              }
+            }
+          }
+        }
+        // If delve was pre-resolved, apply the reduction to tapCmc
+        if (gs._pendingDelveReduction !== undefined) {
+          tapCmc = Math.max(0, tapCmc - (gs._pendingDelveReduction as number));
         }
         if (_Cards && _Mana && targets && targets.length > 0) {
           const t0 = targets[0];
@@ -569,6 +721,38 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             }
           }
         }
+        // Ward pre-check: if human targets a ward creature, show "Pay ward N?" prompt
+        // Skip if this cast is resuming after the human confirmed ward payment (_skipWardCheck).
+        if (!gs._skipWardCheck && targets && targets.length > 0 && _Cards) {
+          for (const t of targets) {
+            if (t.type !== 'creature') continue;
+            const wCreature = gs.players[t.player]?.zones?.battlefield?.get(t.uid);
+            if (!wCreature || !(_Cards as any).hasKeyword(wCreature, 'Ward')) continue;
+            const wMatch = (wCreature.oracle_text || '').match(/ward[\s\u2014\-]+\{?(\d+)\}?/i);
+            const wCost = wMatch ? parseInt(wMatch[1]) : 0;
+            if (wCost <= 0) continue;
+            // Show prompt regardless of affordability (player decides)
+            gs._pendingWardCast = { cardUid, targets, tapCost, tapCmc, wardCost: wCost };
+            (gs as any).waitingForInput = { type: 'ward_confirm', playerId: pid, wardCost: wCost, creatureName: wCreature.name };
+            refresh();
+            return;
+          }
+        }
+        if (gs._skipWardCheck) delete (gs as any)._skipWardCheck;
+
+        // Apply affinity discount (Salt Road Packbeast, etc.) before canPay check
+        if (tapCost && tapCmc > 0 && _GS && _Mana && _Cards && _Cards.hasAffinity(card)) {
+          const affinityDiscount = _GS.calculateAffinityDiscount(gs, pid, card);
+          if (affinityDiscount > 0) {
+            const parsedCost = _Mana.parseCost(tapCost);
+            const oldGeneric = parsedCost.generic;
+            parsedCost.generic = Math.max(0, parsedCost.generic - affinityDiscount);
+            const actualDiscount = oldGeneric - parsedCost.generic;
+            tapCost = _Mana.costToString(parsedCost);
+            tapCmc = Math.max(0, tapCmc - actualDiscount);
+          }
+        }
+
         // Pre-tap color check: build the available pool from untapped lands + current pool,
         // then verify colors can be met BEFORE tapping anything. This prevents lands from
         // being tapped uselessly when the color requirement can't be met.
@@ -589,35 +773,64 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         }
 
         // Use the real auto-tap system (handles colored mana, convoke, etc.)
+        // Save pool snapshot so we can roll back if castSpell fails (e.g. hybrid mana edge cases)
+        const poolSnapshot = (tapCost && tapCmc > 0) ? { ...gs.manaPool[pid] } : null;
+        let tappedByAutoTap: string[] = [];
         if (tapCost && tapCmc > 0) {
-          _GS.autoTapForSpell(gs, pid, tapCost, tapCmc);
+          tappedByAutoTap = _GS.autoTapForSpell(gs, pid, tapCost, tapCmc) || [];
         }
 
         const result = _GS.castSpell(gs, pid, cardUid, targets);
+
+        // Roll back tapped lands if cast failed (prevents "tapped but not cast" freeze)
+        if (result?.success === false && tappedByAutoTap.length > 0 && poolSnapshot) {
+          const bf = gs.players[pid].zones.battlefield;
+          for (const uid of tappedByAutoTap) {
+            const land = bf.get(uid);
+            if (land) land._tapped = false;
+          }
+          gs.manaPool[pid] = poolSnapshot;
+          refresh();
+          return;
+        }
+
         // Clear mana undo when spell successfully starts casting
         if (result?.success !== false) clearManaUndo();
 
-        // Auto-resolve stack priority after casting a counter spell.
-        // When the human casts a counter during stack_priority, the counter resolves
-        // immediately (marking _countered=true). Without this, the human would need to
-        // manually click "Let Resolve" — which is confusing and non-obvious.
+        // Auto-resolve stack priority after the human casts a spell during stack_priority.
+        // GameStack.resolve resolves ALL items in the stack (human's spell + AI's pending spell),
+        // so by the time castSpell returns, the AI's pending spell is either:
+        //   a) Countered (_countered=true): send to GY, clean up
+        //   b) Resolved normally (unless_pay paid, or non-counter instant cast): just clean up
+        // Without this cleanup, _pendingCastOnStack remains → pass handler re-casts AI's spell!
         const pending = (gs as any)._pendingCastOnStack;
-        if (
-          pending?.card?._countered === true &&
-          gs.waitingForInput?.type === 'stack_priority'
-        ) {
-          // Pop the temporary stack item and clear pending
-          if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
-          delete (gs as any)._pendingCastOnStack;
-          delete pending.card._countered;
-          // Send countered spell to graveyard
-          gs.players[pending.playerId].zones.graveyard.add(pending.card);
-          gs.log.push(`${pending.card.name} vai para o cemiterio (anulado).`);
-          // Signal GameScreen to show a counter-spell toast
-          (gs as any)._lastCounteredSpell = pending.card.name;
-          // Continue game processing
-          if (typeof _GS.reprocessCurrentPhase === 'function') {
-            _GS.reprocessCurrentPhase(gs);
+        if (pending && gs.waitingForInput?.type === 'stack_priority') {
+          if (pending.card?._countered === true) {
+            // Counter was successful
+            if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
+            delete (gs as any)._pendingCastOnStack;
+            delete pending.card._countered;
+            gs.players[pending.playerId].zones.graveyard.add(pending.card);
+            gs.log.push(`${pending.card.name} vai para o cemiterio (anulado).`);
+            (gs as any)._lastCounteredSpell = pending.card.name;
+            if (typeof _GS.reprocessCurrentPhase === 'function') {
+              _GS.reprocessCurrentPhase(gs);
+            }
+          } else {
+            // Human cast a non-counter spell during stack_priority.
+            // The AI's pending spell was NOT countered — it still needs to resolve.
+            // Pop the temporary stack item and complete the cast now.
+            if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
+            delete (gs as any)._pendingCastOnStack;
+            if (pending.card && _GS.castSpell) {
+              (gs as any)._resumingFromStackPriority = true;
+              gs.players[pending.playerId].zones.hand.add(pending.card);
+              _GS.castSpell(gs, pending.playerId, pending.card._uid, pending.targets || [], pending.isAdventure || false, pending.isEvoke || false);
+            }
+            gs.waitingForInput = null;
+            if (!gs.waitingForInput && typeof _GS.reprocessCurrentPhase === 'function') {
+              _GS.reprocessCurrentPhase(gs);
+            }
           }
         }
 
@@ -655,6 +868,36 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) {
         console.warn('[castSpell] error:', e);
       }
+    },
+
+    // Resolve delve choice: exile selected GY cards then resume the cast
+    resolveDelveChoice(selectedUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs) return;
+      const pending = gs._pendingDelveChoice;
+      if (!pending) return;
+      gs._pendingDelveChoice = null;
+      gs.waitingForInput = null;
+
+      const { playerId, cardUid, targets } = pending;
+      const gy = gs.players[playerId].zones.graveyard;
+      const exile = gs.players[playerId].zones.exile;
+
+      let exiledCount = 0;
+      for (const uid of selectedUids) {
+        const card = gy.get ? gy.get(uid) : (gy.cards || []).find((c: any) => c._uid === uid);
+        if (!card) continue;
+        if (gy.remove) gy.remove(uid); else { const idx = (gy.cards || []).findIndex((c: any) => c._uid === uid); if (idx >= 0) gy.cards.splice(idx, 1); }
+        if (exile.add) exile.add(card); else (exile.cards = exile.cards || []).push(card);
+        gs.log.push(`Delve: ${card.name} exilado para pagar {1}.`);
+        exiledCount++;
+      }
+
+      // Store the reduction so castSpell knows to apply it and skip auto-delve
+      gs._pendingDelveReduction = exiledCount;
+
+      // Resume the cast (castSpell action will apply _pendingDelveReduction)
+      actions.castSpell(cardUid, targets);
     },
 
     // Cast as adventure/omen mode (5th param castingAdventure = true)
@@ -778,11 +1021,13 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             typeof a === 'string' ? a !== cardUid : a.uid !== cardUid
           );
         } else {
-          // Only allow attack if not tapped and not summoning sick (haste bypasses sick)
+          // Only allow attack if not tapped, not summoning sick, and doesn't have Defender
           const hasHaste = card._tempKeywords?.includes('Haste') ||
             (card.keywords || []).some((k: string) => k?.toLowerCase() === 'haste') ||
             (card.oracle_text || '').toLowerCase().includes('haste');
-          if (!card._tapped && (!card._summoningSick || hasHaste)) {
+          const hasDefender = (card.keywords || []).some((k: string) => k?.toLowerCase() === 'defender') ||
+            (card._tempKeywords || []).some((k: any) => (typeof k === 'string' ? k : k?.keyword || '').toLowerCase() === 'defender');
+          if (!card._tapped && (!card._summoningSick || hasHaste) && !hasDefender) {
             card._attacking = true;
             if (!gs.combat.attackers) gs.combat.attackers = [];
             // Push CombatAttackerEntry — include attackTarget if attacking a planeswalker
@@ -909,12 +1154,12 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[activateGraveyardAbility] error:', e); }
     },
 
-    activateBattlefieldAbility(cardUid: string, abilityIdx: number) {
+    activateBattlefieldAbility(cardUid: string, abilityIdx: number, xValue?: number) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
         if (typeof _GS.activateBattlefieldAbility === 'function') {
-          _GS.activateBattlefieldAbility(gs, 0, cardUid, abilityIdx);
+          _GS.activateBattlefieldAbility(gs, 0, cardUid, abilityIdx, xValue);
         } else {
           // Fallback: use the same logic as AI activated abilities
           console.warn('[activateBattlefieldAbility] function not found in game-state');
@@ -1107,7 +1352,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
-        _GS.equipCreature(gs, 0, equipmentUid, creatureUid);
+        const result = _GS.equipCreature(gs, 0, equipmentUid, creatureUid);
+        if (result !== false) afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[equipCreature]', e); }
     },
@@ -1148,11 +1394,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveEndure] error:', e); }
     },
 
-    resolveMillLand(choice: string) {
+    resolveMillLand(choice: string, landUid?: string) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
-        _GS.resolveMillLandChoice(gs, choice as 'land' | 'counter');
+        _GS.resolveMillLandChoice(gs, choice as 'land' | 'counter', landUid);
         gs.waitingForInput = null;
         afterResolve(gs);
         refresh();
@@ -1175,10 +1421,21 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveBuffChoice(gs, creatureUid);
-        gs.waitingForInput = null;
+        // resolveBuffChoice already clears waitingForInput internally.
+        // Do NOT force-null here — it may have queued a second buff_choice trigger
+        // (e.g. two Riling Dawnbreakers both triggering on combat_begin).
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveBuffChoiceAction] error:', e); }
+    },
+
+    resolveGrantTargetChoice(creatureUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveGrantTarget(gs, creatureUid);
+        refresh();
+      } catch (e) { console.warn('[resolveGrantTargetChoice] error:', e); }
     },
 
     resolveDistributeCountersAction(distribution: Record<string, number>) {
@@ -1202,6 +1459,27 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveHandExile] error:', e); }
     },
 
+    resolveGraveyardCastChoice(cardUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveGraveyardCastChoice(gs, cardUid);
+        gs.waitingForInput = null;
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGraveyardCastChoice] error:', e); }
+    },
+
+    resolveAttachChoice(shouldEquip: boolean) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveAttachChoice(gs, shouldEquip);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveAttachChoice] error:', e); }
+    },
+
     resolvePlayerChoice(chosenPlayerId: number) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
@@ -1217,7 +1495,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveTriggerCost(gs, choice as 'pay' | 'skip');
-        gs.waitingForInput = null;
+        // Only clear waitingForInput if resolveTriggerCost didn't set a new input state
+        // (e.g. endure_choice, scry, etc.) — don't override those!
+        if (!gs.waitingForInput || gs.waitingForInput.type === 'trigger_cost') {
+          gs.waitingForInput = null;
+        }
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveTriggerCostAction] error:', e); }
@@ -1332,37 +1614,91 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveTargetChoiceSingle]', e); }
     },
 
-    // ── behold_choice: player reveals a dragon from hand ──
+    // ── behold_choice: player reveals a dragon from hand, then re-casts the paused spell ──
     resolveBeholdChoice(uid: string | null) {
       const gs = gsRef.current;
-      if (!gs) return;
+      if (!gs || !_GS) return;
       try {
         const pending = (gs as any)._pendingBeholdChoice;
         gs.waitingForInput = null;
         delete (gs as any)._pendingBeholdChoice;
-        if (uid && pending) {
-          const hand = gs.players[0].zones.hand.getAll();
-          const card = hand.find((c: any) => c._uid === uid);
-          if (card) {
-            if (!(gs as any)._beholding) (gs as any)._beholding = [null, null];
-            (gs as any)._beholding[0] = card;
-            gs.log.push(`${card.name} revelado (behold).`);
-            // Signal GameScreen to show a toast (card stays in hand)
-            (gs as any)._lastBeholdReveal = card.name;
+
+        if (!pending?.cardUid) {
+          afterResolve(gs);
+          refresh();
+          return;
+        }
+
+        // Find the paused spell still in hand
+        const allHand: any[] = gs.players[0].zones.hand.getAll
+          ? gs.players[0].zones.hand.getAll()
+          : [];
+        const spellCard = allHand.find((c: any) => c._uid === pending.cardUid);
+
+        if (!spellCard) {
+          // Card no longer in hand (shouldn't happen) — just continue
+          afterResolve(gs);
+          refresh();
+          return;
+        }
+
+        if (uid) {
+          // User chose to behold a dragon — mark spell card for resume
+          spellCard._beholdPaid = true;
+          spellCard._beholdCardUid = uid;
+        } else {
+          // User declined behold — pay alternate cost if any, mark as declined
+          spellCard._beholdDeclined = true;
+          const beholdCost = pending.beholdCost;
+          if (beholdCost?.alternateCost && _Mana) {
+            const extraCost = `{${beholdCost.alternateCost}}`;
+            if (typeof (_GS as any).autoTapForSpell === 'function') {
+              (_GS as any).autoTapForSpell(gs, 0, extraCost, beholdCost.alternateCost);
+            }
+            gs.manaPool[0] = (_Mana as any).payMana(gs.manaPool[0], extraCost, beholdCost.alternateCost);
+            gs.log.push(`Voce paga ${extraCost} (behold recusado).`);
           }
         }
+
+        // Auto-tap for the base spell cost, then re-cast
+        const tapCost = spellCard.mana_cost;
+        let tapCmc = spellCard.cmc ?? 0;
+        if (_Mana && tapCost) {
+          const parsed = _Mana.parseCost(tapCost);
+          if (parsed?.hybrids?.length > 0) tapCmc = parsed.total;
+        }
+        if (tapCost && tapCmc > 0) {
+          _GS.autoTapForSpell(gs, 0, tapCost, tapCmc);
+        }
+
+        // Re-cast (behold block will be skipped via _beholdPaid/_beholdDeclined flags)
+        // Restore original targets (e.g. counterspell target that was passed when first cast)
+        const originalTargets = pending.targets || [];
+        const result = _GS.castSpell(gs, 0, pending.cardUid, originalTargets);
+        if (result?.success === false && !result?.paused) {
+          // Failed for some other reason — nothing more to do
+          refresh();
+          return;
+        }
+
+        clearManaUndo();
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveBeholdChoice]', e); }
     },
 
-    // ── order_blockers: auto-resolve using AI order ──
-    resolveOrderBlockers() {
+    // ── order_blockers: resolve with manually chosen order or AI heuristic ──
+    resolveOrderBlockers(manualOrder?: Record<string, string[]>) {
       const gs = gsRef.current;
       if (!gs) return;
       try {
-        if (typeof (_GS as any)?.orderBlockers === 'function') {
-          (_GS as any).orderBlockers(gs, 0); // Use AI heuristic for ordering
+        if (manualOrder && gs.combat) {
+          // Apply manually chosen blocker order
+          for (const [attackerUid, orderedUids] of Object.entries(manualOrder)) {
+            gs.combat.blockerOrder[attackerUid] = orderedUids;
+          }
+        } else if (typeof (_GS as any)?.orderBlockers === 'function') {
+          (_GS as any).orderBlockers(gs, 0); // Fallback: AI heuristic
         }
         if (gs.combat) gs.combat._blockerOrderDone = true;
         gs.waitingForInput = null;
@@ -1568,7 +1904,36 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveETBTapTarget]', e); }
     },
 
+    // ── ETB cant_block target (Summit Intimidator etc.) ─────────────────────
+    resolveETBCantBlockTarget(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBCantBlockTarget === 'function') {
+          _GS.resolveETBCantBlockTarget(gs, targetUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBCantBlockTarget]', e); }
+    },
+
     // ── ETB exile target (human chose which permanent(s) to exile) ───────────
+
+    resolveETBDamageTarget(target: { type: 'creature' | 'player'; uid?: string; player?: number }) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBDamageTarget === 'function') {
+          _GS.resolveETBDamageTarget(gs, target);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBDamageTarget]', e); }
+    },
 
     resolveETBExileTarget(targetUids: string[]) {
       const gs = gsRef.current;
@@ -1582,6 +1947,21 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveETBExileTarget]', e); }
+    },
+
+    // ── ETB counter target (human chose which creature to buff with counter) ──
+    resolveETBCounterTarget(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveETBCounterTarget === 'function') {
+          _GS.resolveETBCounterTarget(gs, targetUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBCounterTarget]', e); }
     },
 
     // ── ETB clone target (human chose which creature to copy) ────────────────
@@ -1710,6 +2090,63 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveConfirmOptional]', e); }
     },
 
+    // ── Ward payment confirm ─────────────────────────────────────────────────
+
+    resolveWardConfirm(pay: boolean) {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const pending = (gs as any)._pendingWardCast as any;
+        (gs as any)._pendingWardCast = null;
+        gs.waitingForInput = null;
+        if (pay && pending) {
+          // Pay ward cost first (auto-tap generic mana for ward {N})
+          const wardCost = pending.wardCost || 0;
+          if (wardCost > 0 && _GS && _Mana) {
+            const wardCostStr = `{${wardCost}}`;
+            _GS.autoTapForSpell(gs, 0, wardCostStr, wardCost);
+            gs.manaPool[0] = _Mana.payMana(gs.manaPool[0] || {}, wardCostStr, wardCost);
+            gs.log.push(`Ward ${wardCost} pago.`);
+          }
+          // Human wants to pay ward — re-cast with skip flag so ward prompt doesn't fire again
+          (gs as any)._skipWardCheck = true;
+          actions.castSpell(pending.cardUid, pending.targets);
+        } else {
+          gs.log.push('Spell cancelado — Ward não foi pago.');
+          afterResolve(gs);
+          refresh();
+        }
+      } catch (e) { console.warn('[resolveWardConfirm]', e); }
+    },
+
+    // ── Grant counter target (Alchemist's Assistant etc.) ───────────────────
+
+    resolveGrantCounterTarget(cardUid: string) {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const pending = (gs as any)._pendingGrantCounter;
+        if (!pending) { gs.waitingForInput = null; afterResolve(gs); refresh(); return; }
+        delete (gs as any)._pendingGrantCounter;
+        gs.waitingForInput = null;
+        const creature = gs.players[pending.controllerId].zones.battlefield.get(cardUid);
+        if (creature) {
+          if (!creature._counters) creature._counters = {};
+          const ctr = pending.counter || '+1/+1';
+          const amt = pending.amount || 1;
+          creature._counters[ctr] = (creature._counters[ctr] || 0) + amt;
+          if (ctr !== '+1/+1' && ctr !== '-1/-1') {
+            if (!creature.keywords) creature.keywords = [];
+            const kwCap = ctr.charAt(0).toUpperCase() + ctr.slice(1);
+            if (!creature.keywords.includes(kwCap)) creature.keywords.push(kwCap);
+          }
+          gs.log.push(`${creature.name} recebe ${amt} contador ${ctr}.`);
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGrantCounterTarget]', e); }
+    },
+
     // ── Multi-buff choice ───────────────────────────────────────────────────
 
     resolveMultiBuffChoiceAction(creatureUids: string[]) {
@@ -1806,6 +2243,18 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         gsRef.current = gs;
         refresh();
       } catch (e) { console.warn('[restartGame]', e); }
+    },
+
+    setStopAtPhases(phases: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      if (_GS.setStopAtPhases) _GS.setStopAtPhases(gs, phases);
+    },
+
+    setMyStopPhases(phases: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      if (_GS.setMyStopPhases) _GS.setMyStopPhases(gs, phases);
     },
   };
 

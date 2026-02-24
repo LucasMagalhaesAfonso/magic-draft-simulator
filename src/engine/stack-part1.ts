@@ -31,15 +31,32 @@ export function push(stack, item) {
 
 export function resolve(stack, state) {
   const log = [];
+  let safetyCounter = 0;
 
   while (stack.items.length > 0) {
+    safetyCounter++;
+    if (safetyCounter > 50) {
+      console.error('[STACK] Safety limit hit! Stack items:', stack.items.map(i => i.card?.name));
+      state.log?.push('[ERRO] Stack em loop infinito - interrompido');
+      break;
+    }
+    // Capture waitingForInput state BEFORE resolving this item
+    const waitingBefore = state.waitingForInput?.type;
     const item = stack.items.pop();
+    console.log(`[STACK] Resolving: ${item.card?.name} (${item.effects?.length} effects)`);
     const results = _resolveItem(item, state);
+    console.log(`[STACK] Done: ${item.card?.name}, waitingForInput: ${state.waitingForInput?.type}`);
     // Ensure results is always an array
     if (Array.isArray(results)) {
       log.push(...results);
     } else {
       console.warn('[STACK] _resolveItem returned non-array:', results);
+    }
+    // If resolving this item set a NEW waitingForInput (human needs to make a choice),
+    // stop resolving additional stack items to avoid overwriting the pending input state.
+    const waitingAfter = state.waitingForInput?.type;
+    if (waitingAfter && waitingAfter !== waitingBefore) {
+      break;
     }
   }
 
@@ -79,6 +96,7 @@ export function _resolveItem(item, state) {
     if (amt === 'vivid') return CardUtils.countVividColors ? CardUtils.countVividColors(gameState, controller) : 0;
     if (amt === 'X') return gameState._currentXValue || 0; // Use context X value
     if (amt === 'creature_count') return gameState.players[controller].zones.battlefield.cards.filter(c => Cards.isCreature(c)).length;
+    if (amt === 'attacking_count') return gameState.players[controller].zones.battlefield.cards.filter(c => Cards.isCreature(c) && (c as any)._attacking).length;
     if (amt === 'lands_count') return gameState.players[controller].zones.battlefield.cards.filter(c => Cards.isLand(c)).length;
     if (amt === 'lands_in_gy_count') return gameState.players[controller].zones.graveyard.getAll().filter(c => Cards.isLand(c)).length;
     if (amt === 'spells_this_turn') return gameState._spellsThisTurn ? gameState._spellsThisTurn[controller] || 0 : 0;
@@ -93,6 +111,7 @@ export function _resolveItem(item, state) {
   const waitingBefore = gameState.waitingForInput;
   for (let ei = 0; ei < effects.length; ei++) {
     const effect = effects[ei];
+    console.log(`[EFFECT] ${card?.name} effect[${ei}]: type=${effect.type} target=${effect.target}`);
     // Check effect-level condition
     if (effect.condition) {
       // Special case: "if_cast" needs card context
@@ -100,15 +119,25 @@ export function _resolveItem(item, state) {
         continue; // Card was not cast, skip this effect
       }
       // Special case: "dealt_damage_this_turn" for targeted effects (Unsparing Boltcaster)
-      // Should check if the TARGET creature was dealt damage, not the controller
-      else if (effect.condition === 'dealt_damage_this_turn' && targets && targets.length > 0) {
-        const target = targets[0];
-        if (target.type === 'creature') {
-          const bf = gameState.players[target.player].zones.battlefield;
-          const targetCard = bf.get(target.uid);
-          if (!targetCard || !targetCard._damagedThisTurn) {
-            continue; // Target was not dealt damage this turn, skip effect
+      // Checks if the TARGET creature was dealt damage — not the controller's damage dealt
+      else if (effect.condition === 'dealt_damage_this_turn') {
+        if (targets && targets.length > 0) {
+          // Targets already chosen: verify the chosen target was actually damaged
+          const target = targets[0];
+          if (target.type === 'creature') {
+            const bf = gameState.players[target.player].zones.battlefield;
+            const targetCard = bf.get(target.uid);
+            if (!targetCard || !targetCard._damagedThisTurn) {
+              continue; // chosen target not damaged this turn
+            }
           }
+        } else {
+          // No targets yet: check if ANY valid opponent creature was damaged this turn
+          const oppBf = gameState.players[opponent].zones.battlefield;
+          const validTargets = oppBf.cards.filter((c: any) =>
+            Cards.isCreature(c) && c._damagedThisTurn && Cards.canBeTargeted(c, controller)
+          );
+          if (validTargets.length === 0) continue; // no valid target exists
         }
       }
       // Other conditions via GameState
@@ -173,7 +202,7 @@ export function _resolveItem(item, state) {
                   log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
                   continue;
                 }
-                if (!_payWardCost(creature, controller, gameState, log)) continue;
+                if (!_payWardCost(creature, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) continue;
                 vfxPlay('damage', creature._uid);
                 creature._damage += dividedDmg;
                 creature._damagedThisTurn = true;
@@ -220,7 +249,7 @@ export function _resolveItem(item, state) {
                 log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
                 break;
               }
-              if (!_payWardCost(creature, controller, gameState, log)) break;
+              if (!_payWardCost(creature, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) break;
               vfxPlay('damage', creature._uid);
               creature._damage += dmgAmt;
               // Mark creature as damaged this turn (for Unsparing Boltcaster, etc.)
@@ -238,6 +267,52 @@ export function _resolveItem(item, state) {
             gameState.players[target.player].life -= dmgAmt;
             gameState._lastDamagedPlayer = target.player; // Track for "damaged_player" discard effects
             log.push(`${dmgAmt} damage to player. (Life: ${gameState.players[target.player].life})`);
+          }
+        } else if (effect.target === 'any' || effect.target === 'any_target') {
+          // "Any target" damage — human picks creature or player; AI auto-damages opponent
+          if (controller === 0 && gameState.players[0].isHuman) {
+            gameState._pendingEtbAnyDamage = { amount: dmgAmt, controllerId: controller, sourceUid: card?._uid };
+            gameState.waitingForInput = { type: 'etb_any_damage_target', playerId: 0 };
+            // Save remaining effects (gainLife, discard, etc.) to resume after human picks
+            if (ei < effects.length - 1) {
+              gameState._pendingStackEffects = {
+                card, controller, targets,
+                effects: effects.slice(ei + 1),
+                log,
+              };
+            }
+            return log;
+          }
+          // AI: damage opponent player
+          gameState.players[opponent].life -= dmgAmt;
+          gameState._lastDamagedPlayer = opponent;
+          if (!gameState._damageDealtThisTurn) gameState._damageDealtThisTurn = [0, 0];
+          gameState._damageDealtThisTurn[opponent] = (gameState._damageDealtThisTurn[opponent] || 0) + dmgAmt;
+          log.push(`${dmgAmt} damage to opponent. (Life: ${gameState.players[opponent].life})`);
+          vfxPlay('playerDamage', 'p' + opponent);
+        } else if (effect.target === 'opponent_creature' || effect.target === 'creature') {
+          // Auto-target: ETB damage with no pre-selected targets (e.g. Unsparing Boltcaster)
+          const targetPid = effect.target === 'opponent_creature' ? opponent : controller;
+          let candidates = gameState.players[targetPid].zones.battlefield.cards
+            .filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller));
+          // Respect dealt_damage_this_turn condition — only damaged creatures are valid targets
+          if (effect.condition === 'dealt_damage_this_turn') {
+            candidates = candidates.filter((c: any) => c._damagedThisTurn);
+          }
+          if (candidates.length === 0) break;
+          // Pick highest power creature as target
+          const autoCreature = candidates.sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a))[0];
+          if (!_payWardCost(autoCreature, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) break;
+          vfxPlay('damage', autoCreature._uid);
+          autoCreature._damage += dmgAmt;
+          autoCreature._damagedThisTurn = true;
+          if (autoCreature._damage >= Cards.getToughness(autoCreature)) {
+            const died = GameState.creatureDies(gameState, autoCreature, targetPid);
+            log.push(died !== false
+              ? `${autoCreature.name} takes ${dmgAmt} damage and dies.`
+              : `${autoCreature.name} takes ${dmgAmt} damage (indestructible/regenerate).`);
+          } else {
+            log.push(`${autoCreature.name} takes ${dmgAmt} damage.`);
           }
         }
         break;
@@ -420,11 +495,32 @@ export function _resolveItem(item, state) {
           const bf = gameState.players[target.player].zones.battlefield;
           const permanent = bf.get(target.uid);
           if (permanent) {
+            // Validate target type restriction
+            const tgtType = effect.target as string;
+            if (tgtType) {
+              let valid = true;
+              if (tgtType === 'artifact_or_enchantment' || tgtType === 'opponent_artifact_or_enchantment')
+                valid = Cards.isArtifact(permanent) || Cards.isEnchantment(permanent);
+              else if (tgtType === 'artifact') valid = Cards.isArtifact(permanent);
+              else if (tgtType === 'enchantment') valid = Cards.isEnchantment(permanent);
+              else if (tgtType === 'creature_with_flying')
+                valid = Cards.isCreature(permanent) && Cards.hasKeyword(permanent, 'Flying');
+              else if (tgtType === 'creature_power4+')
+                valid = Cards.isCreature(permanent) && Cards.getPower(permanent) >= 4;
+              else if (tgtType === 'noncreature_artifact')
+                valid = Cards.isArtifact(permanent) && !Cards.isCreature(permanent);
+              if (!valid) {
+                log.push(`${permanent.name} is not a valid target for destroy (${tgtType}).`);
+                break;
+              }
+            }
             // Check targeting
             if (!Cards.canBeTargeted(permanent, controller)) {
               log.push(`${permanent.name} can't be targeted (hexproof/shroud).`);
               break;
             }
+            // Check ward cost
+            if (!_payWardCost(permanent, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) break;
             // Check indestructible
             if (Cards.hasIndestructible(permanent)) {
               log.push(`${permanent.name} is indestructible!`);
@@ -550,6 +646,8 @@ export function _resolveItem(item, state) {
               log.push(`${permanent.name} can't be targeted (hexproof/shroud).`);
               break;
             }
+            // Check ward cost
+            if (!_payWardCost(permanent, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) break;
             // Exile bypasses indestructible
             vfxPlay('exile', permanent._uid);
             bf.remove(permanent._uid);
@@ -620,6 +718,7 @@ export function _resolveItem(item, state) {
             if (effect.until_leaves || effect.until_source_leaves) {
               if (!card._exiledUntilLeaves) card._exiledUntilLeaves = [];
               perm._owner = targetPid;
+              perm._exiledByUid = card._uid; // tag for reliable lookup
               card._exiledUntilLeaves.push(perm);
             }
             log.push(`${perm.name} is exiled.`);
@@ -914,7 +1013,8 @@ export function _resolveItem(item, state) {
       case 'buff':
       case 'multi_buff_up_to': {
         // Buffs from non-permanent spells are temporary (until end of turn)
-        const isTemp = !Cards.isPermanent(card);
+        // Also treat as temp if effect explicitly has duration: "end_of_turn" (e.g. Reigning Victor ETB)
+        const isTemp = !Cards.isPermanent(card) || effect.duration === 'end_of_turn';
         // Resolve dynamic power/toughness (e.g. "creature_count", "double")
         let buffPow = effect.power;
         let buffTou = effect.toughness;
@@ -964,6 +1064,16 @@ export function _resolveItem(item, state) {
               log.push(`${creature.name} gets ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
             }
           }
+        } else if (effect.target === 'other_own_creature') {
+          // Buff another own creature (exclude source card itself, e.g. Riling Dawnbreaker)
+          const bf2 = gameState.players[controller].zones.battlefield;
+          const best = bf2.cards.filter((c: any) =>
+            Cards.isCreature(c) && Cards.canBeTargeted(c, controller) && c._uid !== card._uid
+          ).sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a))[0];
+          if (best) {
+            const r = applyBuff(best);
+            log.push(`${best.name} gets ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t} until end of turn.`);
+          }
         } else if (targets && targets.length > 0 || (!targets?.length && (effect.target === 'creature' || effect.target === 'own_creature' || effect.target === 'opponent_creature'))) {
           // Auto-pick target if no pre-selected target (e.g. modal spell)
           let buffTarget = targets?.[0];
@@ -988,8 +1098,12 @@ export function _resolveItem(item, state) {
               }
             }
             if (!buffTarget) {
-              const best = bf2.cards.filter(c => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
-                .sort((a, b) => Cards.getPower(b) - Cards.getPower(a))[0];
+              // For ETB buffs: prefer other creatures (exclude self from first pass)
+              const nonSelf = bf2.cards.filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller) && c._uid !== card?._uid)
+                .sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a));
+              const allOwn = bf2.cards.filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
+                .sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a));
+              const best = (nonSelf.length > 0 ? nonSelf : allOwn)[0];
               if (best) buffTarget = { type: 'creature', uid: best._uid, player: targetPid };
             }
           }
@@ -1167,6 +1281,7 @@ export function _resolveItem(item, state) {
           gameState._pendingMillLandChoice = {
             cardUid: card._uid,
             milledLands: milledLands,
+            milledAll: recentMilled,
             controller: controller
           };
           gameState.waitingForInput = { type: 'mill_land_choice', playerId: controller };
@@ -1186,7 +1301,19 @@ export function _resolveItem(item, state) {
         const lib = gameState.players[controller].zones.library;
         const bf = gameState.players[controller].zones.battlefield;
         const isBasicOnly = effect.landType === 'basic' || !effect.landType;
-        const availableLands = lib.cards.filter(c => isBasicOnly ? Cards.isBasicLand(c) : Cards.isLand(c));
+        // Color filter: some cards can only search for specific basic land types (e.g. Temur Monument: Forest/Island/Mountain)
+        const COLOR_TO_LAND: Record<string, string> = { W: 'plains', U: 'island', B: 'swamp', R: 'mountain', G: 'forest' };
+        const allowedLandTypes: string[] | null = effect.colors && effect.colors.length > 0
+          ? (effect.colors as string[]).map((c: string) => COLOR_TO_LAND[c]).filter(Boolean)
+          : null;
+        const availableLands = lib.cards.filter(c => {
+          if (isBasicOnly ? !Cards.isBasicLand(c) : !Cards.isLand(c)) return false;
+          if (allowedLandTypes) {
+            const name = (c.name || '').toLowerCase();
+            return allowedLandTypes.some(t => name.includes(t));
+          }
+          return true;
+        });
 
         if (availableLands.length === 0) {
           lib.shuffle();
@@ -1222,64 +1349,76 @@ export function _resolveItem(item, state) {
             toTop: toTop,
             toBattlefield: toBattlefield,
             optional: effect.optional || false,
-            playerId: controller
+            playerId: controller,
+            amountLeft: effect.amount || 1,
+            isBasicOnly: isBasicOnly
           };
           gameState.waitingForInput = { type: 'ramp_choice', playerId: controller };
           log.push(`Choose a land from your library.`);
         } else {
-          // AI: always search if available (optional or not)
-          let land = null;
-          const hand = gameState.players[controller].zones.hand.cards;
-          const colorNeeds = {};
-          hand.forEach(c => {
-            const pips = (c.mana_cost || '').match(/\{([WUBRG])\}/gi) || [];
-            pips.forEach(p => {
-              const color = p.replace(/[{}]/g, '').toUpperCase();
-              colorNeeds[color] = (colorNeeds[color] || 0) + 1;
+          // AI: always search if available (optional or not), supports amount > 1
+          const totalRamps = effect.amount || 1;
+          for (let rampI = 0; rampI < totalRamps; rampI++) {
+            const currentLands = lib.cards.filter(c => {
+              if (isBasicOnly ? !Cards.isBasicLand(c) : !Cards.isLand(c)) return false;
+              if (allowedLandTypes) {
+                const name = (c.name || '').toLowerCase();
+                return allowedLandTypes.some(t => name.includes(t));
+              }
+              return true;
             });
-          });
-          let bestLand = availableLands[0];
-          let bestScore = -1;
-          for (const l of availableLands) {
-            const colors = Cards.getLandManaColors ? Cards.getLandManaColors(l) : [];
-            let score = 0;
-            for (const c of colors) {
-              score += (colorNeeds[c] || 0);
+            if (currentLands.length === 0) break;
+            const hand = gameState.players[controller].zones.hand.cards;
+            const colorNeeds = {};
+            hand.forEach(c => {
+              const pips = (c.mana_cost || '').match(/\{([WUBRG])\}/gi) || [];
+              pips.forEach(p => {
+                const color = p.replace(/[{}]/g, '').toUpperCase();
+                colorNeeds[color] = (colorNeeds[color] || 0) + 1;
+              });
+            });
+            let bestLand = currentLands[0];
+            let bestScore = -1;
+            for (const l of currentLands) {
+              const colors = Cards.getLandManaColors ? Cards.getLandManaColors(l) : [];
+              let score = 0;
+              for (const c of colors) {
+                score += (colorNeeds[c] || 0);
+              }
+              if (score > bestScore) {
+                bestScore = score;
+                bestLand = l;
+              }
             }
-            if (score > bestScore) {
-              bestScore = score;
-              bestLand = l;
+            const land = bestLand;
+            const idx = lib.cards.indexOf(land);
+            if (idx !== -1) lib.cards.splice(idx, 1);
+            if (effect.to_hand) {
+              gameState.players[controller].zones.hand.add(land);
+              lib.shuffle();
+              log.push(`Opponent searches for ${land.name} and puts it into hand.`);
+            } else if (toTop) {
+              lib.cards.unshift(land);
+              log.push(`Opponent searches for ${land.name} and puts it on top of library.`);
+            } else if (toBattlefield) {
+              const bfLand = Cards.prepareForBattlefield(land);
+              bfLand._tapped = true;
+              bfLand._summoningSick = false;
+              bf.add(bfLand);
+              lib.shuffle();
+              log.push(`Opponent searches for ${land.name} and puts it onto the battlefield tapped.`);
+              const lf1 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
+              log.push(...lf1);
+            } else {
+              const bfLand = Cards.prepareForBattlefield(land);
+              bfLand._tapped = effect.tapped ? true : false;
+              bfLand._summoningSick = false;
+              bf.add(bfLand);
+              lib.shuffle();
+              log.push(`Opponent searches for ${land.name} and puts it onto the battlefield${effect.tapped ? ' tapped' : ''}.`);
+              const lf2 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
+              log.push(...lf2);
             }
-          }
-          land = bestLand;
-          const idx = lib.cards.indexOf(land);
-          if (idx !== -1) lib.cards.splice(idx, 1);
-          if (effect.to_hand) {
-            gameState.players[controller].zones.hand.add(land);
-            lib.shuffle();
-            log.push(`Opponent searches for ${land.name} and puts it into hand.`);
-          } else if (toTop) {
-            lib.cards.unshift(land);
-            // Don't shuffle - card goes on top
-            log.push(`Opponent searches for ${land.name} and puts it on top of library.`);
-          } else if (toBattlefield) {
-            const bfLand = Cards.prepareForBattlefield(land);
-            bfLand._tapped = true;
-            bfLand._summoningSick = false;
-            bf.add(bfLand);
-            lib.shuffle();
-            log.push(`Opponent searches for ${land.name} and puts it onto the battlefield tapped.`);
-            const lf1 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
-            log.push(...lf1);
-          } else {
-            const bfLand = Cards.prepareForBattlefield(land);
-            bfLand._tapped = effect.tapped ? true : false;
-            bfLand._summoningSick = false;
-            bf.add(bfLand);
-            lib.shuffle();
-            log.push(`Opponent searches for ${land.name} and puts it onto the battlefield${effect.tapped ? ' tapped' : ''}.`);
-            const lf2 = GameState.fireTrigger(gameState, 'landfall', { playerId: controller, cardUid: bfLand._uid });
-            log.push(...lf2);
           }
         }
         break;
@@ -1287,8 +1426,8 @@ export function _resolveItem(item, state) {
 
       case 'strategic_betrayal': {
         // Target opponent exiles a creature and their graveyard
-        if (!targets || targets.length === 0) break;
-        const targetPlayer = targets[0].player;
+        // Auto-determine opponent (no targeting needed — always affects the opponent)
+        const targetPlayer = controller === 0 ? 1 : 0;
         const bf = gameState.players[targetPlayer].zones.battlefield;
         const gy = gameState.players[targetPlayer].zones.graveyard;
         const exile = gameState.players[targetPlayer].zones.exile;
@@ -1373,14 +1512,7 @@ export function _resolveItem(item, state) {
               token.oracle_text = (token.oracle_text || '') + (token.oracle_text ? ', ' : '') + kw;
             });
           }
-          // Add ETB damage trigger if specified
-          if (effect.etb_damage) {
-            if (!token._triggers) token._triggers = [];
-            token._triggers.push({
-              event: 'enters_battlefield',
-              effects: [{ type: 'damage', amount: effect.etb_damage, target: 'any_target' }]
-            });
-          }
+          // etb_damage is processed after adding to battlefield (below)
           if (effect.sacrificeAtEndStep || effect.sacrifice_eot) token._sacrificeAtEndStep = true;
           if (effect.attacking && gameState.combat && gameState.combat.phase !== 'none') {
             token._attacking = true;
@@ -1389,10 +1521,31 @@ export function _resolveItem(item, state) {
             gameState.combat.attackers.push({ uid: token._uid, card: token });
           }
           bf.add(token);
+          gameState._lastCreatedToken = token._uid;
           GameState._registerCardTriggers(gameState, token, tokenOwner);
+          // Fire other_creature_enters / creature_etb for tokens (Shocking Sharpshooter etc.)
+          if (Cards.isCreature(token)) {
+            const enterLogs = GameState.fireTrigger(gameState, 'other_creature_enters', { cardUid: token._uid, playerId: tokenOwner, entering: true });
+            log.push(...enterLogs);
+            const etbLogs = GameState.fireTrigger(gameState, 'creature_etb', { cardUid: token._uid, playerId: tokenOwner });
+            log.push(...etbLogs);
+          }
         }
         const who = gameState.players[tokenOwner].isHuman ? 'You' : 'Opponent';
         log.push(`${who} create${gameState.players[tokenOwner].isHuman ? '' : 's'} ${count} ${effect.power}/${effect.toughness} ${effect.name} token(s).`);
+
+        // Process ETB damage inline (e.g., Reliquary Dragon: "When this token enters, deal 3 damage to any target")
+        if (effect.etb_damage) {
+          const lastToken = gameState.players[tokenOwner].zones.battlefield.get(gameState._lastCreatedToken);
+          resolveEffects(gameState, [{ type: 'damage', amount: effect.etb_damage, target: 'any_target' }], lastToken || card, tokenOwner, null, log);
+          // If human needs to pick target, save remaining effects and pause
+          if (gameState.waitingForInput?.type === 'etb_any_damage_target') {
+            if (ei < effects.length - 1) {
+              gameState._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+            }
+            return log;
+          }
+        }
         break;
       }
 
@@ -1422,9 +1575,15 @@ export function _resolveItem(item, state) {
             break;
           }
 
-          // Remove from stack (mark as countered — _resolveItem checks _countered flag)
+          // Remove from stack and send to owner's graveyard
           const stackIdx = gameState.stack.items.findIndex((s: any) => s.card._uid === targetSpell._uid);
-          if (stackIdx !== -1) gameState.stack.items.splice(stackIdx, 1);
+          if (stackIdx !== -1) {
+            const removed = gameState.stack.items.splice(stackIdx, 1)[0];
+            const spellOwner = removed.controller;
+            if (spellOwner !== undefined && gameState.players[spellOwner]) {
+              gameState.players[spellOwner].zones.graveyard.add(removed.card);
+            }
+          }
           log.push(`${targetSpell.name} is countered!`);
           break;
         }
@@ -1461,11 +1620,34 @@ export function _resolveItem(item, state) {
         // Auto-target for ETB counter effects when no explicit targets (e.g. Reputable Merchant)
         let resolvedCounterTargets = targets;
         if ((!resolvedCounterTargets || resolvedCounterTargets.length === 0) &&
-            (effect.target === 'own_creature' || effect.target === 'creature' || effect.target === 'opponent_creature')) {
+            (effect.target === 'own_creature' || effect.target === 'creature' || effect.target === 'opponent_creature' || effect.target === 'other_own_creature')) {
           const targetPid = effect.target === 'opponent_creature' ? opponent : controller;
           const bf2 = gameState.players[targetPid].zones.battlefield;
-          const best = bf2.cards.filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
-            .sort((a: any, b: any) => (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a)))[0];
+          const excludeSelf = effect.target === 'other_own_creature';
+          const candidates = bf2.cards.filter((c: any) =>
+            Cards.isCreature(c) && Cards.canBeTargeted(c, controller) && (!excludeSelf || c._uid !== card._uid)
+          );
+
+          // Human interactive: pause and let player choose target
+          if (candidates.length > 0 && controller === 0 && gameState.players[0].isHuman) {
+            gameState._pendingETBCounter = {
+              effect,
+              controller,
+              targetPid,
+              cardUid: card?._uid,
+              candidates: candidates.map((c: any) => c._uid),
+            };
+            gameState.waitingForInput = { type: 'etb_counter_target', playerId: 0, choices: candidates };
+            if (ei < effects.length - 1) {
+              gameState._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+            }
+            return log;
+          }
+
+          // AI: auto-pick best target
+          const best = candidates.sort((a: any, b: any) =>
+            (Cards.getPower(b) + Cards.getToughness(b)) - (Cards.getPower(a) + Cards.getToughness(a))
+          )[0];
           if (best) resolvedCounterTargets = [{ type: 'creature', uid: best._uid, player: targetPid }];
         }
 
@@ -1584,8 +1766,13 @@ export function _resolveItem(item, state) {
       }
 
       case 'discard': {
+        // For 'damaged_player': only fire if a player was actually damaged (null = creature targeted)
+        if (effect.target === 'damaged_player' && gameState._lastDamagedPlayer == null) {
+          log.push('No player was damaged — discard skipped.');
+          break;
+        }
         const targetPlayer = effect.target === 'opponent' ? opponent
-          : effect.target === 'damaged_player' ? (gameState._lastDamagedPlayer ?? opponent)
+          : effect.target === 'damaged_player' ? (gameState._lastDamagedPlayer as number)
           : controller;
         const hand = gameState.players[targetPlayer].zones.hand;
         const gy = gameState.players[targetPlayer].zones.graveyard;
@@ -1802,6 +1989,38 @@ export function _resolveItem(item, state) {
         break;
       }
 
+      case 'power_damage': {
+        // One-sided fight: own creature deals damage equal to its power to target. No retaliation.
+        // "Target creature you control deals damage equal to its power to target creature or planeswalker."
+        if (targets && targets.length > 0) {
+          const oppTarget = targets.find((t: any) => t.player !== controller) ?? targets[targets.length - 1];
+          const ownTarget = targets.find((t: any) => t.player === controller);
+          const myBf = gameState.players[controller].zones.battlefield;
+          let ourCreature = ownTarget ? myBf.get(ownTarget.uid) : null;
+          if (!ourCreature || !Cards.isCreature(ourCreature)) {
+            const owned = myBf.cards.filter(c => Cards.isCreature(c)).sort((a, b) => Cards.getPower(b) - Cards.getPower(a));
+            ourCreature = owned[0] || null;
+          }
+          const theirBf = gameState.players[oppTarget.player].zones.battlefield;
+          const theirCreature = theirBf.get(oppTarget.uid);
+
+          if (ourCreature && theirCreature) {
+            const dmg = Cards.getPower(ourCreature);
+            if (Cards.hasKeyword(ourCreature, 'Deathtouch') && dmg > 0) {
+              theirCreature._damage = Cards.getToughness(theirCreature); // lethal
+            } else {
+              theirCreature._damage += dmg;
+            }
+            log.push(`${ourCreature.name} deals ${dmg} damage to ${theirCreature.name}.`);
+            if (theirCreature._damage >= Cards.getToughness(theirCreature)) {
+              GameState.creatureDies(gameState, theirCreature, oppTarget.player);
+              log.push(`${theirCreature.name} dies.`);
+            }
+          }
+        }
+        break;
+      }
+
       case 'tap': {
         if (effect.target === 'all_opponent_creatures') {
           const tapCreatures = gameState.players[opponent].zones.battlefield.cards.filter(c => Cards.isCreature(c));
@@ -1854,6 +2073,24 @@ export function _resolveItem(item, state) {
         break;
       }
 
+      case 'cant_block': {
+        // ETB: target opponent creature can't block this turn — prompt human to choose
+        const cbOpponent = effect.target === 'self' ? controller : opponent;
+        const cbCandidates = gameState.players[cbOpponent].zones.battlefield.cards
+          .filter((c: any) => Cards.isCreature(c) && !c._cantBlockThisTurn && Cards.canBeTargeted(c, controller));
+        if (cbCandidates.length === 0) break;
+        if (gameState.players[controller].isHuman) {
+          gameState._pendingETBCantBlock = { effect, controller, targetPid: cbOpponent };
+          gameState.waitingForInput = { type: 'etb_cant_block_target', playerId: controller, choices: cbCandidates };
+          break;
+        }
+        // AI: disable highest-toughness creature (most impactful blocker)
+        cbCandidates.sort((a: any, b: any) => Cards.getToughness(b) - Cards.getToughness(a));
+        cbCandidates[0]._cantBlockThisTurn = true;
+        log.push(`${cbCandidates[0].name} não pode bloquear neste turno.`);
+        break;
+      }
+
       case 'untap': {
         if (targets && targets.length > 0) {
           const target = targets[0];
@@ -1900,10 +2137,12 @@ export function _resolveItem(item, state) {
           // Wayspeaker Bodyguard: nonland permanent with mana value 2 or less
           candidates = candidates.filter(c => Cards.isPermanent(c) && !Cards.isLand(c) && (c.cmc || 0) <= 2);
         } else if (effect.target === 'instant_or_sorcery') {
-          // Kishla Trawlers: instant or sorcery card
+          // Kishla Trawlers: instant or sorcery card.
+          // For DFC cards (Dragon // Sorcery — Omen), only check primary face type.
+          // A "Creature — Dragon // Sorcery — Omen" is a creature, NOT an instant/sorcery.
           candidates = candidates.filter(c => {
-            const types = (c.type_line || '').toLowerCase();
-            return types.includes('instant') || types.includes('sorcery');
+            const primaryType = ((c.type_line || '').split('//')[0]).toLowerCase();
+            return primaryType.includes('instant') || primaryType.includes('sorcery');
           });
         } else if (effect.target === 'creature_power2_or_less') {
           // Smile at Death: creature with power 2 or less
@@ -1918,8 +2157,8 @@ export function _resolveItem(item, state) {
 
         const amount = effect.amount || 1;
 
-        // If optional and human player, show modal to choose
-        if (optional && controller === 0 && candidates.length > 0) {
+        // If human player, always show modal to choose (even if mandatory)
+        if (controller === 0 && candidates.length > 0) {
           gameState._pendingGYReturn = {
             effect, candidates, amount, toHand, toTopLibrary, controller
           };
@@ -2097,9 +2336,15 @@ export function _resolveItem(item, state) {
 // Helper: pay ward cost
 // ---------------------------------------------------------------------------
 
-export function _payWardCost(creature, controller, state, log) {
+export function _payWardCost(creature, controller, state, log, castingCantBeCountered = false) {
   const gameState = state;
   if (!Cards.hasKeyword(creature, 'Ward')) return true;
+
+  // If the originating spell can't be countered, ward's countering effect doesn't apply
+  if (castingCantBeCountered) {
+    log.push(`Ward: spell can't be countered — ward ignored.`);
+    return true;
+  }
 
   const wardCostMatch = (creature.oracle_text || '').match(/ward[\s—]+\{?(\d+)\}?/i);
   if (!wardCostMatch) return true; // Ward without a cost — assume free
@@ -2107,21 +2352,39 @@ export function _payWardCost(creature, controller, state, log) {
   const wardCost = parseInt(wardCostMatch[1]) || 0;
   if (wardCost === 0) return true;
 
-  if (gameState.manaPool && gameState.manaPool[controller]) {
-    const pool = gameState.manaPool[controller];
-    const totalMana = Object.values(pool).reduce((sum, v) => sum + v, 0);
-    if (totalMana >= wardCost) {
-      // Pay from pool
-      let remaining = wardCost;
-      for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
-        const paid = Math.min(pool[color] || 0, remaining);
-        pool[color] = (pool[color] || 0) - paid;
-        remaining -= paid;
-        if (remaining === 0) break;
-      }
-      log.push(`Ward ${wardCost} paid.`);
-      return true;
+  // Calculate total available mana (pool + untapped lands)
+  const pool = (gameState.manaPool && gameState.manaPool[controller]) ? gameState.manaPool[controller] : {};
+  const poolTotal = (Object.values(pool) as number[]).reduce((sum: number, v) => sum + (v as number), 0);
+
+  // Count untapped lands for additional mana
+  const untappedLands = gameState.players[controller].zones.battlefield.cards.filter(
+    (c: any) => Cards.isLand(c) && !c._tapped
+  );
+  const availableMana = poolTotal + untappedLands.length;
+
+  if (availableMana >= wardCost) {
+    // First pay from existing pool
+    let remaining = wardCost;
+    for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+      const paid = Math.min((pool as any)[color] || 0, remaining);
+      (pool as any)[color] = ((pool as any)[color] || 0) - paid;
+      remaining -= paid;
+      if (remaining === 0) break;
     }
+    // If pool wasn't enough, auto-tap lands for the remainder
+    if (remaining > 0) {
+      for (const land of untappedLands) {
+        if (remaining <= 0) break;
+        (land as any)._tapped = true;
+        (pool as any)['C'] = ((pool as any)['C'] || 0) + 1;
+        // Pay immediately from this tapped land
+        const paid = Math.min((pool as any)['C'] || 0, remaining);
+        (pool as any)['C'] = ((pool as any)['C'] || 0) - paid;
+        remaining -= paid;
+      }
+    }
+    log.push(`Ward ${wardCost} paid.`);
+    return true;
   }
 
   // Cannot pay ward — spell is countered
@@ -2134,21 +2397,61 @@ export function _payWardCost(creature, controller, state, log) {
 // ---------------------------------------------------------------------------
 
 export function _aiChooseModes(modes, chooseCount, state, controller, opponent, targets) {
-  const gameState = state;
-  // Score each mode and pick the best N
   const _safeN = (v: any) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+  // Board context for smarter mode selection
+  const myLife = state.players[controller]?.life ?? 20;
+  const oppLife = state.players[opponent]?.life ?? 20;
+  const myHandSize = state.players[controller]?.zones.hand.count() ?? 3;
+  const myCreatures = state.players[controller]?.zones.battlefield.cards.filter((c: any) => c.type_line?.toLowerCase().includes('creature')) ?? [];
+  const oppCreatures = state.players[opponent]?.zones.battlefield.cards.filter((c: any) => c.type_line?.toLowerCase().includes('creature')) ?? [];
+  const lowLife = myLife <= 8;
+  const lowHand = myHandSize <= 2;
+  const behindOnBoard = oppCreatures.length > myCreatures.length + 1;
+  const oppLowLife = oppLife <= 8;
+
   const scored = modes.map((mode, idx) => {
     let score = 0;
     const effects = Array.isArray(mode) ? mode : [mode];
     for (const eff of effects) {
       switch (eff.type) {
-        case 'damage': score += _safeN(eff.amount) * 2; break;
-        case 'draw': score += _safeN(eff.amount) * 3; break;
-        case 'gainLife': score += _safeN(eff.amount); break;
-        case 'destroy': score += 8; break;
-        case 'exile': score += 9; break;
+        case 'damage': {
+          const amt = _safeN(eff.amount);
+          score += amt * 2;
+          // Damage worth more at critical life totals
+          if (oppLowLife && oppLife <= amt) score += 10; // Potentially lethal to face!
+          else if (oppLowLife) score += 4; // Opponent hurting — chip is good
+          if (lowLife) score -= 2; // Our low life — stabilizing > damage
+          break;
+        }
+        case 'draw': {
+          const amt = _safeN(eff.amount);
+          score += amt * 3;
+          if (lowHand) score += amt * 2; // Extra value when hellbent
+          break;
+        }
+        case 'gainLife': {
+          const amt = _safeN(eff.amount);
+          score += amt;
+          if (lowLife) score += amt * 1.5; // Lifegain crucial when dying
+          break;
+        }
+        case 'destroy':
+          score += 8;
+          if (behindOnBoard) score += 3; // Removal more valuable when behind
+          if (oppCreatures.length === 0) score -= 4; // No targets = waste
+          break;
+        case 'exile':
+          score += 9;
+          if (behindOnBoard) score += 3;
+          if (oppCreatures.length === 0) score -= 4;
+          break;
         case 'counter': score += 7; break;
-        case 'bounce': score += 5; break;
+        case 'bounce':
+          score += 5;
+          if (behindOnBoard) score += 2;
+          if (oppCreatures.length === 0) score -= 2;
+          break;
         case 'buff': score += (eff.power || 0) + (eff.toughness || 0); break;
         case 'create_token': score += (eff.count || 1) * 3; break;
         case 'ramp': score += 6; break;

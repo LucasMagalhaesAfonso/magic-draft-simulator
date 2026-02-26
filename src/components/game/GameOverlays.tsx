@@ -128,6 +128,10 @@ function describeMode(mode: any): string {
   }
   if (mode.description) return mode.description;
   const t = mode.type;
+  // Siege mode wrapper: { label, effects: [...] } — describe sub-effects
+  if (!t && Array.isArray(mode.effects)) {
+    return mode.effects.map((e: any) => describeMode(e)).filter(Boolean).join('. ');
+  }
   if (!t) return '?';
   const rawAmt = mode.amount;
   const tgt = mode.target;
@@ -203,6 +207,11 @@ function describeMode(mode: any): string {
   if (t === 'ramp') return `Search library for a basic land, put it onto battlefield`;
   if (t === 'search_library') return `Search library for a ${tgt || 'card'}`;
   if (t === 'counter') {
+    // Distinguish counter (placing counters on creature) vs counter (counterspell)
+    if (mode.counter) {
+      const n = rawAmt || 1;
+      return `Put ${n} ${mode.counter} counter${n !== 1 ? 's' : ''} on ${tgtLabel(tgt) || 'target creature'}`;
+    }
     if (tgt === 'creature_spell') return 'Counter target creature spell';
     if (tgt === 'noncreature_spell') return 'Counter target non-creature spell';
     if (tgt === 'spell') return 'Counter target spell';
@@ -659,22 +668,14 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
   const spent = Object.values(dist).reduce((a, b) => a + b, 0);
   const remaining = totalAmount - spent;
 
-  const toggle = (uid: string) => {
+  const addOne = (uid: string) => {
     setDist(prev => {
-      const cur = prev[uid] || 0;
-      if (cur > 0) {
-        // Remove one (left-click again to undo)
-        const next = { ...prev, [uid]: cur - 1 };
-        if (next[uid] === 0) delete next[uid];
-        return next;
-      } else if (remaining > 0) {
-        // Add one
-        return { ...prev, [uid]: 1 };
-      }
-      return prev;
+      const spent = Object.values(prev).reduce((a, b) => a + b, 0);
+      if (spent >= totalAmount) return prev;
+      return { ...prev, [uid]: (prev[uid] || 0) + 1 };
     });
   };
-  const add = toggle; // alias kept for compatibility
+  const add = addOne;
   const remove = (uid: string) => {
     setDist(prev => {
       const cur = prev[uid] || 0;
@@ -690,7 +691,7 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
       <div className="overlay-panel glass">
         <h3 className="overlay-title">⬆ Distribute {counterType} Counters</h3>
         <p className="overlay-hint">
-          Click to assign · Click again to remove · Budget: <strong>{remaining}/{totalAmount}</strong> remaining
+          Click to add · Right-click to remove · Budget: <strong>{remaining}/{totalAmount}</strong> remaining
         </p>
         <div className="scry-cards">
           {creatures.map((c: any, i: number) => {
@@ -699,7 +700,7 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
               <div
                 key={c._uid || i}
                 className={`scry-card-slot${count > 0 ? ' scry-card-selected' : ''}`}
-                onClick={() => toggle(c._uid)}
+                onClick={() => addOne(c._uid)}
                 onContextMenu={e => { e.preventDefault(); remove(c._uid); }}
               >
                 <CardImage card={c} size="medium" />
@@ -711,11 +712,8 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(dist)} disabled={spent === 0}>
-            Confirm ({spent}/{totalAmount})
+            {spent === totalAmount ? `Confirm (${spent})` : `Use (${spent}/${totalAmount})`}
           </button>
-          {spent < totalAmount && spent > 0 && (
-            <button className="btn btn-muted" onClick={() => onConfirm(dist)}>Use Fewer</button>
-          )}
           {spent === 0 && (
             <button className="btn btn-muted" onClick={() => onConfirm({})}>Skip</button>
           )}
@@ -947,10 +945,26 @@ function describeAbility(ab: any): string {
   const costParts: string[] = [];
   if (cost.tap) costParts.push('{T}');
   if (cost.sacrifice) costParts.push('Sacrifice');
+  if (cost.sacrifice_token) costParts.push('Sacrifice a token');
+  if (cost.exile) costParts.push('Exile this card');
+  if (cost.exile_gy_creature) costParts.push('Exile a creature from your graveyard');
   if (cost.loyalty !== undefined) costParts.push(cost.loyalty >= 0 ? `+${cost.loyalty}` : `${cost.loyalty}`);
-  if (cost.mana) costParts.push(cost.mana);
+  if (cost.mana) costParts.push(`{${cost.mana}}`);
   if (cost.life) costParts.push(`Pay ${cost.life} life`);
-  const effects = (ab.effects || []).map((e: any) => e.type || '?').join(', ');
+  if (cost.once_per_turn) costParts.push('once per turn');
+  const effects = (ab.effects || []).map((e: any) => {
+    if (e.type === 'add_mana') {
+      if (e.color && e.color.length > 1 && e.choose) {
+        const symbols = e.color.split('').map((c: string) => `{${c}}`).join(', ');
+        return `Add ${symbols} (choose ${e.choose})`;
+      }
+      if (e.colors && Array.isArray(e.colors)) {
+        return `Add one mana of any color`;
+      }
+      return `Add {${e.color || 'C'}}`;
+    }
+    return describeMode(e);
+  }).filter(Boolean).join('. ');
   return `${costParts.join(', ')}: ${effects || 'Activate'}`;
 }
 
@@ -1469,6 +1483,69 @@ export function OrderBlockersOverlay({ attackerUids, blockers, snap, onConfirm }
         })}
         <button className="btn btn-gold" style={{ width: '100%', marginTop: 8 }} onClick={() => onConfirm(orderMap)}>
           Confirmar Ordem
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Trigger Order Overlay ──────────────────────────────────────────────────
+interface TriggerOrderProps {
+  triggers: Array<{ index: number; cardName: string; effectDesc: string }>;
+  onConfirm: (orderedIndices: number[]) => void;
+}
+export function TriggerOrderOverlay({ triggers, onConfirm }: TriggerOrderProps) {
+  const [order, setOrder] = useState<number[]>([]);
+
+  const toggleTrigger = (idx: number) => {
+    setOrder(prev => {
+      if (prev.includes(idx)) return prev.filter(i => i !== idx);
+      return [...prev, idx];
+    });
+  };
+
+  const allSelected = order.length === triggers.length;
+
+  return (
+    <div className="overlay-backdrop">
+      <div className="overlay-panel glass" style={{ maxWidth: 480 }}>
+        <h3 className="overlay-title">⚡ Order Simultaneous Triggers</h3>
+        <p className="overlay-hint" style={{ fontSize: 13, marginBottom: 12 }}>
+          Click triggers in the order you want them to resolve (first click = resolves first).
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {triggers.map((t) => {
+            const pos = order.indexOf(t.index);
+            const isSelected = pos >= 0;
+            return (
+              <button
+                key={t.index}
+                className={isSelected ? 'btn btn-gold' : 'btn btn-muted'}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', textAlign: 'left', position: 'relative' }}
+                onClick={() => toggleTrigger(t.index)}
+              >
+                {isSelected && (
+                  <span style={{
+                    background: '#c8a84e', color: '#000', borderRadius: '50%',
+                    width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontWeight: 'bold', fontSize: 14, flexShrink: 0,
+                  }}>{pos + 1}</span>
+                )}
+                <span style={{ flex: 1 }}>
+                  <strong>{t.cardName}</strong>
+                  <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 8 }}>{t.effectDesc}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <button
+          className="btn btn-gold"
+          style={{ width: '100%', marginTop: 12 }}
+          disabled={!allSelected}
+          onClick={() => onConfirm(order)}
+        >
+          {allSelected ? 'Confirm Order' : `Select all ${triggers.length} triggers`}
         </button>
       </div>
     </div>

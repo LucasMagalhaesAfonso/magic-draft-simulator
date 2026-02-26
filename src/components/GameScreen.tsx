@@ -5,19 +5,21 @@ import { useAppStore } from '../store/useAppStore';
 import type { Card } from '../lib/types';
 import { CardImage } from './card/CardImage';
 import { useGameEngine } from '../hooks/useGameEngine';
+import type { TriggerToastItem } from '../hooks/useGameEngine';
 import { buildDeck as botBuildDeck } from '../draft/bot-ai';
 import {
   ScryOverlay, ModalOverlay, TargetingPrompt, GraveyardOverlay,
   InstantPriorityBanner, StackPriorityBanner, BlockerConfirmBanner,
   DiscardOverlay, ManaColorOverlay, SearchLibraryOverlay, CreatureChoiceOverlay,
-  LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay,
+  LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay, TriggerOrderOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
   BounceMultiOverlay, DistributeCountersOverlay, ManaCostPips, MANA_IMAGES,
-  KeyboardHelpOverlay, DistributeDamageOverlay,
+  KeyboardHelpOverlay, DistributeDamageOverlay, OrderBlockersOverlay,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
 import { getLandManaColors, canPay } from '../engine/mana';
+import { getPreprocessedEffects } from '../engine/cards';
 import type { ManaPool } from '../engine/engine-types';
 import { getTokenImageUrl, preloadTokenImage } from '../engine/token-images';
 import './GameScreen.css';
@@ -47,14 +49,15 @@ function getTokenBg(colors: string[] | undefined): string {
 
 // ── Battlefield token renderer (fetches real image from Scryfall) ─────────────
 function BfToken({ card, power, toughness }: { card: any; power: number | null; toughness: number | null }) {
+  const tokenSet = card.set_code || card._set || card.set || 'TDM';
   const [imgUrl, setImgUrl] = useState<string | null>(() => {
-    const cached = getTokenImageUrl(card.name);
+    const cached = getTokenImageUrl(card.name, tokenSet);
     if (cached) card.image_normal = cached; // sync cache hit: write immediately
     return cached;
   });
   useEffect(() => {
     if (imgUrl) return;
-    preloadTokenImage(card.name, card.colors || []).then(url => {
+    preloadTokenImage(card.name, card.colors || [], tokenSet).then(url => {
       if (url) {
         setImgUrl(url);
         card.image_normal = url; // Write back so right-click zoom finds the image
@@ -143,7 +146,7 @@ function buildFullDeck(spells: Card[], lands: Record<string, number>): Card[] {
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export function GameScreen() {
-  const { deck, draftPool, setScreen, playmat, playmatArt, landArts, sleeveArt } = useAppStore();
+  const { deck, draftPool, aiDraftPool, setScreen, playmat, playmatArt, playmatPosition, playmatSize, landArts, sleeveArt } = useAppStore();
 
   // Resolve land art override for basic lands
   const LAND_COLOR_MAP: Record<string, string> = {
@@ -158,6 +161,9 @@ export function GameScreen() {
   const [showLog, setShowLog] = useState(false);
   const [zoom, setZoom] = useState<any>(null);
   const [zoomModified, setZoomModified] = useState(false);
+  const [myStopPhases, setMyStopPhases] = useState<Set<string>>(new Set());
+  const [oppStopPhases, setOppStopPhases] = useState<Set<string>>(new Set());
+  const [overlayMinimized, setOverlayMinimized] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   // Reset modified view when zoom target changes
@@ -172,11 +178,14 @@ export function GameScreen() {
     cardUid: string;
     card: any;
     step?: number;
-    steps?: Array<{ side: 'own' | 'opponent'; prompt: string }>;
+    steps?: Array<{ side: 'own' | 'opponent' | 'any_permanent' | 'any_target'; prompt: string }>;
     collectedTargets?: any[];
+    optionalTarget?: boolean;  // True when targeting is optional — shows "No target" button
+    isHarmonize?: boolean;     // True when targeting is for harmonize (calls castHarmonize instead of castSpell)
+    harmonizeTappedUid?: string | null; // The tapped creature UID for harmonize discount
   } | null>(null);
-  // Blocking: selected own creature waiting to be assigned to an attacker
-  const [blockingWith, setBlockingWith] = useState<string | null>(null);
+  // Blocking: selected own creatures waiting to be assigned to an attacker (array = gang-block)
+  const [blockingWith, setBlockingWith] = useState<string[]>([]);
   // Ability modal: double-click on creature/planeswalker
   const [abilityModal, setAbilityModal] = useState<{ card: any; abilities: any[] } | null>(null);
   // Equipment modal: double-click on equipment to pick which creature to attach
@@ -194,6 +203,7 @@ export function GameScreen() {
   const [mulliganBottomSelected, setMulliganBottomSelected] = useState<string[]>([]);
   // Mana autopay preview: which lands will be auto-tapped when this hand card is hovered
   const [hoveredHandCard, setHoveredHandCard] = useState<string | null>(null);
+  const [hoveredBfCard, setHoveredBfCard] = useState<string | null>(null);
 
   // Toast / banner / auto-pass states
   const [toasts, setToasts] = useState<{id: number; msg: string; type: string}[]>([]);
@@ -203,12 +213,19 @@ export function GameScreen() {
   const [autoPass, setAutoPass] = useState(false);
   const autoPassRef = useRef(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [viewingBattlefield, setViewingBattlefield] = useState(false);
   const [showOppTooltip, setShowOppTooltip] = useState(false);
+  // Harmonize: waiting for player to pick a creature to tap for discount (null = not active)
+  // tappedUid: the creature the player chose to tap (set after phase 1, used in phase 2 targeting)
+  const [harmonizePending, setHarmonizePending] = useState<{ cardUid: string; tappedUid?: string | null } | null>(null);
   // Full Control Mode: pause at every phase transition (like Arena Ctrl)
   const [fullControl, setFullControl] = useState(false);
   const fullControlRef = useRef(false);
   const prevLifeRef = useRef<[number, number] | null>(null);
   const prevActivePlayerRef = useRef<number | null>(null);
+  // Delayed winner: wait for life-counter animation before showing game-over screen
+  const [displayWinner, setDisplayWinner] = useState<number | null>(null);
+  const winnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Arena-like animation states ──────────────────────────────────────────
   // Battlefield enter/exit
@@ -226,6 +243,15 @@ export function GameScreen() {
   // Trigger pulse
   const [triggerPulseUids, setTriggerPulseUids] = useState<Set<string>>(new Set());
   const prevLogLenRef = useRef(0);
+  // Trigger toast notifications (Arena-style)
+  const [triggerToastItems, setTriggerToastItems] = useState<import('../hooks/useGameEngine').TriggerToastItem[]>([]);
+  const lastSeenTriggerIdRef = useRef(0);
+  // AI action overlay (opponent spell cast display)
+  const [aiCastOverlay, setAiCastOverlay] = useState<{ card: any; description: string; targetDesc?: string } | null>(null);
+  const aiCastQueueRef = useRef<Array<{ card: any; description: string; targetDesc?: string }>>([]);
+  const aiCastBusyRef = useRef(false);
+  const lastAiActionsLenRef = useRef(0);
+  const [slowTriggers, setSlowTriggers] = useState(true); // Show trigger notifications
   // Combat edge flash
   const [combatFlash, setCombatFlash] = useState(false);
   const prevPhaseRef = useRef<string | null>(null);
@@ -242,19 +268,55 @@ export function GameScreen() {
   }, [deck, draftPool]);
 
   const aiDeck = useMemo(() => {
-    const spells = deck?.mainboard ?? draftPool.slice(0, 23);
-    const aiPool = draftPool.filter(c => !c.type_line?.includes('Land'));
-    const aiDeckData = aiPool.length >= 10
-      ? botBuildDeck(aiPool)
-      : { deck: spells.slice(0, 23), lands: { W: 9, U: 8 } as Record<string, number>, sideboard: [] as any[] };
+    // Use the bot's actual draft picks (aiDraftPool) — not the human's pool (prevents mirror match)
+    const aiPool = aiDraftPool.filter(c => !c.type_line?.includes('Land'));
+    if (aiPool.length >= 10) {
+      const aiDeckData = botBuildDeck(aiPool);
+      return buildFullDeck(aiDeckData.deck, aiDeckData.lands);
+    }
+    // Fallback: use cards from draftPool that are NOT in the player's mainboard (sideboard effect)
+    const playerMainboard = deck?.mainboard ?? draftPool.slice(0, 23);
+    const mainboardIds = new Set(playerMainboard.map((c: any) => c.id || c.oracle_id));
+    const sideboardPool = draftPool.filter(c => !mainboardIds.has(c.id || c.oracle_id) && !c.type_line?.includes('Land'));
+    const fallbackPool = sideboardPool.length >= 10 ? sideboardPool : draftPool.filter(c => !c.type_line?.includes('Land'));
+    const aiDeckData = fallbackPool.length >= 10
+      ? botBuildDeck(fallbackPool)
+      : { deck: playerMainboard.slice(0, 23), lands: { W: 9, U: 8 } as Record<string, number>, sideboard: [] as any[] };
     return buildFullDeck(aiDeckData.deck, aiDeckData.lands);
-  }, [deck, draftPool]);
+  }, [deck, draftPool, aiDraftPool]);
 
   const { snap, loading, error, actions, gsRef, canUndoMana, undoManaCount } = useGameEngine(playerDeck, aiDeck);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [snap?.log]);
+
+  // Sync stop-at-phases to engine state
+  useEffect(() => {
+    actions.setStopAtPhases(Array.from(oppStopPhases));
+  }, [oppStopPhases]);
+
+  useEffect(() => {
+    actions.setMyStopPhases(Array.from(myStopPhases));
+  }, [myStopPhases]);
+
+  function toggleMyStopPhase(phaseKey: string) {
+    setMyStopPhases(prev => {
+      const next = new Set(prev);
+      if (next.has(phaseKey)) next.delete(phaseKey);
+      else next.add(phaseKey);
+      return next;
+    });
+  }
+
+  function toggleOppStopPhase(phaseKey: string) {
+    setOppStopPhases(prev => {
+      const next = new Set(prev);
+      if (next.has(phaseKey)) next.delete(phaseKey);
+      else next.add(phaseKey);
+      return next;
+    });
+  }
 
   function addToast(msg: string, type: string = 'info') {
     const id = ++toastIdRef.current;
@@ -355,6 +417,25 @@ export function GameScreen() {
   useEffect(() => { autoPassRef.current = autoPass; }, [autoPass]);
   useEffect(() => { fullControlRef.current = fullControl; }, [fullControl]);
 
+  // Reset "view battlefield" mode when overlay changes or is dismissed
+  const wiType = snap?.waitingForInput?.type;
+  useEffect(() => { setViewingBattlefield(false); }, [wiType]);
+
+  // Delayed winner: wait after life hits 0 so player sees the lethal damage land
+  const snapWinner = snap?.winner ?? null;
+  useEffect(() => {
+    if (snapWinner !== null && displayWinner === null) {
+      if (winnerTimerRef.current) clearTimeout(winnerTimerRef.current);
+      winnerTimerRef.current = setTimeout(() => setDisplayWinner(snapWinner), 1800);
+    } else if (snapWinner === null && displayWinner !== null) {
+      if (winnerTimerRef.current) clearTimeout(winnerTimerRef.current);
+      winnerTimerRef.current = null;
+      setDisplayWinner(null);
+    }
+    return () => { if (winnerTimerRef.current) clearTimeout(winnerTimerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapWinner]);
+
   // VFX: life change effects
   const prevLifeVfxRef = useRef<[number, number] | null>(null);
   useEffect(() => {
@@ -372,6 +453,30 @@ export function GameScreen() {
     }
     prevLifeVfxRef.current = [p0life, p1life];
   }, [snap?.players[0].life, snap?.players[1].life]); // eslint-disable-line
+
+  // AI action overlay: detect new _aiActions and queue them for sequential display
+  useEffect(() => {
+    if (!snap?._aiActions) return;
+    const all = snap._aiActions as any[];
+    const startIdx = all.length < lastAiActionsLenRef.current ? 0 : lastAiActionsLenRef.current;
+    lastAiActionsLenRef.current = all.length;
+    const newCasts = all.slice(startIdx).filter((a: any) => a.type === 'cast' && (a.card?.image_normal || a.card?.image_small));
+    if (newCasts.length === 0) return;
+    aiCastQueueRef.current.push(...newCasts);
+    // Kick off processing if not already running
+    if (!aiCastBusyRef.current) processAiCastQueue();
+  }, [(snap?._aiActions as any)?.length]); // eslint-disable-line
+
+  function processAiCastQueue() {
+    const next = aiCastQueueRef.current.shift();
+    if (!next) { aiCastBusyRef.current = false; return; }
+    aiCastBusyRef.current = true;
+    setAiCastOverlay(next);
+    setTimeout(() => {
+      setAiCastOverlay(null);
+      setTimeout(processAiCastQueue, 100);
+    }, 1800);
+  }
 
   // VFX: creature enters/leaves battlefield + Arena-like enter/exit animations
   const prevBfUidsRef = useRef<Set<string>>(new Set());
@@ -392,16 +497,7 @@ export function GameScreen() {
         setTimeout(() => VfxManager.play('buff', uid), 80);
       }
     }
-    if (newEntries.size > 0) {
-      setRecentlyEntered(s => new Set([...s, ...newEntries]));
-      setTimeout(() => {
-        setRecentlyEntered(s => {
-          const next = new Set(s);
-          for (const uid of newEntries) next.delete(uid);
-          return next;
-        });
-      }, 500);
-    }
+    // card-entering animation removed — WebView2 white GPU layer flash
 
     // Leaving battlefield — VFX + ghost fade-out
     const newGhosts: typeof ghosts = [];
@@ -496,6 +592,26 @@ export function GameScreen() {
     }
   }, [snap?.log?.length]); // eslint-disable-line
 
+  // ── Trigger toast notifications ──────────────────────────────────────────
+  useEffect(() => {
+    if (!snap || !slowTriggers) return;
+    const queue = snap.triggerToastQueue || [];
+    if (!queue.length) return;
+    const lastId = lastSeenTriggerIdRef.current;
+    const newToasts = queue.filter(t => t.id > lastId);
+    if (!newToasts.length) return;
+    lastSeenTriggerIdRef.current = newToasts[newToasts.length - 1].id;
+    // Show each new trigger toast sequentially (stagger by 2.8s each)
+    newToasts.slice(0, 3).forEach((toast, i) => {
+      setTimeout(() => {
+        setTriggerToastItems(prev => [...prev.slice(-2), toast]);
+        setTimeout(() => {
+          setTriggerToastItems(prev => prev.filter(t => t.id !== toast.id));
+        }, 2500);
+      }, i * 2800);
+    });
+  }, [snap?.triggerToastQueue?.length, slowTriggers]); // eslint-disable-line
+
   // ── Arena animations: phase glow + combat flash ────────────────────────
   useEffect(() => {
     if (!snap) return;
@@ -526,6 +642,40 @@ export function GameScreen() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [targeting]);
 
+  // ── Auto-set targeting arrow when entering post_modal_target mode ────────
+  useEffect(() => {
+    const wi = snap?.waitingForInput;
+    if (wi?.type === 'post_modal_target' && wi.playerId === 0) {
+      const gs = gsRef.current;
+      const pendingCard = gs?._pendingModalResolution?.card;
+      if (pendingCard?._uid) {
+        setTargeting({ cardUid: pendingCard._uid, card: pendingCard, _fromModal: true } as any);
+      }
+    } else {
+      // If we leave post_modal_target, clear any modal-set targeting arrow
+      setTargeting(prev => (prev && (prev as any)._fromModal ? null : prev));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap?.waitingForInput?.type]);
+
+  // ── Auto-set targeting arrow for etb_any_damage_target (Sonic Shrieker etc.) ─
+  useEffect(() => {
+    const wi = snap?.waitingForInput;
+    if (wi?.type === 'etb_any_damage_target' && wi.playerId === 0) {
+      const gs = gsRef.current;
+      const pending = gs?._pendingEtbAnyDamage;
+      if (pending?.sourceUid) {
+        const sourceCard = gs?.players[0]?.zones?.battlefield?.cards?.find((c: any) => c._uid === pending.sourceUid);
+        if (sourceCard) {
+          setTargeting({ cardUid: sourceCard._uid, card: sourceCard, _fromEtbDamage: true } as any);
+        }
+      }
+    } else {
+      setTargeting(prev => (prev && (prev as any)._fromEtbDamage ? null : prev));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap?.waitingForInput?.type]);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -537,7 +687,7 @@ export function GameScreen() {
           e.preventDefault();
           if (snap?.phase === 'mulligan') break; // Mulligan uses K/M keys, not Space
           if (targeting) { setTargeting(null); break; }
-          if (blockingWith) { setBlockingWith(null); break; }
+          if (blockingWith.length > 0) { setBlockingWith([]); break; }
           {
             // Block Space from skipping mandatory-input states
             const blockingInputTypes = ['discard', 'sacrifice', 'scry', 'surveil', 'search_library', 'modal', 'order_blockers'];
@@ -553,7 +703,7 @@ export function GameScreen() {
         case 'Escape':
           if (showHelpModal) { setShowHelpModal(false); break; }
           if (targeting) { setTargeting(null); break; }
-          if (blockingWith) { setBlockingWith(null); break; }
+          if (blockingWith.length > 0) { setBlockingWith([]); break; }
           if (graveyardOpen) { setGraveyardOpen(null); break; }
           if (exileOpen) { setExileOpen(null); break; }
           if (abilityModal) { setAbilityModal(null); break; }
@@ -616,10 +766,14 @@ export function GameScreen() {
           e.preventDefault();
           setShowStack(v => !v);
           break;
-        case 'Control':
+        case 'x': case 'X':
           // Full Control Mode toggle: pause at every phase like Arena Ctrl
           fullControlRef.current = !fullControlRef.current;
           setFullControl(v => !v);
+          break;
+        case 'z': case 'Z':
+          // Undo last land tap
+          actions.undoTapLand();
           break;
         case 'g': case 'G':
           // Toggle own graveyard
@@ -641,9 +795,20 @@ export function GameScreen() {
   // Modal spells (Choose one/two) should never enter targeting mode before the modal;
   // the chosen mode handles targeting during resolution.
   function isModalSpell(card: any): boolean {
+    // Siege-style enchantments (chooseOnETB): not spells per se but their oracle text
+    // contains "target" inside mode descriptions — must be excluded from targeting UI
+    const db = getPreprocessedEffects(card as any);
+    if ((db as any)?.modal?.chooseOnETB) return true;
+    // DB-registered modal spells: cast: [{type:'modal',...}] or old modal: {modes:[...]}
+    if ((db as any)?.modal?.modes) return true;
+    if (db?.cast && (db.cast as any[]).some((e: any) => e.type === 'modal')) return true;
+    // Oracle text heuristics for non-DB cards
     const text = (card?.oracle_text || '').trim().toLowerCase();
-    return text.startsWith('choose one') || text.startsWith('choose two') ||
-           text.startsWith('choose a mode') || /\n—\s*•/.test(card?.oracle_text || '');
+    // Normalize: strip leading cost-reduction text (e.g. "This spell costs ... \nChoose one")
+    const normalizedText = text.replace(/^this spell costs[^.]*\.\n?/, '').trimStart();
+    return normalizedText.startsWith('choose one') || normalizedText.startsWith('choose two') ||
+           normalizedText.startsWith('choose a mode') || /\n—\s*•/.test(card?.oracle_text || '') ||
+           /—\s*\n\s*•/.test(card?.oracle_text || '');
   }
 
   function spellNeedsTargeting(card: any): boolean {
@@ -656,6 +821,22 @@ export function GameScreen() {
     // even with no valid ETB targets (the trigger simply fizzles).
     // Exception: Aura enchantments with "Enchant X" that need a target on cast.
     if (typeLineLower.includes('creature') && !typeLineLower.includes('aura')) return false;
+    // Sagas never need targets at cast time — chapter effects are resolved during upkeep
+    if (typeLineLower.includes('saga')) return false;
+
+    // GY-return spells: targeting handled during resolution via GY overlay, not BF targeting
+    const db = getPreprocessedEffects(card as any);
+    if (db && db.cast && db.cast.length > 0 && db.cast.every((e: any) =>
+      e.type === 'return_from_graveyard' || e.type === 'draw' ||
+      e.type === 'gain_life' || e.type === 'scry' || e.type === 'surveil' ||
+      e.type === 'mill' || e.type === 'create_token' || e.type === 'counter_self' ||
+      e.type === 'reveal_hand' ||
+      (e.type === 'exile' && (e.target === 'opponent_hand_nonland' || e.target === 'opponent_hand')) ||
+      (e.type === 'counter' && e.target === 'own_creature' && e.optional)
+    )) {
+      return false;
+    }
+
     const isPermSpell = (card.type_line || '').match(/Artifact|Enchantment|Planeswalker|Land/);
     let text = (card.oracle_text || '').toLowerCase();
     if (isPermSpell) {
@@ -664,11 +845,32 @@ export function GameScreen() {
         return !/^\{[^}]+\}[^:]*:/.test(line.trim());
       }).join('\n');
     }
+
+    // Aura enchantments always need an enchant target on cast
+    if (typeLineLower.includes('aura') && text.includes('enchant ')) return true;
+    // Attacking/blocking creature targeting: valid only during combat, handle in getValidTargets
+    // Still show targeting UI but getValidTargets will restrict to combat creatures
     return text.includes('target creature') || text.includes('target player') ||
            text.includes('target opponent') || text.includes('target permanent') ||
            text.includes('target land') || text.includes('target artifact') ||
            text.includes('target enchantment') || text.includes('target planeswalker') ||
-           text.includes('target nonland') || text.includes('any target');
+           text.includes('target nonland') || text.includes('any target') ||
+           text.includes('target attacking') || text.includes('target blocking');
+  }
+
+  // Returns true if all targeting effects in the cast DB are optional (e.g. Feral Deathgorger omen)
+  // In that case, targeting UI should show a "No target" skip button
+  function spellHasOnlyOptionalTargets(card: any): boolean {
+    // "up to one target" in oracle text means targeting is optional
+    const oracleText = (card.oracle_text || '').toLowerCase();
+    if (oracleText.includes('up to one target')) return true;
+    const db = getPreprocessedEffects(card as any);
+    if (!db || !db.cast || db.cast.length === 0) return false;
+    const targetingEffects = db.cast.filter((e: any) =>
+      e.target && e.target !== 'self' &&
+      !['draw', 'gainLife', 'scry', 'surveil', 'mill', 'create_token', 'counter_self'].includes(e.type)
+    );
+    return targetingEffects.length > 0 && targetingEffects.every((e: any) => e.optional === true);
   }
 
   // Detect conditional extra cost when targeting a specific card
@@ -691,8 +893,28 @@ export function GameScreen() {
   //   A) "buff/double target creature you control ... fights target creature" (Dragonclaw Strike)
   //   B) "put a counter on target creature you control, then it deals damage to target creature" (Knockout Maneuver)
   //   C) "target creature you control deals damage equal to its power to target creature" (Piercing Exhale)
-  function getMultiTargetSteps(card: any): Array<{ side: 'own' | 'opponent'; prompt: string }> | null {
+  //   D) "return target spell or permanent... deals damage to any target" (Jeskai Revelation)
+  function getMultiTargetSteps(card: any): Array<{ side: 'own' | 'opponent' | 'any_permanent' | 'any_target'; prompt: string }> | null {
     const text = (card?.oracle_text || '').toLowerCase();
+
+    // Pattern E: Twin Bolt — 2 damage divided among one or two targets
+    if (text.includes('damage divided as you choose among one or two targets') ||
+        text.includes('2 damage divided') || card.name === 'Twin Bolt') {
+      return [
+        { side: 'any_target', prompt: 'Choose first target (creature or player)' },
+        { side: 'any_target', prompt: 'Choose second target (optional — can skip)', optional: true } as any
+      ];
+    }
+
+    // Pattern D: Jeskai Revelation — bounce any spell/permanent + damage any target
+    if (text.includes('return target') && (text.includes('spell or permanent') || text.includes('target permanent')) &&
+        text.includes('deals') && text.includes('damage') && (text.includes('any target') || text.includes('target creature'))) {
+      return [
+        { side: 'any_permanent', prompt: 'Choose a spell or permanent to return' },
+        { side: 'any_target', prompt: 'Choose a target for the damage' }
+      ];
+    }
+
     if (!text.includes('target creature you control')) return null;
 
     // Pattern A: ... then that creature fights target creature (Dragonclaw Strike)
@@ -727,8 +949,8 @@ export function GameScreen() {
   }
 
   // Build valid targets for current targeting spell
-  // stepFilter: if provided, restrict to 'own' or 'opponent' side only (for multi-step targeting)
-  function getValidTargets(card: any, stepFilter?: 'own' | 'opponent') {
+  // stepFilter: if provided, restrict valid targets for multi-step targeting
+  function getValidTargets(card: any, stepFilter?: 'own' | 'opponent' | 'any_permanent' | 'any_target') {
     if (!snap) return [];
     const text = (card?.oracle_text || '').toLowerCase();
     const targets: any[] = [];
@@ -752,7 +974,45 @@ export function GameScreen() {
       }
       return targets;
     }
+    // any_permanent: all permanents on both battlefields (for bounce/return effects)
+    if (stepFilter === 'any_permanent') {
+      [0, 1].forEach(pid => {
+        snap.players[pid].battlefield
+          .forEach((c: any) => targets.push({ type: 'permanent', uid: c._uid, player: pid, card: c }));
+      });
+      return targets;
+    }
+    // any_target: all creatures, planeswalkers on both sides (player clicks handled in handlePlayerTarget)
+    if (stepFilter === 'any_target') {
+      [0, 1].forEach(pid => {
+        snap.players[pid].battlefield
+          .filter((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Planeswalker'))
+          .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: pid, card: c }));
+      });
+      return targets; // Player targets handled separately via handlePlayerTarget
+    }
 
+    // Restrict to attacking/blocking creatures when oracle text specifies it
+    if (text.includes('attacking or blocking') || (text.includes('attacking') && text.includes('blocking') && text.includes('creature'))) {
+      const allBF = [...snap.players[0].battlefield, ...snap.players[1].battlefield];
+      allBF.forEach((c: any) => {
+        if (c.type_line?.includes('Creature') && (c._attacking || c._blocking)) {
+          const pid = snap.players[0].battlefield.includes(c) ? 0 : 1;
+          targets.push({ type: 'creature', uid: c._uid, player: pid, card: c });
+        }
+      });
+      return targets;
+    }
+
+    // Aura enchantments: "enchant creature" means we want any creature
+    if ((card?.type_line || '').toLowerCase().includes('aura') && text.includes('enchant creature')) {
+      [0, 1].forEach(pid => {
+        snap.players[pid].battlefield
+          .filter((c: any) => c.type_line?.includes('Creature'))
+          .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: pid, card: c }));
+      });
+      return targets;
+    }
     const wantsCreature = text.includes('target creature') || text.includes('target permanent') || text.includes('target nonland');
     // "target player" / "target opponent" / "player or planeswalker" are explicitly player-targeting.
     // Do NOT include generic 'damage'/'deals' here — that's too broad and wrongly targets players
@@ -819,8 +1079,71 @@ export function GameScreen() {
     if (!snap) return;
     const wi = snap.waitingForInput;
 
+    // ── post_modal_target: pick a creature/permanent after modal mode chosen ──
+    // Must be checked BEFORE the targeting block so modal target clicks aren't
+    // intercepted by the generic targeting handler.
+    if (wi?.type === 'post_modal_target' && wi.playerId === 0) {
+      const targetType = wi.targetType;
+      let isValid = false;
+      const tl = (card.type_line || '').toLowerCase();
+      const kws = ((card.keywords || []) as string[]).map(k => (k || '').toLowerCase());
+
+      if (targetType === 'creature' || targetType === 'any') {
+        isValid = tl.includes('creature');
+      } else if (targetType === 'own_creature') {
+        isValid = pid === 0 && tl.includes('creature');
+      } else if (targetType === 'own_nonlegendary_creature') {
+        isValid = pid === 0 && tl.includes('creature') && !tl.includes('legendary');
+      } else if (targetType === 'opponent_creature') {
+        isValid = pid === 1 && tl.includes('creature');
+      } else if (targetType === 'creature_or_planeswalker') {
+        isValid = tl.includes('creature') || tl.includes('planeswalker');
+      } else if (targetType === 'opponent_creature_or_planeswalker') {
+        isValid = pid === 1 && (tl.includes('creature') || tl.includes('planeswalker'));
+      } else if (targetType === 'creature_with_flying') {
+        isValid = tl.includes('creature') && (kws.includes('flying') || (card.oracle_text || '').toLowerCase().includes('flying'));
+      } else if (targetType === 'artifact') {
+        isValid = tl.includes('artifact');
+      } else if (targetType === 'enchantment') {
+        isValid = tl.includes('enchantment');
+      } else if (targetType === 'permanent') {
+        isValid = !tl.includes('instant') && !tl.includes('sorcery');
+      } else if (targetType === 'nonland_permanent') {
+        isValid = !tl.includes('land') && !tl.includes('instant') && !tl.includes('sorcery');
+      } else if (targetType === 'creature_power4+') {
+        const pow = parseInt(card.power || '0', 10);
+        isValid = tl.includes('creature') && pow >= 4;
+      } else if (targetType === 'artifact_or_enchantment' || targetType === 'opponent_artifact_or_enchantment') {
+        isValid = tl.includes('artifact') || tl.includes('enchantment');
+        if (targetType === 'opponent_artifact_or_enchantment') isValid = isValid && pid === 1;
+      } else if (targetType === 'noncreature_artifact') {
+        isValid = tl.includes('artifact') && !tl.includes('creature');
+      } else if (targetType === 'creature_or_artifact') {
+        isValid = tl.includes('creature') || tl.includes('artifact');
+      } else if (targetType === 'creature_or_enchantment') {
+        isValid = tl.includes('creature') || tl.includes('enchantment');
+      }
+
+      if (isValid) {
+        setTargeting(null); // clear the modal targeting arrow
+        actions.resolvePostModalTarget({ type: 'creature', uid: card._uid, player: pid });
+      }
+      return;
+    }
+
     // ── Targeting mode: clicking a creature/permanent to target it ──────────
     if (targeting) {
+      // ETB damage targeting (Sonic Shrieker etc.): arrow leads here, resolve directly
+      if ((targeting as any)._fromEtbDamage) {
+        if (wi?.type === 'etb_any_damage_target' && wi.playerId === 0) {
+          if (card.type_line?.includes('Creature')) {
+            actions.resolveETBDamageTarget({ type: 'creature', uid: card._uid, player: pid });
+            setTargeting(null);
+          }
+        }
+        return;
+      }
+
       // Multi-step targeting (e.g. Dragonclaw Strike: step 1 = own creature, step 2 = opp creature)
       if (targeting.steps && targeting.step) {
         const currentStep = targeting.steps[targeting.step - 1];
@@ -871,7 +1194,10 @@ export function GameScreen() {
         }
 
         showCastAnimation(targeting.card);
-        if (targeting.card._isAdventure) {
+        if (targeting.isHarmonize) {
+          actions.castHarmonize(targeting.cardUid, tgt, targeting.harmonizeTappedUid ?? undefined);
+          setHarmonizePending(null);
+        } else if (targeting.card._isAdventure) {
           actions.castAdventure(targeting.cardUid, tgt);
         } else {
           actions.castSpell(targeting.cardUid, tgt);
@@ -885,70 +1211,80 @@ export function GameScreen() {
     if (wi?.type === 'declare_blockers' && wi.playerId === 0) {
       const myBF = snap.players[0].battlefield;
       const oppBF = snap.players[1].battlefield;
-      const isMyCreature = myBF.some((c: any) => c._uid === card._uid) && !card._tapped && card.type_line?.includes('Creature');
+      const isMyCreature = myBF.some((c: any) => c._uid === card._uid) && !card._tapped && !card._cantBlockThisTurn && card.type_line?.includes('Creature');
       const isOppAttacker = oppBF.some((c: any) => c._uid === card._uid) && card._attacking;
 
-      if (isMyCreature && !blockingWith) {
-        // Step 1: select own creature to block with
-        // Check if this creature is already assigned as a blocker (blockers are keyed by attacker uid)
+      if (isMyCreature) {
+        // Toggle creature in/out of selected blockers (Arena-style gang-block)
         const blockers = gsRef.current?.combat?.blockers || {};
-        const alreadyBlocking = Object.values(blockers).some(
+        const alreadyAssigned = Object.values(blockers).some(
           (arr: any) => Array.isArray(arr) && arr.some((b: any) => b.uid === card._uid)
         );
-        if (alreadyBlocking) {
+        if (alreadyAssigned) {
+          // Already assigned — unassign it
           actions.unassignBlocker(card._uid);
+          setBlockingWith(prev => prev.filter(uid => uid !== card._uid));
+        } else if (blockingWith.includes(card._uid)) {
+          // Already selected — deselect it
+          setBlockingWith(prev => prev.filter(uid => uid !== card._uid));
         } else {
-          setBlockingWith(card._uid);
+          // Add to selected blockers
+          setBlockingWith(prev => [...prev, card._uid]);
         }
         return;
       }
-      if (isOppAttacker && blockingWith) {
-        // Step 2: click attacker to assign
-        actions.declareBlocker(blockingWith, card._uid);
-        setBlockingWith(null);
+      if (isOppAttacker && blockingWith.length > 0) {
+        // Click attacker to assign ALL selected blockers to it
+        // Only assign blockers that can legally block this attacker (flying/reach check)
+        const gs = gsRef.current;
+        const validBlockers = blockingWith.filter(bUid => {
+          const blocker = gs?.players[0].zones.battlefield.get(bUid);
+          if (!blocker) return false;
+          const attacker = gs?.players[1].zones.battlefield.get(card._uid);
+          if (!attacker) return false; // can't confirm attacker exists → deny block
+          // Check flying: attacker has flying, blocker needs flying or reach
+          const attackerKws = (attacker.keywords || []).map((k: any) => (k || '').toLowerCase());
+          const blockerKws = (blocker.keywords || []).map((k: any) => (k || '').toLowerCase());
+          const attackerText = (attacker.oracle_text || '').toLowerCase();
+          const blockerText = (blocker.oracle_text || '').toLowerCase();
+          const attackerFlying = attackerKws.includes('flying') || attackerText.includes('\nflying');
+          if (attackerFlying) {
+            const hasFlying = blockerKws.includes('flying') || blockerText.includes('\nflying');
+            const hasReach = blockerKws.includes('reach') || blockerText.includes('\nreach');
+            if (!hasFlying && !hasReach) return false;
+          }
+          return true;
+        });
+        if (validBlockers.length === 0) {
+          addToast('Essa criatura não pode bloquear esse atacante', 'warning');
+          setBlockingWith([]);
+          return;
+        }
+        for (const bUid of validBlockers) {
+          actions.declareBlocker(bUid, card._uid);
+        }
+        if (validBlockers.length < blockingWith.length) {
+          addToast('Algumas criaturas não podem bloquear (voar/alcance)', 'warning');
+        }
+        setBlockingWith([]);
         return;
       }
       // Cancel blocker selection if clicking elsewhere
-      setBlockingWith(null);
+      setBlockingWith([]);
+      return;
+    }
+
+    // ── etb_any_damage_target: pick a creature or player for ETB damage ──────
+    if (wi?.type === 'etb_any_damage_target' && wi.playerId === 0) {
+      if (card.type_line?.includes('Creature')) {
+        actions.resolveETBDamageTarget({ type: 'creature', uid: card._uid, player: pid });
+      }
       return;
     }
 
     // ── choose_target engine waiting (saga chapters) ──────────────────────
     if (wi?.type === 'choose_target') {
-      actions.resolveChooseTarget([{ type: 'creature', uid: card._uid, player: pid }]);
-      return;
-    }
-
-    // ── post_modal_target: pick a creature/permanent after modal mode chosen ──
-    if (wi?.type === 'post_modal_target' && wi.playerId === 0) {
-      const targetType = wi.targetType;
-      let isValid = false;
-      const tl = (card.type_line || '').toLowerCase();
-      const kws = ((card.keywords || []) as string[]).map(k => (k || '').toLowerCase());
-
-      if (targetType === 'creature' || targetType === 'any') {
-        isValid = tl.includes('creature');
-      } else if (targetType === 'own_creature') {
-        isValid = pid === 0 && tl.includes('creature');
-      } else if (targetType === 'own_nonlegendary_creature') {
-        isValid = pid === 0 && tl.includes('creature') && !tl.includes('legendary');
-      } else if (targetType === 'opponent_creature') {
-        isValid = pid === 1 && tl.includes('creature');
-      } else if (targetType === 'creature_with_flying') {
-        isValid = tl.includes('creature') && kws.includes('flying');
-      } else if (targetType === 'artifact') {
-        isValid = tl.includes('artifact');
-      } else if (targetType === 'enchantment') {
-        isValid = tl.includes('enchantment');
-      } else if (targetType === 'permanent') {
-        isValid = !tl.includes('instant') && !tl.includes('sorcery');
-      } else if (targetType === 'nonland_permanent') {
-        isValid = !tl.includes('land') && !tl.includes('instant') && !tl.includes('sorcery');
-      }
-
-      if (isValid) {
-        actions.resolvePostModalTarget({ type: 'creature', uid: card._uid, player: pid });
-      }
+      actions.resolveChooseTarget([{ type: 'permanent', uid: card._uid, player: pid }]);
       return;
     }
 
@@ -962,8 +1298,25 @@ export function GameScreen() {
 
     const inHand = snap.players[0].hand.some((c: any) => c._uid === card._uid);
     const inBF   = snap.players[0].battlefield.some((c: any) => c._uid === card._uid);
+    const inExiledPlayable = (snap.exiledPlayable?.[0] || []).some((c: any) => c._uid === card._uid);
     const isLand = card.type_line?.includes('Land');
-    const isInstant = card.type_line?.includes('Instant') || card.oracle_text?.toLowerCase().includes('flash');
+    // A card is "instant-speed" if it's an Instant, has flash, OR has a back/adventure face that's an Instant
+    const backFaceIsInstant = card.back_face?.type_line?.includes('Instant') ||
+      card.card_faces?.some((f: any) => f.type_line?.includes('Instant'));
+    const isInstant = card.type_line?.includes('Instant') ||
+      card.oracle_text?.toLowerCase().includes('flash') ||
+      backFaceIsInstant;
+
+    // Exiled playable cards (Breaching Dragonstorm, Riverwheel Sweep, etc.)
+    if (inExiledPlayable && isMainPhase) {
+      if (spellNeedsTargeting(card)) {
+        setTargeting({ cardUid: card._uid, card });
+      } else {
+        showCastAnimation(card);
+        actions.castSpell(card._uid);
+      }
+      return;
+    }
 
     if (inHand) {
       // Lands only in main phase
@@ -979,6 +1332,7 @@ export function GameScreen() {
       if (isStackPriority && !isInstant) return;
 
       // If card has adventure/omen mode (layout='adventure', data in back_face), show choice modal
+      // During stack_priority, only show the adventure modal (user can pick the instant face)
       if (card.layout === 'adventure' && card.back_face?.name) {
         setAdventureModal({ card });
         return;
@@ -992,29 +1346,42 @@ export function GameScreen() {
                               cardText.includes('counter target sorcery');
       if (isCounterSpell) {
         const gs = gsRef.current;
+        // Check both stack.items AND _pendingCastOnStack for the target spell
         const stackItems: any[] = gs?.stack?.items || [];
         const oppSpells = stackItems.filter((item: any) => item.controller !== 0);
-        if (oppSpells.length === 0) return; // Nothing to counter
-        const topOppSpell = oppSpells[oppSpells.length - 1];
+        const pending = gs?._pendingCastOnStack;
+
+        let targetCard: any = null;
+        if (oppSpells.length > 0) {
+          targetCard = oppSpells[oppSpells.length - 1].card;
+        } else if (pending?.card && pending.playerId !== 0) {
+          targetCard = pending.card;
+        }
+
+        if (!targetCard) {
+          addToast('Nenhum spell do oponente na stack para anular', 'warning');
+          return;
+        }
         showCastAnimation(card);
-        actions.castSpell(card._uid, [topOppSpell.card]);
+        actions.castSpell(card._uid, [targetCard]);
         return;
       }
 
       // Detect cards that need two sequential targets (e.g. Dragonclaw Strike: buff own then fight opp)
       const multiSteps = getMultiTargetSteps(card);
       if (spellNeedsTargeting(card)) {
+        const optionalOnly = spellHasOnlyOptionalTargets(card);
         if (multiSteps) {
           setTargeting({ cardUid: card._uid, card, step: 1, steps: multiSteps, collectedTargets: [] });
         } else {
-          setTargeting({ cardUid: card._uid, card });
+          setTargeting({ cardUid: card._uid, card, optionalTarget: optionalOnly });
         }
       } else {
         showCastAnimation(card);
         actions.castSpell(card._uid);
       }
     } else if (inBF) {
-      if (phase === 'combat_attackers' && snap.activePlayer === 0) {
+      if (phase === 'combat_attackers' && snap.activePlayer === 0 && card.type_line?.includes('Creature')) {
         // If creature is already attacking, toggle it off
         if (card._attacking) {
           actions.declareAttacker(card._uid);
@@ -1039,11 +1406,24 @@ export function GameScreen() {
           // Sacrifice the fetchland and show basic land search overlay
           actions.activateFetchLand(card._uid);
         } else {
-          actions.tapLand(card._uid);
-          spawnManaFloat(card);
+          // Check if this land has non-mana activated abilities (e.g., Cori Mountain Monastery {3R}: exile top)
+          import('../engine/cards').then(({ getActivatedAbilities, getManaAbilities }) => {
+            const allAbilities = getActivatedAbilities(card);
+            const manaAbilities = getManaAbilities(card);
+            const hasNonMana = allAbilities.some(a => !manaAbilities.includes(a));
+            if (hasNonMana && canPlaySpells) {
+              setAbilityModal({ card, abilities: allAbilities });
+            } else {
+              actions.tapLand(card._uid);
+              spawnManaFloat(card);
+            }
+          }).catch(() => {
+            actions.tapLand(card._uid);
+            spawnManaFloat(card);
+          });
         }
-      } else if (!isLand && (isMainPhase || isInstantPriority) && snap.activePlayer === 0) {
-        // Single-click opens ability/equip modal for non-land permanents in main phase or instant priority
+      } else if (!isLand && canPlaySpells) {
+        // Single-click opens ability/equip modal for non-land permanents in main phase or any priority window
         handleDoubleClick(card);
       }
     }
@@ -1053,12 +1433,30 @@ export function GameScreen() {
   function handlePlayerTarget(pid: number) {
     if (!snap) return;
     if (targeting) {
+      // Multi-step targeting: handle player as a target in any_target steps
+      if (targeting.steps && targeting.step) {
+        const currentStep = targeting.steps[targeting.step - 1];
+        if (currentStep.side === 'any_target') {
+          const collected = [...(targeting.collectedTargets || []), { type: 'player', player: pid }];
+          if (targeting.step < targeting.steps.length) {
+            setTargeting({ ...targeting, step: targeting.step + 1, collectedTargets: collected });
+          } else {
+            showCastAnimation(targeting.card);
+            actions.castSpell(targeting.cardUid, collected);
+            setTargeting(null);
+          }
+          return;
+        }
+      }
       const t = getValidTargets(targeting.card);
       const hit = t.find(x => x.type === 'player' && x.player === pid);
       if (hit) {
         const tgt = [{ type: 'player', player: pid }];
         showCastAnimation(targeting.card);
-        if (targeting.card._isAdventure) {
+        if (targeting.isHarmonize) {
+          actions.castHarmonize(targeting.cardUid, tgt, targeting.harmonizeTappedUid ?? undefined);
+          setHarmonizePending(null);
+        } else if (targeting.card._isAdventure) {
           actions.castAdventure(targeting.cardUid, tgt);
         } else {
           actions.castSpell(targeting.cardUid, tgt);
@@ -1070,10 +1468,15 @@ export function GameScreen() {
     if (snap.waitingForInput?.type === 'choose_target') {
       actions.resolveChooseTarget([{ type: 'player', player: pid }]);
     }
+    // etb_any_damage_target: player targeting for ETB damage
+    if (snap.waitingForInput?.type === 'etb_any_damage_target' && snap.waitingForInput.playerId === 0) {
+      actions.resolveETBDamageTarget({ type: 'player', player: pid });
+    }
     // post_modal_target: allow player targeting for damage/drain-type modes
     if (snap.waitingForInput?.type === 'post_modal_target' && snap.waitingForInput.playerId === 0) {
       const targetType = snap.waitingForInput.targetType;
       if (targetType === 'any' || targetType === 'player' || targetType === 'opponent') {
+        setTargeting(null); // clear modal targeting arrow
         actions.resolvePostModalTarget({ type: 'player', player: pid });
       }
     }
@@ -1098,7 +1501,10 @@ export function GameScreen() {
       const locked = gs.players?.some((p: any) =>
         p.zones.battlefield.cards.some((c: any) => c._preventActivatedAbilities)
       );
-      if (locked) return; // silently block — UI shows no modal
+      if (locked) {
+        addToast('Habilidades ativadas estão bloqueadas (Clarion Conqueror)', 'warning');
+        return;
+      }
     }
 
     // Equipment: show creature picker to attach to
@@ -1122,13 +1528,13 @@ export function GameScreen() {
   }
 
   // Handle activating an ability from the ability modal
-  function handleActivateAbility(cardUid: string, abilityIdx: number, card: any) {
+  function handleActivateAbility(cardUid: string, abilityIdx: number, card: any, xValue?: number) {
     const isPlaneswalker = card.type_line?.includes('Planeswalker');
     if (isPlaneswalker) {
       actions.activateLoyaltyAbility(cardUid, abilityIdx);
     } else {
       // Use battlefield ability activation (not graveyard)
-      actions.activateBattlefieldAbility(cardUid, abilityIdx);
+      actions.activateBattlefieldAbility(cardUid, abilityIdx, xValue);
     }
   }
 
@@ -1181,7 +1587,13 @@ export function GameScreen() {
   const isMainPhaseHuman = activePlayer === 0 && (phase === 'main1' || phase === 'main2');
   const wi = snap.waitingForInput;
   const isInstantPriorityHuman = wi?.playerId === 0 && (wi?.type === 'instant_priority' || wi?.type === 'stack_priority');
-  const humanHasPriority = isMainPhaseHuman || isInstantPriorityHuman || (wi?.playerId === 0);
+  // humanHasPriority: only show playable glow when spells can actually be cast
+  // (main phase or instant/stack priority window — NOT during declare_blockers, scry, discard, etc.)
+  const humanHasPriority = isMainPhaseHuman || isInstantPriorityHuman;
+  // humanIsActive: broader flag — any state where the human must interact (used to dim unplayable cards)
+  // This includes declare_attackers, declare_blockers, scry, etc. so hand cards always appear dimmed
+  // instead of neutral (neutral looks "playable" to the user)
+  const humanIsActive = isMainPhaseHuman || wi?.playerId === 0;
   const landPlayedThisTurn = !!(gsRef.current?.landPlayedThisTurn);
   // Count untapped lands on battlefield to estimate auto-tap mana
   const untappedLandCards = p0.battlefield.filter((c: any) =>
@@ -1208,27 +1620,26 @@ export function GameScreen() {
     return false;
   }
 
-  // During main phase, use the engine's getPlayableCards (via humanPlayableUids in snapshot)
-  // so cost reductions (Bell-Ringer, etc.) are reflected correctly.
-  // During instant/stack priority, fall back to local CMC computation since that
-  // window is narrower and getPlayableCards isn't gated by phase there.
+  // Always use the engine's getPlayableCards result (via humanPlayableUids in snapshot).
+  // It handles ALL conditions: target validation, behold requirements, conditional flash,
+  // attacking/blocking targets, cost reductions (Bell-Ringer, etc.), phase gating.
+  const engineDataAvailable = (snap as any).humanPlayableUids !== undefined;
   const enginePlayableUids: Set<string> = (snap as any).humanPlayableUids || new Set();
 
   const playableSet = new Set<string>(
     humanHasPriority
       ? p0.hand
           .filter((c: any) => {
+            // Prefer engine result — handles ALL edge cases correctly
+            if (engineDataAvailable) return enginePlayableUids.has(c._uid);
+            // Fallback if engine hasn't computed (should not normally happen)
             const isLand = (c.type_line || '').toLowerCase().includes('land');
             if (isInstantPriorityHuman) {
-              // During combat / stack priority: only instants and flash cards are playable
               if (!cardIsInstantSpeed(c)) return false;
               if ((c.cmc ?? 0) > totalAvailableMana) return false;
               const cost = c.mana_cost || '';
               return !cost || canPay(colorPool as ManaPool, cost, c.cmc ?? 0);
             }
-            // Main phase: defer to engine's getPlayableCards for accuracy
-            if (enginePlayableUids.size > 0) return enginePlayableUids.has(c._uid);
-            // Fallback if engine result unavailable
             if (isLand) return !landPlayedThisTurn;
             const cost = c.mana_cost || '';
             const mainAffordable = (c.cmc ?? 0) <= totalAvailableMana && (!cost || canPay(colorPool as ManaPool, cost, c.cmc ?? 0));
@@ -1266,12 +1677,44 @@ export function GameScreen() {
   // ── Mana autopay preview: compute which lands would be tapped for hovered card ──
   // Pure computation based on hand card cost vs available lands + pool.
   const autoTapPreviewUids = (() => {
-    if (!hoveredHandCard || !isMainPhaseHuman) return new Set<string>();
-    const card = p0.hand.find((c: any) => c._uid === hoveredHandCard);
-    if (!card || (card.type_line || '').toLowerCase().includes('land')) return new Set<string>();
+    const wiType = snap?.waitingForInput?.type || '';
+    if (!isMainPhaseHuman && !wiType.includes('priority')) return new Set<string>();
 
-    const cost = card.mana_cost || '';
-    const cmc = card._effectiveCmc ?? card.cmc ?? 0;
+    let cost = '';
+    let cmc = 0;
+
+    if (hoveredHandCard) {
+      const card = p0.hand.find((c: any) => c._uid === hoveredHandCard);
+      if (!card || (card.type_line || '').toLowerCase().includes('land')) return new Set<string>();
+      cost = card.mana_cost || '';
+      cmc = card._effectiveCmc ?? card.cmc ?? 0;
+    } else if (hoveredBfCard) {
+      // For battlefield cards with activated abilities, preview the cheapest ability cost
+      const card = p0.battlefield.find((c: any) => c._uid === hoveredBfCard);
+      if (!card) return new Set<string>();
+      const db = getPreprocessedEffects(card as any) || {};
+      const abilities = db.activated || [];
+      if (abilities.length === 0) return new Set<string>();
+      // Find cheapest non-mana ability cost
+      let cheapestCost = '';
+      let cheapestCmc = Infinity;
+      for (const ab of abilities) {
+        const abCostStr = typeof ab.cost === 'string' ? ab.cost : (ab.cost?.mana || '');
+        const abCmc = (abCostStr.match(/\{[^}]+\}/g) || []).reduce((sum: number, s: string) => {
+          const inner = s.replace(/[{}]/g, '');
+          if (/^\d+$/.test(inner)) return sum + parseInt(inner);
+          if (/^[WUBRG]$/.test(inner)) return sum + 1;
+          return sum;
+        }, 0);
+        if (abCmc > 0 && abCmc < cheapestCmc) { cheapestCost = abCostStr; cheapestCmc = abCmc; }
+      }
+      if (!cheapestCost) return new Set<string>();
+      cost = cheapestCost;
+      cmc = cheapestCmc;
+    } else {
+      return new Set<string>();
+    }
+
     if (!cost || cmc === 0) return new Set<string>();
 
     // Build what's already in the pool
@@ -1322,11 +1765,11 @@ export function GameScreen() {
 
   // ── Game over ────────────────────────────────────────────────────────────────
 
-  if (winner !== null) {
+  if (displayWinner !== null) {
     return (
       <div className="game-over animate-fade-in">
         <div className="game-over-card glass">
-          <h2 className={winner === 0 ? 'win' : 'lose'}>{winner === 0 ? 'You win! 🎉' : 'AI wins!'}</h2>
+          <h2 className={displayWinner === 0 ? 'win' : 'lose'}>{displayWinner === 0 ? 'You win! 🎉' : 'AI wins!'}</h2>
           <p>Turn {turn} · {p0.life} vs {p1.life} life</p>
           <div className="game-over-actions">
             <button className="btn btn-gold" onClick={() => actions.restartGame()}>Play Again</button>
@@ -1354,7 +1797,7 @@ export function GameScreen() {
       }
       return (
         <div className="game-screen animate-fade-in">
-          <div className="game-mulligan-overlay glass">
+          <div className="game-mulligan-overlay">
             <h2>Put {bottomCount} Card{bottomCount !== 1 ? 's' : ''} on Bottom</h2>
             <p className="text-muted" style={{ marginBottom: 8 }}>
               Select {bottomCount} to put on the bottom ({mulliganBottomSelected.length}/{bottomCount})
@@ -1367,7 +1810,7 @@ export function GameScreen() {
                   onClick={() => toggleMulliganCard(card._uid)}
                   style={{ cursor: 'pointer' }}
                 >
-                  <CardImage card={card} size="small" />
+                  <CardImage card={card} size="large" />
                   {mulliganBottomSelected.includes(card._uid) && (
                     <div className="mulligan-bottom-badge">⬇ Bottom</div>
                   )}
@@ -1397,12 +1840,12 @@ export function GameScreen() {
     // Phase 1: view hand + keep/mulligan
     return (
       <div className="game-screen animate-fade-in">
-        <div className="game-mulligan-overlay glass">
+        <div className="game-mulligan-overlay">
           <h2>Opening Hand{mulligansTaken > 0 ? ` (Mulligan #${mulligansTaken})` : ''}</h2>
           <div className="game-mulligan-hand">
             {p0.hand.map((card: any) => (
               <div key={card._uid} className="game-hand-card">
-                <CardImage card={card} size="small" />
+                <CardImage card={card} size="large" />
               </div>
             ))}
           </div>
@@ -1429,7 +1872,16 @@ export function GameScreen() {
   // ── Main game UI ─────────────────────────────────────────────────────────────
 
   return (
-    <div className="game-screen animate-fade-in">
+    <div className={`game-screen animate-fade-in${overlayMinimized ? ' overlay-minimized' : ''}`}>
+
+      {/* ── Overlay minimize/restore floating button ── */}
+      {overlayMinimized && (
+        <button
+          className="overlay-restore-btn"
+          onClick={() => setOverlayMinimized(false)}
+          title="Voltar ao modal"
+        >↩ Voltar ao Modal</button>
+      )}
 
       {/* ── Opponent bar ── */}
       <div
@@ -1482,7 +1934,7 @@ export function GameScreen() {
       <div className="game-opp-bf">
         {/* ── Zone cluster do oponente: Grimório + Cemitério ── */}
         {(() => {
-          const CARD_BACK = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg';
+          const CARD_BACK = sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg';
           const gyCards: any[] = p1.graveyard || [];
           const topGyCard = gyCards.length > 0 ? gyCards[gyCards.length - 1] : null;
           return (
@@ -1528,9 +1980,9 @@ export function GameScreen() {
           : (() => {
               // Sort: regular permanents first, planeswalkers last (right side)
               const nonLands = p1.battlefield
-                .filter((c: any) => !c.type_line?.includes('Land'))
+                .filter((c: any) => !c.type_line?.includes('Land') && !c._attachedTo)
                 .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
-              const lands = p1.battlefield.filter((c: any) => c.type_line?.includes('Land'));
+              const lands = p1.battlefield.filter((c: any) => c.type_line?.includes('Land') && !c._attachedTo);
               // Build uid→card map for resolving attachment UIDs
               const p1BfMap = new Map(p1.battlefield.map((c: any) => [c._uid, c]));
               const makeCard = (card: any) => {
@@ -1538,8 +1990,9 @@ export function GameScreen() {
                 const validTgts = targeting ? getValidTargets(targeting.card, _stepFilter) : [];
                 const isTargetable = !!(targeting &&
                   validTgts.some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
+                const isNotTargetable = !!(targeting && !isTargetable && validTgts.length > 0);
                 const isBlockingTarget = !!(snap.waitingForInput?.type === 'declare_blockers' &&
-                  blockingWith && card._attacking);
+                  blockingWith.length > 0 && card._attacking);
                 // Show "being attacked" glow on a PW that is currently targeted by an attacker
                 const isAttackTarget = !!(card.type_line?.includes('Planeswalker') &&
                   combat.attackers.some((a: any) => a.attackTarget === card._uid));
@@ -1555,9 +2008,11 @@ export function GameScreen() {
                     isAttacking={combat.attackers.some((a: any) => (typeof a === 'string' ? a : a.uid) === card._uid)}
                     isAttacker={false}
                     isTargetable={isTargetable || isAttackTarget}
+                    isNotTargetable={isNotTargetable && !isAttackTarget}
                     isBlockingTarget={isBlockingTarget}
                     isRecentlyEntered={recentlyEntered.has(card._uid)}
                     isTriggerPulsing={triggerPulseUids.has(card._uid)}
+                    cantBlock={!!card._cantBlockThisTurn}
                     overrideArtUrl={getLandArtUrl(card)}
                     attachmentCards={attachmentCards}
                     exiledCards={exiledCards}
@@ -1580,15 +2035,52 @@ export function GameScreen() {
       <div className="game-center-strip">
         {/* Phase strip */}
         <div className="game-phase-strip">
-          {PHASES.map((p, i) => (
-            <div
-              key={p.key}
-              className={`game-phase-step ${i === phaseIdx ? 'active' : ''} ${i < phaseIdx ? 'done' : ''}`}
-              title={p.tip}
-            >
-              {p.label}
-            </div>
-          ))}
+          {/* My Turn Row */}
+          {(() => {
+            const displayPhases = PHASES.filter(p => !['mulligan', 'untap', 'cleanup'].includes(p.key));
+            return (
+              <>
+                <div className="phase-turn-row">
+                  <div className={`phase-turn-label opp-turn${activePlayer === 1 ? ' active-turn' : ''}`}>OPP</div>
+                  {displayPhases.map((p) => {
+                    const fullIdx = PHASES.findIndex(x => x.key === p.key);
+                    const isActive = activePlayer === 1 && p.key === phase;
+                    const isDone = activePlayer === 1 && phaseIdx > fullIdx;
+                    const isStopped = oppStopPhases.has(p.key);
+                    return (
+                      <div key={`opp-${p.key}`} className={`game-phase-step ${isActive ? 'active' : ''} ${isDone ? 'done' : ''}`} title={p.tip}>
+                        {p.label}
+                        <span
+                          className={`phase-stop-btn ${isStopped ? 'active' : ''}`}
+                          title={isStopped ? 'Remover pausa (turno oponente)' : 'Pausar aqui (turno oponente)'}
+                          onClick={e => { e.stopPropagation(); toggleOppStopPhase(p.key); }}
+                        >⏸</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="phase-turn-row">
+                  <div className={`phase-turn-label my-turn${activePlayer === 0 ? ' active-turn' : ''}`}>EU</div>
+                  {displayPhases.map((p) => {
+                    const fullIdx = PHASES.findIndex(x => x.key === p.key);
+                    const isActive = activePlayer === 0 && p.key === phase;
+                    const isDone = activePlayer === 0 && phaseIdx > fullIdx;
+                    const isStopped = myStopPhases.has(p.key);
+                    return (
+                      <div key={`my-${p.key}`} className={`game-phase-step ${isActive ? 'active' : ''} ${isDone ? 'done' : ''}`} title={p.tip}>
+                        {p.label}
+                        <span
+                          className={`phase-stop-btn ${isStopped ? 'active' : ''}`}
+                          title={isStopped ? 'Remover pausa (meu turno)' : 'Pausar aqui (meu turno)'}
+                          onClick={e => { e.stopPropagation(); toggleMyStopPhase(p.key); }}
+                        >⏸</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            );
+          })()}
         </div>
 
         {/* Turn/Stack info */}
@@ -1615,6 +2107,13 @@ export function GameScreen() {
             </div>
           )}
           <div className="game-actions">
+            {/* Trigger notification toggle */}
+            <button
+              className={`btn btn-sm ${slowTriggers ? 'btn-gold' : 'btn-muted'}`}
+              style={{ fontSize: 11, padding: '1px 7px' }}
+              onClick={() => setSlowTriggers(v => !v)}
+              title={slowTriggers ? 'Notificações de trigger: LIGADAS (clique para desligar)' : 'Notificações de trigger: DESLIGADAS (clique para ligar)'}
+            >{slowTriggers ? '🔔 Triggers' : '🔕 Auto'}</button>
             {/* Keyboard help button */}
             <button
               className="btn btn-muted btn-sm"
@@ -1622,6 +2121,13 @@ export function GameScreen() {
               onClick={() => setShowHelpModal(true)}
               title="Atalhos de teclado (?)"
             >?</button>
+            {/* Restart button */}
+            <button
+              className="btn btn-muted btn-sm"
+              style={{ fontSize: 11, padding: '1px 7px', opacity: 0.7 }}
+              onClick={() => { if (confirm('Reiniciar partida com o mesmo deck?')) actions.restartGame(); }}
+              title="Reiniciar com o mesmo deck"
+            >↩ Restart</button>
             {/* AI turn indicator */}
             {activePlayer === 1 && !snap.waitingForInput && (
               <span className="game-ai-thinking">⚙ Opponent playing...</span>
@@ -1683,7 +2189,7 @@ export function GameScreen() {
               </button>
             )}
 
-            <button className={`btn btn-muted ${showLog ? 'active' : ''}`} onClick={() => setShowLog(v => !v)}>
+            <button className={`btn btn-muted ${showLog ? 'active' : ''}`} onClick={() => setShowLog(v => !v)} style={{ position: 'relative', zIndex: 70 }}>
               Log (L)
             </button>
           </div>
@@ -1716,73 +2222,50 @@ export function GameScreen() {
       {/* ── My battlefield ── */}
       <div
         className={`game-my-bf playmat-${playmat}`}
-        style={playmat === 'custom' && playmatArt ? {
-          backgroundImage: `linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('${playmatArt}')`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-        } : undefined}
+        style={
+          playmat === 'custom' && playmatArt ? {
+            backgroundImage: `linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), url('${playmatArt}')`,
+            backgroundSize: playmatSize > 0 ? `${playmatSize}%` : 'cover',
+            backgroundPosition: playmatPosition || '50% 50%',
+            backgroundRepeat: 'no-repeat',
+            backgroundColor: '#000',
+          } : playmat !== 'default' ? {
+            backgroundSize: playmatSize > 0 ? `${playmatSize}%` : 'cover',
+            backgroundPosition: playmatPosition || '50% 50%',
+            backgroundRepeat: 'no-repeat',
+            backgroundColor: '#000',
+          } : undefined
+        }
       >
-        {/* ── Zone cluster: Cemitério + Grimório ── */}
-        {(() => {
-          const CARD_BACK = sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg';
-          const gyCards: any[] = p0.graveyard || [];
-          const topGyCard = gyCards.length > 0 ? gyCards[gyCards.length - 1] : null;
-          return (
-            <div className="zone-cluster">
-              {/* Cemitério — última carta face-up, clicável */}
-              <div
-                className="gy-zone-visual"
-                onClick={() => setGraveyardOpen({ pid: 0 })}
-                title={`Cemitério: ${gyCards.length} carta${gyCards.length !== 1 ? 's' : ''}`}
-              >
-                {topGyCard ? (
-                  <>
-                    <img
-                      className="gy-zone-card"
-                      src={topGyCard.image_normal || topGyCard.image_small}
-                      alt={topGyCard.name}
-                      onError={e => { (e.currentTarget as HTMLImageElement).src = CARD_BACK; }}
-                    />
-                    {gyCards.length > 1 && (
-                      <div className="gy-zone-stack-hint" />
-                    )}
-                    <span className="zone-count-badge">{gyCards.length}</span>
-                  </>
-                ) : (
-                  <div className="gy-zone-empty">
-                    <span className="gy-zone-empty-icon">☠</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Grimório — pilha face-down com escudo */}
-              <div className="library-zone-visual" title={`Grimório: ${p0.libraryCount} cartas`}>
-                <div className="library-card-stack">
-                  <img className="lib-card lib-card-3" src={CARD_BACK} alt="deck" />
-                  <img className="lib-card lib-card-2" src={CARD_BACK} alt="deck" />
-                  <img className="lib-card lib-card-1" src={CARD_BACK} alt="deck" />
-                </div>
-                <span className="zone-count-badge">{p0.libraryCount}</span>
-              </div>
-            </div>
-          );
-        })()}
+        {/* Battlefield contents only (zone cluster moved to bottom row) */}
 
         {p0.battlefield.length === 0
           ? <span className="game-bf-empty">Your battlefield</span>
           : (() => {
               const nonLands = p0.battlefield
-                .filter((c: any) => !c.type_line?.includes('Land'))
+                .filter((c: any) => !c.type_line?.includes('Land') && !c._attachedTo)
                 .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
-              const lands = p0.battlefield.filter((c: any) => c.type_line?.includes('Land'));
+              const lands = p0.battlefield.filter((c: any) => c.type_line?.includes('Land') && !c._attachedTo);
               // Build uid→card map for resolving attachment UIDs
               const p0BfMap = new Map(p0.battlefield.map((c: any) => [c._uid, c]));
+              // Compute cumulative toughness for Betor tracker
+              const hasBetorOnBf = p0.battlefield.some((c: any) => (c.name || '').toLowerCase() === 'betor, kin to all');
+              const myTotalToughness = hasBetorOnBf
+                ? p0.battlefield.filter((c: any) => c.type_line?.includes('Creature')).reduce((sum: number, c: any) => {
+                    const base = parseInt(c.toughness);
+                    if (isNaN(base)) return sum;
+                    const mod = (c._counters?.['+1/+1'] ?? 0) - (c._counters?.['-1/-1'] ?? 0);
+                    return sum + base + (c._toughnessMod ?? 0) + mod;
+                  }, 0)
+                : undefined;
               const makeCard = (card: any) => {
                 const _stepFilter2 = targeting?.steps && targeting.step ? targeting.steps[targeting.step - 1]?.side : undefined;
+                const _ownValidTgts2 = targeting ? getValidTargets(targeting.card, _stepFilter2) : [];
                 const isTargetable = !!(targeting &&
-                  getValidTargets(targeting.card, _stepFilter2).some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
+                  _ownValidTgts2.some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
+                const isNotTargetable2 = !!(targeting && !isTargetable && _ownValidTgts2.length > 0);
                 const isAssignedBlocker = !!(card._blocking);
-                const isSelectedBlocker = blockingWith === card._uid;
+                const isSelectedBlocker = blockingWith.includes(card._uid);
                 const canActivatePW = !!(
                   card.type_line?.includes('Planeswalker') &&
                   isMainPhaseHuman &&
@@ -1793,13 +2276,15 @@ export function GameScreen() {
                   .map((uid: string) => p0BfMap.get(uid)).filter(Boolean);
                 // Cards exiled by this permanent (e.g. Banishing Light)
                 const exiledCards = card._exiledCards || [];
+                const isBetor = (card.name || '').toLowerCase() === 'betor, kin to all';
                 return (
+                  <div key={card._uid} onMouseEnter={() => setHoveredBfCard(card._uid)} onMouseLeave={() => setHoveredBfCard(null)}>
                   <BattlefieldCard
-                    key={card._uid}
                     card={card}
                     isAttacking={combat.attackers.some((a: any) => (typeof a === 'string' ? a : a.uid) === card._uid)}
                     isAttacker
                     isTargetable={isTargetable}
+                    isNotTargetable={isNotTargetable2}
                     isAssignedBlocker={isAssignedBlocker}
                     isSelectedBlocker={isSelectedBlocker}
                     canActivate={canActivatePW}
@@ -1807,12 +2292,15 @@ export function GameScreen() {
                     isAutoTapPreview={autoTapPreviewUids.has(card._uid)}
                     isRecentlyEntered={recentlyEntered.has(card._uid)}
                     isTriggerPulsing={triggerPulseUids.has(card._uid)}
+                    cantBlock={!!card._cantBlockThisTurn}
                     attachmentCards={attachmentCards}
                     exiledCards={exiledCards}
+                    betorToughnessTotal={isBetor ? myTotalToughness : undefined}
                     onClick={c => handleCardClick(c, 0)}
                     onDoubleClick={c => handleDoubleClick(c)}
                     onRightClick={c => setZoom(c)}
                   />
+                  </div>
                 );
               };
               return (
@@ -1845,7 +2333,7 @@ export function GameScreen() {
           >✨ Ex: {p0.exile?.length || 0}</span>
           {activePlayer === 0 && <div className="game-active-indicator mine">Your turn</div>}
         </div>
-        {/* Hand + Harmonize sidebar in the same row */}
+        {/* Hand + sidebars in the same row */}
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
           <div className="game-hand">
             {p0.hand.map((card: any) => {
@@ -1861,7 +2349,7 @@ export function GameScreen() {
                 <div
                   key={card._uid}
                   data-uid={card._uid}
-                  className={`game-hand-card ${isPlayable ? 'hand-playable' : humanHasPriority ? 'hand-unplayable' : ''} ${newHandUids.has(card._uid) ? 'hand-draw-in' : ''}`}
+                  className={`game-hand-card ${isPlayable ? 'hand-playable' : 'hand-unplayable'} ${newHandUids.has(card._uid) ? 'hand-draw-in' : ''}`}
                   onClick={() => handleCardClick(card, 0)}
                   onContextMenu={e => { e.preventDefault(); setZoom(card); }}
                   onMouseEnter={() => setHoveredHandCard(card._uid)}
@@ -1902,7 +2390,7 @@ export function GameScreen() {
               );
             })}
           </div>
-          {/* ── Harmonize sidebar ── (beside hand, visible during main phase) */}
+          {/* ── Harmonize sidebar ── (left of hand, visible during main phase) */}
           {(phase === 'main1' || phase === 'main2') && activePlayer === 0 && (() => {
             const harmonizeCards = p0.graveyard.filter((c: any) => {
               const text = (c.oracle_text || '').toLowerCase();
@@ -1911,23 +2399,187 @@ export function GameScreen() {
             if (harmonizeCards.length === 0) return null;
             return (
               <div style={{
-                display: 'flex', flexDirection: 'column', gap: '4px',
-                padding: '4px 6px', borderLeft: '1px solid rgba(78,205,196,0.4)',
-                overflowY: 'auto', minWidth: '72px', maxWidth: '100px',
-                background: 'rgba(0,0,0,0.25)',
+                order: 2,
+                display: 'flex', flexDirection: 'row', gap: '6px',
+                padding: '6px 8px', alignItems: 'center', flexShrink: 0,
+                borderLeft: '2px solid rgba(255,255,255,0.15)',
               }}>
-                <span style={{ fontSize: '9px', fontWeight: 700, color: '#4ecdc4', whiteSpace: 'nowrap', textAlign: 'center' }}>⚗ Harmonize</span>
-                {harmonizeCards.map((card: any) => (
-                  <div
-                    key={card._uid}
-                    className={`harmonize-card ${card._harmonizeCanCast !== false ? 'can-cast' : 'no-mana'}`}
-                    onClick={() => actions.castHarmonize(card._uid)}
-                    style={{ width: '64px' }}
-                  >
-                    <CardImage card={card} size="small" />
-                    <div className="harmonize-card-name">{card.name}</div>
+                {harmonizeCards.map((card: any) => {
+                  const canCast = card._harmonizeCanCast !== false;
+                  const hCost = card._harmonizeCost || '';
+                  return (
+                    <div
+                      key={card._uid}
+                      onClick={() => {
+                        if (!canCast) return;
+                        // Check for untapped creatures — offer creature selection for discount
+                        const untappedCreatures = (snap.players[0].battlefield || []).filter(
+                          (c: any) => c.type_line?.includes('Creature') && !c._tapped
+                        );
+                        if (untappedCreatures.length > 0) {
+                          setHarmonizePending({ cardUid: card._uid });
+                        } else if (spellNeedsTargeting(card)) {
+                          // No creatures to tap but spell still needs a target
+                          setHarmonizePending({ cardUid: card._uid, tappedUid: null });
+                          setTargeting({ cardUid: card._uid, card, isHarmonize: true, harmonizeTappedUid: null });
+                        } else {
+                          actions.castHarmonize(card._uid);
+                        }
+                      }}
+                      onContextMenu={e => { e.preventDefault(); setZoom(card); }}
+                      title={`${card.name}${hCost ? ` — ${hCost}` : ''} (clique para ativar)`}
+                      style={{ position: 'relative', cursor: canCast ? 'pointer' : 'default', flexShrink: 0, opacity: canCast ? 1 : 0.45 }}
+                    >
+                      <img
+                        src={card.image_normal || card.image_small}
+                        alt={card.name}
+                        style={{ width: '72px', height: '100px', objectFit: 'cover', borderRadius: '6px', display: 'block',
+                          boxShadow: canCast ? '0 0 8px 2px rgba(78,205,196,0.5)' : 'none',
+                          border: `2px solid ${canCast ? 'rgba(78,205,196,0.6)' : 'rgba(255,255,255,0.15)'}` }}
+                      />
+                      {hCost && (
+                        <div style={{
+                          position: 'absolute', bottom: '3px', left: 0, right: 0,
+                          textAlign: 'center', fontSize: '9px', fontWeight: 800,
+                          color: '#fff', background: 'rgba(0,0,0,0.75)',
+                          borderRadius: '0 0 4px 4px', padding: '1px 2px',
+                        }}>{hCost}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* ── Renew sidebar ── (beside hand, graveyard abilities) */}
+          {(phase === 'main1' || phase === 'main2') && activePlayer === 0 && (() => {
+            const renewCards = (p0.graveyard || []).filter((c: any) =>
+              c._graveyardAbilities && c._graveyardAbilities.length > 0
+            );
+            if (renewCards.length === 0) return null;
+            return (
+              <div style={{
+                order: 1,
+                display: 'flex', flexDirection: 'row', gap: '6px',
+                padding: '6px 8px', alignItems: 'center', flexShrink: 0,
+                borderLeft: '2px solid rgba(255,255,255,0.15)',
+              }}>
+                {renewCards.map((card: any) =>
+                  card._graveyardAbilities.map((ab: any, abIdx: number) => {
+                    const costMana = ab.cost?.mana || '';
+                    return (
+                      <div
+                        key={card._uid + '-' + abIdx}
+                        onClick={() => actions.activateGraveyardAbility(card._uid, abIdx)}
+                        onContextMenu={e => { e.preventDefault(); setZoom(card); }}
+                        title={`${card.name}${costMana ? ` — Custo: ${costMana}` : ''} (clique para ativar, clique direito para ver)`}
+                        style={{ position: 'relative', cursor: 'pointer', flexShrink: 0 }}
+                      >
+                        <img
+                          src={card.image_normal || card.image_small}
+                          alt={card.name}
+                          style={{ width: '72px', height: '100px', objectFit: 'cover', borderRadius: '6px', display: 'block',
+                            boxShadow: '0 0 8px 2px rgba(255,160,60,0.5)', border: '2px solid rgba(255,160,60,0.6)' }}
+                        />
+                        {costMana && (
+                          <div style={{
+                            position: 'absolute', bottom: '3px', left: 0, right: 0,
+                            textAlign: 'center', fontSize: '9px', fontWeight: 800,
+                            color: '#fff', background: 'rgba(0,0,0,0.75)',
+                            borderRadius: '0 0 4px 4px', padding: '1px 2px',
+                          }}>{costMana}</div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ── Exiled Playable sidebar ── (cards from exile_top_play / Breaching Dragonstorm) */}
+          {(() => {
+            const exiledCards: any[] = snap.exiledPlayable?.[0] || [];
+            if (exiledCards.length === 0) return null;
+            return (
+              <div style={{
+                order: 0,
+                display: 'flex', flexDirection: 'row', gap: '6px',
+                padding: '6px 8px', alignItems: 'center', flexShrink: 0,
+                borderLeft: '2px solid rgba(160,80,240,0.5)',
+                background: 'rgba(120,50,200,0.12)',
+              }}>
+                {exiledCards.map((card: any) => {
+                  const isFree = card._freeCast;
+                  return (
+                    <div
+                      key={card._uid}
+                      onClick={() => handleCardClick(card, 0)}
+                      onContextMenu={e => { e.preventDefault(); setZoom(card); }}
+                      title={`${card.name}${isFree ? ' — FREE (exile)' : ' (exile)'}`}
+                      style={{ position: 'relative', cursor: 'pointer', flexShrink: 0 }}
+                    >
+                      <img
+                        src={card.image_normal || card.image_small}
+                        alt={card.name}
+                        style={{
+                          width: '72px', height: '100px', objectFit: 'cover', borderRadius: '6px', display: 'block',
+                          boxShadow: '0 0 10px 3px rgba(160,80,240,0.6)',
+                          border: '2px solid rgba(160,80,240,0.8)',
+                        }}
+                      />
+                      <div style={{
+                        position: 'absolute', bottom: '3px', left: 0, right: 0,
+                        textAlign: 'center', fontSize: '9px', fontWeight: 800,
+                        color: '#fff', background: isFree ? 'rgba(120,50,200,0.85)' : 'rgba(0,0,0,0.75)',
+                        borderRadius: '0 0 4px 4px', padding: '1px 2px',
+                      }}>{isFree ? '✨ FREE' : '✨ Exile'}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+
+          {/* ── Deck + Graveyard panel (right side of hand row) ── */}
+          {(() => {
+            const CARD_BACK = sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg';
+            const gyCards: any[] = p0.graveyard || [];
+            const topGyCard = gyCards.length > 0 ? gyCards[gyCards.length - 1] : null;
+            return (
+              <div className="hand-zones-panel" style={{ order: 3, marginLeft: 'auto' }}>
+                {/* Cemitério */}
+                <div
+                  className="hand-zone-slot gy-slot"
+                  onClick={() => setGraveyardOpen({ pid: 0 })}
+                  title={`Cemitério: ${gyCards.length} carta${gyCards.length !== 1 ? 's' : ''}`}
+                >
+                  {topGyCard ? (
+                    <img
+                      className="hand-zone-card"
+                      src={topGyCard.image_normal || topGyCard.image_small}
+                      alt={topGyCard.name}
+                      onError={e => { (e.currentTarget as HTMLImageElement).src = CARD_BACK; }}
+                    />
+                  ) : (
+                    <div className="hand-zone-empty">☠</div>
+                  )}
+                  <span className="hand-zone-label">GY {gyCards.length}</span>
+                </div>
+
+                {/* Grimório */}
+                <div
+                  className="hand-zone-slot lib-slot"
+                  title={`Grimório: ${p0.libraryCount} cartas`}
+                >
+                  <div className="hand-zone-lib-stack">
+                    <img className="hand-zone-card lib-back-3" src={CARD_BACK} alt="deck" />
+                    <img className="hand-zone-card lib-back-2" src={CARD_BACK} alt="deck" />
+                    <img className="hand-zone-card lib-back-1" src={CARD_BACK} alt="deck" />
                   </div>
-                ))}
+                  <span className="hand-zone-label">Deck {p0.libraryCount}</span>
+                </div>
               </div>
             );
           })()}
@@ -1937,6 +2589,15 @@ export function GameScreen() {
       {/* ── Log overlay ── */}
       {showLog && (
         <div className="game-log glass" ref={logRef}>
+          <button
+            onClick={() => setShowLog(false)}
+            style={{
+              position: 'sticky', top: 0, float: 'right',
+              background: 'rgba(255,255,255,0.12)', border: 'none', color: '#ccc',
+              cursor: 'pointer', borderRadius: '4px', fontSize: '12px', padding: '1px 6px',
+              zIndex: 2,
+            }}
+          >✕</button>
           {log.map((entry: string, i: number) => <div key={i} className="game-log-entry">{entry}</div>)}
         </div>
       )}
@@ -1976,7 +2637,45 @@ export function GameScreen() {
       {/* ── OVERLAYS (conditionally rendered based on waitingForInput) ─── */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
 
+      {/* View Battlefield toggle button — shown when an overlay is paused */}
       {(() => {
+        const wi = snap.waitingForInput;
+        if (!wi || wi.playerId !== 0) return null;
+        // Show "view battlefield" for ALL overlay types (any human input prompt)
+        if (viewingBattlefield) {
+          return (
+            <button
+              onClick={() => setViewingBattlefield(false)}
+              style={{
+                position: 'fixed', top: 10, right: 12, zIndex: 9999,
+                padding: '8px 18px', borderRadius: '10px',
+                background: 'rgba(240,192,64,0.95)', color: '#1a1025',
+                fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.6)', letterSpacing: '0.5px',
+                animation: 'pulse 1.5s ease-in-out infinite',
+              }}
+            >
+              ↩ Voltar à seleção
+            </button>
+          );
+        }
+        return (
+          <button
+            onClick={() => setViewingBattlefield(true)}
+            style={{
+              position: 'fixed', top: 10, right: 12, zIndex: 9999,
+              padding: '6px 12px', borderRadius: '8px',
+              background: 'rgba(30,20,60,0.92)', color: '#a0a8c0',
+              fontWeight: 700, fontSize: '11px', border: '1px solid rgba(160,168,192,0.3)',
+              cursor: 'pointer', boxShadow: '0 2px 12px rgba(0,0,0,0.5)',
+            }}
+          >
+            👁 Ver campo
+          </button>
+        );
+      })()}
+
+      {!viewingBattlefield && (() => {
         const wi = snap.waitingForInput;
         const gs = gsRef.current;
         if (!wi || wi.playerId !== 0) return null;
@@ -2003,25 +2702,74 @@ export function GameScreen() {
               own_nonlegendary_creature: 'a non-legendary creature you control',
               opponent_creature: "an opponent's creature",
               creature_with_flying: 'a creature with flying',
+              creature_or_planeswalker: 'a creature or planeswalker',
+              opponent_creature_or_planeswalker: "an opponent's creature or planeswalker",
               artifact: 'an artifact',
               enchantment: 'an enchantment',
               permanent: 'a permanent',
               nonland_permanent: 'a non-land permanent',
               any: 'any target',
+              'creature_power4+': 'a creature with power 4 or greater',
+              artifact_or_enchantment: 'an artifact or enchantment',
+              opponent_artifact_or_enchantment: "an opponent's artifact or enchantment",
+              noncreature_artifact: 'a non-creature artifact',
+              creature_or_artifact: 'a creature or artifact',
+              creature_or_enchantment: 'a creature or enchantment',
             };
             const label = labelMap[wi.targetType] || wi.targetType;
+            // Detect if there are valid targets to avoid freeze when none exist
+            const allBFCards = snap ? [...snap.players[0].battlefield, ...snap.players[1].battlefield] : [];
+            const hasValidTargets = (() => {
+              const tt = wi.targetType;
+              if (tt === 'creature' || tt === 'any') return allBFCards.some((c: any) => c.type_line?.includes('Creature'));
+              if (tt === 'own_creature') return snap!.players[0].battlefield.some((c: any) => c.type_line?.includes('Creature'));
+              if (tt === 'own_nonlegendary_creature') return snap!.players[0].battlefield.some((c: any) => c.type_line?.includes('Creature') && !c.type_line?.includes('Legendary'));
+              if (tt === 'opponent_creature') return snap!.players[1].battlefield.some((c: any) => c.type_line?.includes('Creature'));
+              if (tt === 'creature_with_flying') return allBFCards.some((c: any) => c.type_line?.includes('Creature') && ((c.keywords || []).map((k: string) => (k || '').toLowerCase()).includes('flying') || (c.oracle_text || '').toLowerCase().includes('flying')));
+              if (tt === 'creature_or_planeswalker') return allBFCards.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Planeswalker'));
+              if (tt === 'opponent_creature_or_planeswalker') return snap!.players[1].battlefield.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Planeswalker'));
+              if (tt === 'artifact') return allBFCards.some((c: any) => c.type_line?.includes('Artifact'));
+              if (tt === 'enchantment') return allBFCards.some((c: any) => c.type_line?.includes('Enchantment'));
+              if (tt === 'permanent') return allBFCards.length > 0;
+              if (tt === 'nonland_permanent') return allBFCards.some((c: any) => !c.type_line?.includes('Land'));
+              if (tt === 'creature_power4+') return allBFCards.some((c: any) => c.type_line?.includes('Creature') && parseInt(c.power || '0', 10) >= 4);
+              if (tt === 'artifact_or_enchantment' || tt === 'opponent_artifact_or_enchantment') {
+                const pool = tt === 'opponent_artifact_or_enchantment' ? snap!.players[1].battlefield : allBFCards;
+                return (pool as any[]).some((c: any) => c.type_line?.includes('Artifact') || c.type_line?.includes('Enchantment'));
+              }
+              if (tt === 'noncreature_artifact') return allBFCards.some((c: any) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
+              if (tt === 'creature_or_artifact') return allBFCards.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Artifact'));
+              if (tt === 'creature_or_enchantment') return allBFCards.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Enchantment'));
+              return true;
+            })();
             return (
               <div style={{
                 position: 'fixed', bottom: 130, left: '50%', transform: 'translateX(-50%)',
-                background: 'rgba(10, 10, 30, 0.95)', border: '2px solid #7c3aed',
+                background: 'rgba(10, 10, 30, 0.95)', border: `2px solid ${hasValidTargets ? '#7c3aed' : '#e74c3c'}`,
                 borderRadius: 12, padding: '12px 28px', zIndex: 9999, color: '#fff',
-                fontSize: 15, fontWeight: 600, textAlign: 'center', pointerEvents: 'none',
-                boxShadow: '0 0 20px rgba(124,58,237,0.5)',
+                fontSize: 15, fontWeight: 600, textAlign: 'center', pointerEvents: 'auto',
+                boxShadow: `0 0 20px ${hasValidTargets ? 'rgba(124,58,237,0.5)' : 'rgba(231,76,60,0.5)'}`,
               }}>
                 🎯 {wi.cardName || 'Spell'}: choose {label}
-                <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4 }}>
-                  Click a valid target on the battlefield
-                </div>
+                {hasValidTargets ? (
+                  <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4 }}>
+                    Click a valid target on the battlefield
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#ff6b6b', marginTop: 4 }}>
+                    ⚠ Nenhum alvo válido no campo
+                  </div>
+                )}
+                <button
+                  style={{
+                    marginTop: 10, display: 'block', width: '100%',
+                    background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.3)',
+                    borderRadius: 6, color: '#fff', cursor: 'pointer', padding: '4px 0', fontSize: 12,
+                  }}
+                  onClick={() => actions.resolvePostModalTarget(null)}
+                >
+                  {hasValidTargets ? 'Cancelar (Esc)' : 'OK — sem alvo, a mágica fizzla'}
+                </button>
               </div>
             );
           }
@@ -2044,7 +2792,7 @@ export function GameScreen() {
 
           // ── Stack priority (opponent can respond) ───────────────────────
           case 'stack_priority': {
-            const pendingCard = gs?._pendingCastOnStack?.card;
+            const pendingCard = (snap as any)?._pendingCastOnStack?.card;
             const spType = pendingCard?.type_line?.replace(/—.*/, '').trim() || '';
             return (
               <StackPriorityBanner
@@ -2154,6 +2902,23 @@ export function GameScreen() {
             );
           }
 
+          // ── Grant target choice (Herd Heirloom etc.) ─────────────────────
+          case 'grant_target_choice': {
+            const pending = gs?._pendingGrantTarget;
+            const candidates = (pending?.candidates || [])
+              .map((uid: string) => snap.players[0].battlefield.find((c: any) => c._uid === uid))
+              .filter(Boolean);
+            const kwNames = (pending?.kwList || []).join(', ');
+            return (
+              <CreatureChoiceOverlay
+                creatures={candidates}
+                title={`🛡 Grant ${kwNames} — Choose target (power 4+)`}
+                hint="Click a creature with power 4 or greater."
+                onConfirm={uid => uid && actions.resolveGrantTargetChoice(uid)}
+              />
+            );
+          }
+
           // ── Buff choice (pick own creature to buff) ──────────────────────
           case 'buff_choice': {
             const pending = gs?._pendingBuffChoice;
@@ -2178,7 +2943,7 @@ export function GameScreen() {
             return pending ? (
               <DistributeCountersOverlay
                 creatures={creatures}
-                totalAmount={pending.amount || 1}
+                totalAmount={pending.total || pending.amount || 1}
                 counterType={pending.counter || '+1/+1'}
                 onConfirm={dist => actions.resolveDistributeCountersAction(dist)}
               />
@@ -2294,6 +3059,61 @@ export function GameScreen() {
             );
           }
 
+          // ── ETB cant_block target (Summit Intimidator etc.) ──────────────────
+          case 'etb_cant_block_target': {
+            const choices = (wi as any).choices || [];
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="🚫 Choose a creature that can't block"
+                hint="Click a creature — it won't be able to block this turn."
+                onConfirm={uid => actions.resolveETBCantBlockTarget(uid ?? null)}
+              />
+            );
+          }
+
+          // ── ETB "any target" damage (Sonic Shrieker etc.) ────────────────────
+          // No blocking overlay — use click-to-target: clicking a creature or life total resolves this.
+          case 'etb_any_damage_target': {
+            const dmgAmount = (snap as any)._pendingEtbAnyDamage?.amount || gs?._pendingEtbAnyDamage?.amount || 1;
+            return (
+              <div className="instant-priority-banner" style={{ background: 'rgba(255,120,0,0.92)', color: '#fff', zIndex: 80 }}>
+                <span style={{ fontWeight: 700 }}>⚡ Deal {dmgAmount} damage — click a creature or life total to target</span>
+              </div>
+            );
+          }
+
+          // ── ETB counter target (Sage of the Fang etc.) ─────────────────────────
+          case 'etb_counter_target': {
+            const choices = (wi as any).choices || [];
+            const pending = gs?._pendingETBCounter;
+            const counterType = pending?.effect?.counter || '+1/+1';
+            const counterAmt = pending?.effect?.amount ?? 1;
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title={`⬆ +1/+1 Counter — Choose a creature`}
+                hint={`Click a creature to put ${counterAmt} ${counterType} counter on it.`}
+                onConfirm={uid => actions.resolveETBCounterTarget(uid || null)}
+              />
+            );
+          }
+
+          // ── ETB remove all counters target (Purging Stormbrood) ──
+          case 'etb_remove_counters_target': {
+            const choices = (wi as any).choices || [];
+            const isOptional = gs?._pendingRemoveCountersAll?.optional;
+            return (
+              <CreatureChoiceOverlay
+                creatures={choices}
+                title="Remove All Counters"
+                hint="Click a creature to remove all counters from it."
+                optional={isOptional}
+                onConfirm={uid => actions.resolveETBRemoveCountersTarget(uid || null)}
+              />
+            );
+          }
+
           // ── ETB exile target (Static Snare, Stormplain Detainment, Mardu Siegebreaker) ──
           case 'etb_exile_target': {
             const choices = (wi as any).choices || [];
@@ -2351,13 +3171,44 @@ export function GameScreen() {
           case 'look_top_land_choice':
           case 'look_top_permanent_choice': {
             const pending = gs?._pendingLookTop;
-            return pending ? (
+            if (!pending) return null;
+            // Build dynamic props based on the type of look_top effect
+            let ltCards: any[], ltPickCount: number, ltTitle: string, ltHint: string, ltKeepLabel: string, ltDiscardLabel: string;
+            if (pending.type === 'look_top_permanent_choice') {
+              ltCards = pending.candidates || [];
+              ltPickCount = pending.putCount ?? 2;
+              ltTitle = 'Escolher Permanentes';
+              ltHint = `Coloque até ${ltPickCount} permanente(s) não-criatura (custo ≤3) no campo de batalha. O resto vai para o fundo do grimório.`;
+              ltKeepLabel = '⚔ Campo';
+              ltDiscardLabel = '⬇ Grimório';
+            } else if (pending.type === 'look_top_land_choice') {
+              ltCards = pending.lands || pending.cards || [];
+              ltPickCount = pending.pickCount ?? 1;
+              ltTitle = 'Escolher Terreno';
+              ltHint = `Escolha até ${ltPickCount} terreno(s) para colocar na mão.`;
+              ltKeepLabel = '✋ Mão';
+              ltDiscardLabel = '⬇ Grimório';
+            } else {
+              // look_top_choice: pick to hand, rest to graveyard or bottom
+              ltCards = pending.cards || [];
+              ltPickCount = pending.pickCount ?? 1;
+              const toBottom = pending.restDestination === 'bottom';
+              ltTitle = 'Escolher Cartas';
+              ltHint = `Escolha ${ltPickCount} carta(s) para colocar na mão. O resto vai para o ${toBottom ? 'fundo do grimório' : 'cemitério'}.`;
+              ltKeepLabel = '✋ Mão';
+              ltDiscardLabel = toBottom ? '⬇ Grimório' : '💀 Cemitério';
+            }
+            return (
               <LookTopOverlay
-                cards={pending.cards || []}
-                pickCount={pending.pickCount}
+                cards={ltCards}
+                pickCount={ltPickCount}
+                title={ltTitle}
+                hint={ltHint}
+                keepLabel={ltKeepLabel}
+                discardLabel={ltDiscardLabel}
                 onConfirm={actions.resolveLookTop}
               />
-            ) : null;
+            );
           }
 
           // ── Clash ────────────────────────────────────────────────────────
@@ -2376,6 +3227,17 @@ export function GameScreen() {
             ) : null;
           }
 
+          // ── Trigger ordering ─────────────────────────────────────────────
+          case 'trigger_order': {
+            const triggerList = (wi as any).triggers || [];
+            return (
+              <TriggerOrderOverlay
+                triggers={triggerList}
+                onConfirm={(orderedIndices: number[]) => actions.resolveTriggerOrder(orderedIndices)}
+              />
+            );
+          }
+
           // ── Confirm optional ─────────────────────────────────────────────
           case 'confirm_optional':
             return (
@@ -2384,6 +3246,18 @@ export function GameScreen() {
                 onConfirm={actions.resolveConfirmOptional}
               />
             );
+
+          // ── Ward payment ──────────────────────────────────────────────────
+          case 'ward_confirm': {
+            const wardCost = (wi as any).wardCost ?? '?';
+            const wardName = (wi as any).creatureName ?? 'creature';
+            return (
+              <ConfirmOptionalOverlay
+                message={`${wardName} tem Ward ${wardCost}. Pagar {${wardCost}} mana extra para continuar? (Não = cancelar spell)`}
+                onConfirm={actions.resolveWardConfirm}
+              />
+            );
+          }
 
           // ── Unless pay ───────────────────────────────────────────────────
           case 'unless_pay_decision': {
@@ -2397,13 +3271,55 @@ export function GameScreen() {
             ) : null;
           }
 
+          // ── Exile reveal (Kotis, etc.) ──────────────────────────────────
+          case 'exile_reveal': {
+            const exReveal = gs?._pendingExileReveal;
+            if (!exReveal) return null;
+            const exCards: any[] = exReveal.cards || [];
+            const canPlayExile = !!exReveal.canPlay;
+            return (
+              <div className="overlay-backdrop" style={{ zIndex: 900 }}>
+                <div className="overlay-panel" style={{ maxWidth: 600, padding: '20px 24px' }}>
+                  <h2 style={{ color: '#ffd700', marginBottom: 8 }}>Cartas Exiladas</h2>
+                  <p style={{ color: '#ccc', fontSize: 13, marginBottom: 12 }}>
+                    {canPlayExile ? 'Você pode jogar estas cartas enquanto estiverem exiladas. Clique para castar agora ou feche para jogar depois (na sua fase principal).' : 'Estas cartas foram exiladas do topo do grimório adversário.'}
+                  </p>
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    {exCards.map((ec: any) => {
+                      const isLandCard = (ec.type_line || '').toLowerCase().includes('land');
+                      const isPlayable = canPlayExile && (isLandCard || !!(ec.mana_cost));
+                      return (
+                        <div key={ec._uid} style={{ textAlign: 'center', cursor: isPlayable ? 'pointer' : 'default', opacity: isPlayable ? 1 : 0.45 }}
+                          onClick={() => {
+                            if (isPlayable) {
+                              actions.resolveExileReveal(ec._uid);
+                            }
+                          }}
+                          title={isPlayable ? 'Clique para jogar' : 'Não pode ser jogado'}>
+                          <img src={ec.image_normal || ec.image_small} alt={ec.name}
+                            style={{ width: 140, borderRadius: 8, border: isPlayable ? '2px solid #ffd700' : '2px solid #555' }} />
+                          <div style={{ color: isPlayable ? '#ffd700' : '#888', fontSize: 11, marginTop: 4 }}>{ec.name}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <button className="overlay-btn" style={{ marginTop: 16 }}
+                    onClick={() => actions.resolveExileReveal(null)}>
+                    Fechar {canPlayExile ? '(jogar depois)' : ''}
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
           // ── Mill land choice ─────────────────────────────────────────────
           case 'mill_land_choice': {
             const pending = gs?._pendingMillLandChoice;
             return (
               <MillLandChoiceOverlay
-                landName={pending?.milledLands?.[0]?.name || 'Land'}
-                onConfirm={actions.resolveMillLand}
+                milledLands={pending?.milledLands || []}
+                milledAll={pending?.milledAll || pending?.milledLands || []}
+                onConfirm={(choice, landUid) => actions.resolveMillLand(choice, landUid)}
               />
             );
           }
@@ -2422,12 +3338,53 @@ export function GameScreen() {
           // ── Trigger cost ─────────────────────────────────────────────────
           case 'trigger_cost': {
             const trigger = (wi as any).trigger;
+            // Compute cost and effect descriptions from the trigger's effects
+            const costEffect = (trigger?.effects || []).find((e: any) => e.cost);
+            const costDesc = costEffect?.cost || trigger?.costDescription;
+            const triggerEffectDesc = (trigger?.effects || []).map((e: any) => {
+              const t = e.type; const amt = e.amount; const tgt = e.target;
+              if (t === 'endure') return `Endure ${amt} (coloca ${amt} contador +1/+1 ou cria ficha Spirit 1/1 branca)`;
+              if (t === 'draw') return `Comprar ${amt} carta${amt !== 1 ? 's' : ''}`;
+              if (t === 'damage') return `${amt} de dano${tgt ? ` a ${tgt}` : ''}`;
+              if (t === 'gainLife') return `Ganhar ${amt} vida`;
+              if (t === 'destroy') return `Destruir ${tgt || 'permanente'}`;
+              if (t === 'counter_self') return `+${e.amount || 1}/+${e.amount || 1} contadores`;
+              if (t === 'create_token') return `Criar ficha ${e.name || ''} ${e.power}/${e.toughness}`;
+              if (t === 'buff') return `+${e.power}/${e.toughness} até fim de turno`;
+              if (t === 'scry') return `Scry ${amt}`;
+              if (t === 'surveil') return `Surveil ${amt}`;
+              if (t === 'mill') return `Mill ${amt}`;
+              return t.replace(/_/g, ' ');
+            }).filter(Boolean).join(', ');
             return (
               <TriggerCostOverlay
                 triggerName={trigger?.cardName || 'Trigger'}
-                costDesc={trigger?.costDescription}
+                costDesc={costDesc}
+                effectDesc={triggerEffectDesc || undefined}
                 onConfirm={actions.resolveTriggerCostAction}
               />
+            );
+          }
+
+          // ── Mill target choice (any_player: choose who mills) ────────────
+          case 'mill_target_choice': {
+            const pending = gs?._pendingMillTargetChoice;
+            const millAmt = pending?.powerAmount || pending?.effect?.amount || 1;
+            return (
+              <div className="overlay-backdrop">
+                <div className="overlay-panel glass" style={{ maxWidth: 340, textAlign: 'center' }}>
+                  <h3 className="overlay-title">Quem milla?</h3>
+                  <p className="overlay-hint">Mill {millAmt} carta(s)</p>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 16 }}>
+                    <button className="btn btn-muted" onClick={() => actions.resolveMillTargetChoice(true)}>
+                      Você mesmo
+                    </button>
+                    <button className="btn btn-danger" onClick={() => actions.resolveMillTargetChoice(false)}>
+                      Oponente
+                    </button>
+                  </div>
+                </div>
+              </div>
             );
           }
 
@@ -2472,6 +3429,45 @@ export function GameScreen() {
                 hint="Choose a nonland card to exile."
                 onConfirm={uid => uid && actions.resolveHandExile(uid)}
               />
+            );
+          }
+
+          // ── Graveyard cast choice: pick specific card to cast ──────────────
+          case 'graveyard_cast_choice': {
+            const pending = gs?._pendingGraveyardCastChoice;
+            const cards = pending?.cards || [];
+            return (
+              <SearchLibraryOverlay
+                candidates={cards}
+                title="☠ Cast from Graveyard"
+                hint="Choose a creature to exile and cast for free."
+                onConfirm={uid => uid && actions.resolveGraveyardCastChoice(uid)}
+              />
+            );
+          }
+
+          // ── Attach choice: equip token optional confirmation ─────────────
+          case 'attach_choice': {
+            const pending = gs?._pendingAttachChoice;
+            const tokenName = pending?.tokenName || 'Token';
+            const targetName = pending?.targetName || 'creature';
+            return (
+              <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 8000 }}>
+                <div className="glass overlay-panel" style={{ maxWidth: 380, padding: 24, textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 12, color: 'var(--gold)', fontSize: 16 }}>⚔ Equip Token?</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+                    Equip <strong>{tokenName}</strong> to <strong>{targetName}</strong>?
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                    <button className="btn btn-gold" onClick={() => actions.resolveAttachChoice(true)}>
+                      ✓ Equip
+                    </button>
+                    <button className="btn btn-muted" onClick={() => actions.resolveAttachChoice(false)}>
+                      ✗ Skip
+                    </button>
+                  </div>
+                </div>
+              </div>
             );
           }
 
@@ -2524,6 +3520,24 @@ export function GameScreen() {
             );
           }
 
+          // ── Delve choice: exile GY cards to reduce spell cost ─────────────
+          case 'delve_choice': {
+            const pending = gs?._pendingDelveChoice;
+            if (!pending) return null;
+            const gyCards = snap.players[0].graveyard.filter(
+              (c: any) => !(c.type_line || '').toLowerCase().includes('land')
+            );
+            return (
+              <GraveyardMultiSelectOverlay
+                cards={gyCards}
+                amount={pending.maxDelve ?? 1}
+                minAmount={0}
+                title={`🌀 Delve — Exile cards to pay {1} each (max ${pending.maxDelve ?? 1})`}
+                onConfirm={uids => actions.resolveDelveChoice(uids)}
+              />
+            );
+          }
+
           // ── Graveyard card choice: pick specific cards ────────────────────
           case 'graveyard_card_choice': {
             const pending = gs?._pendingGraveyardCardChoice;
@@ -2535,6 +3549,7 @@ export function GameScreen() {
                 cards={gy}
                 amount={pending.amount ?? 1}
                 minAmount={pending.minAmount ?? 0}
+                exactAmount={pending.exactAmount}
                 title={`☠ Exile from ${pid === 0 ? 'Your' : "Opponent's"} Graveyard`}
                 onConfirm={uids => actions.resolveGraveyardCardChoice(uids)}
               />
@@ -2606,20 +3621,17 @@ export function GameScreen() {
           case 'choose_target':
             return null;
 
-          // ── Blocker damage order — auto-resolve using AI heuristic ───
+          // ── Blocker damage order — interactive reorder UI ───────────
           case 'order_blockers': {
+            const attackerUids: string[] = wi?.attackerUids || [];
+            const rawBlockers: Record<string, any[]> = wi?.blockers || {};
             return (
-              <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 7000 }}>
-                <div className="glass overlay-panel" style={{ maxWidth: 320, padding: 16, textAlign: 'center' }}>
-                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Blocker Order</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-                    Multiple blockers — confirm damage assignment order.
-                  </div>
-                  <button className="btn btn-gold" onClick={() => actions.resolveOrderBlockers()}>
-                    Confirm Order
-                  </button>
-                </div>
-              </div>
+              <OrderBlockersOverlay
+                attackerUids={attackerUids}
+                blockers={rawBlockers}
+                snap={snap}
+                onConfirm={(order) => actions.resolveOrderBlockers(order)}
+              />
             );
           }
 
@@ -2664,16 +3676,21 @@ export function GameScreen() {
             );
           }
 
-          // ── Behold: reveal a dragon from hand ───────────────────────
+          // ── Behold: reveal a dragon from hand or choose one on battlefield ──
           case 'behold_choice_multiple':
           case 'behold_choice_optional': {
             const pending = gs?._pendingBeholdChoice;
             if (!pending) return null;
+            // If there are original targets (e.g. counterspell), show context
+            const beholdTargetName = pending.targets?.[0]?.name;
+            const beholdHint = beholdTargetName
+              ? `Reveal a Dragon from hand or choose one on the battlefield (targeting: ${beholdTargetName}).`
+              : 'Reveal a Dragon from hand or choose one you control on the battlefield.';
             return (
               <SearchLibraryOverlay
                 candidates={pending.cards || []}
-                title="🐉 Behold — Reveal a Dragon from your hand"
-                hint="Choose which Dragon to reveal. The card stays in your hand."
+                title="🐉 Behold — Reveal or Choose a Dragon"
+                hint={beholdHint}
                 optional={pending.isOptional === true}
                 onConfirm={uid => actions.resolveBeholdChoice(uid ?? null)}
               />
@@ -2725,26 +3742,101 @@ export function GameScreen() {
         const promptSpell = currentStep
           ? { ...targeting.card, _targetPromptOverride: `${targeting.card.name}: ${currentStep.prompt}` }
           : targeting.card;
+        // For optional multi-step (e.g. Twin Bolt step 2), allow casting with already-collected targets
+        const isOptionalMultiStep = !!(targeting.steps && targeting.step &&
+          targeting.step === targeting.steps.length &&
+          (currentStep as any)?.optional &&
+          (targeting.collectedTargets?.length || 0) > 0);
         return (
           <TargetingPrompt
             spell={promptSpell}
             validTargets={getValidTargets(targeting.card, stepFilter)}
             onTarget={() => {}}
-            onCancel={() => setTargeting(null)}
+            onCancel={() => { setTargeting(null); if (targeting.isHarmonize) setHarmonizePending(null); }}
+            onSkipTarget={targeting.optionalTarget || isOptionalMultiStep ? () => {
+              showCastAnimation(targeting.card);
+              const targets = (targeting.collectedTargets?.length || 0) > 0
+                ? targeting.collectedTargets!
+                : [];
+              if (targeting.isHarmonize) {
+                actions.castHarmonize(targeting.cardUid, targets, targeting.harmonizeTappedUid ?? undefined);
+                setHarmonizePending(null);
+              } else if (targeting.card._isAdventure) {
+                actions.castAdventure(targeting.cardUid, targets);
+              } else {
+                actions.castSpell(targeting.cardUid, targets);
+              }
+              setTargeting(null);
+            } : undefined}
+          />
+        );
+      })()}
+
+      {/* ── Harmonize creature tap selection (phase 1: pick creature to tap for discount) ── */}
+      {harmonizePending && !targeting?.isHarmonize && (() => {
+        const untappedCreatures = (snap.players[0].battlefield || []).filter(
+          (c: any) => c.type_line?.includes('Creature') && !c._tapped
+        );
+        return (
+          <CreatureChoiceOverlay
+            creatures={untappedCreatures}
+            title="🎵 Harmonize — Tap a Creature"
+            hint="Tap a creature to reduce the cost by its power. Or skip for no discount."
+            optional
+            onConfirm={uid => {
+              const cardUid = harmonizePending.cardUid;
+              // Check if the gy card also needs targeting (e.g. Channeled Dragonfire)
+              const gyCard = snap.players[0].graveyard.find((c: any) => c._uid === cardUid);
+              if (gyCard && spellNeedsTargeting(gyCard)) {
+                // Phase 2: show targeting overlay before casting
+                setHarmonizePending({ cardUid, tappedUid: uid ?? null });
+                setTargeting({ cardUid, card: gyCard, isHarmonize: true, harmonizeTappedUid: uid ?? null });
+              } else {
+                setHarmonizePending(null);
+                actions.castHarmonize(cardUid, [], uid ?? undefined);
+              }
+            }}
+          />
+        );
+      })()}
+
+      {/* ── Grant counter target (Alchemist's Assistant etc.) ── */}
+      {snap.waitingForInput?.type === 'grant_counter_target' && snap.waitingForInput.playerId === 0 && (() => {
+        const choices = snap.waitingForInput.choices || [];
+        const counterType = gsRef.current?._pendingGrantCounter?.counter || '+1/+1';
+        return (
+          <CreatureChoiceOverlay
+            creatures={choices}
+            title={`Escolha uma criatura — ${counterType}`}
+            hint={`Coloque um contador ${counterType} na criatura escolhida.`}
+            onConfirm={uid => {
+              if (uid) (actions as any).resolveGrantCounterTarget(uid);
+            }}
           />
         );
       })()}
 
       {/* ── choose_target engine waiting (saga chapters etc.) ── */}
       {snap.waitingForInput?.type === 'choose_target' &&
-       snap.waitingForInput.playerId === 0 && (
-        <TargetingPrompt
-          spell={gsRef.current?._pendingTargetSpell || { name: 'Choose Target' }}
-          validTargets={[]}
-          onTarget={() => {}}
-          onCancel={() => actions.resolveChooseTarget([])}
-        />
-      )}
+       snap.waitingForInput.playerId === 0 && (() => {
+        const pending = gsRef.current?._pendingSagaChapter;
+        const sagaName = pending?.saga?.name || 'Spell';
+        const chapter = pending?.chapter || '?';
+        const effects = pending?.effects || [];
+        const effectDesc = effects.map((e: any) => {
+          if (e.type === 'destroy') return `Destroy target ${(e.target || 'permanent').replace(/_/g, ' ')}`;
+          if (e.type === 'exile') return `Exile target ${(e.target || 'permanent').replace(/_/g, ' ')}`;
+          return `Choose a target`;
+        }).join('; ');
+        return (
+          <TargetingPrompt
+            spell={{ name: `${sagaName} — Ch.${chapter}: ${effectDesc}` }}
+            validTargets={[]}
+            onTarget={() => {}}
+            onCancel={() => actions.resolveChooseTarget([])}
+          />
+        );
+      })()}
 
       {/* ── Graveyard overlay ── */}
       {graveyardOpen && (
@@ -2761,8 +3853,9 @@ export function GameScreen() {
         <AbilityModal
           card={abilityModal.card}
           abilities={abilityModal.abilities}
-          onActivate={idx => handleActivateAbility(abilityModal.card._uid, idx, abilityModal.card)}
+          onActivate={(idx, xValue) => handleActivateAbility(abilityModal.card._uid, idx, abilityModal.card, xValue)}
           onClose={() => setAbilityModal(null)}
+          availableMana={totalAvailableMana}
         />
       )}
 
@@ -2916,6 +4009,7 @@ export function GameScreen() {
         const adv = card.back_face; // adventure/omen data lives in back_face for layout='adventure'
         const isOmen = adv?.type_line?.toLowerCase().includes('omen');
         const advLabel = isOmen ? 'Omen' : 'Adventure';
+        const isStackPriorityNow = wi?.type === 'stack_priority' && wi?.playerId === 0;
         return (
           <div
             className="overlay-backdrop"
@@ -2931,44 +4025,67 @@ export function GameScreen() {
                 {card.name}
               </div>
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                How do you want to cast this card?
+                {isStackPriorityNow ? 'Cast instant face in response:' : 'How do you want to cast this card?'}
               </div>
               <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-                {/* Cast as creature */}
-                <button
-                  className="btn btn-muted"
-                  style={{ flex: 1 }}
-                  onClick={() => {
-                    setAdventureModal(null);
-                    if (spellNeedsTargeting(card)) {
-                      setTargeting({ cardUid: card._uid, card });
-                    } else {
-                      actions.castSpell(card._uid);
-                    }
-                  }}
-                >
-                  🐉 {card.name}<br/>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{card.mana_cost}</span>
-                </button>
+                {/* Cast as creature — only available outside stack priority */}
+                {!isStackPriorityNow && (
+                  <button
+                    className="btn btn-muted"
+                    style={{ flex: 1 }}
+                    onClick={() => {
+                      setAdventureModal(null);
+                      if (spellNeedsTargeting(card)) {
+                        setTargeting({ cardUid: card._uid, card });
+                      } else {
+                        actions.castSpell(card._uid);
+                      }
+                    }}
+                  >
+                    🐉 {card.name.split('//')[0].trim()}<br/>
+                    <ManaCostPips cost={card.mana_cost} size={16} />
+                  </button>
+                )}
                 {/* Cast as adventure/omen */}
                 <button
                   className="btn btn-gold"
                   style={{ flex: 1 }}
                   onClick={() => {
                     setAdventureModal(null);
+                    const advText = (adv?.oracle_text || '').toLowerCase();
+                    // Counter spell face: auto-target the pending stack spell
+                    const isAdvCounter = advText.includes('counter target spell') ||
+                      advText.includes('counter target creature spell') ||
+                      advText.includes('counter target instant') ||
+                      advText.includes('counter target sorcery');
+                    if (isAdvCounter && isStackPriorityNow) {
+                      const gs = gsRef.current;
+                      const stackItems: any[] = gs?.stack?.items || [];
+                      const oppSpells = stackItems.filter((item: any) => item.controller !== 0);
+                      const pendingCast = gs?._pendingCastOnStack;
+                      let targetCard: any = null;
+                      if (oppSpells.length > 0) targetCard = oppSpells[oppSpells.length - 1].card;
+                      else if (pendingCast?.card && pendingCast.playerId !== 0) targetCard = pendingCast.card;
+                      if (targetCard) {
+                        showCastAnimation(card);
+                        actions.castAdventure(card._uid, [targetCard]);
+                        return;
+                      }
+                    }
                     // Use adventure face type_line so spellNeedsTargeting doesn't short-circuit
-                    // on "creature" from the combined "Creature // Sorcery — Omen" type_line
                     const advFaceCard = { ...card, oracle_text: adv?.oracle_text ?? '', type_line: adv?.type_line ?? card.type_line };
                     if (spellNeedsTargeting(advFaceCard)) {
-                      // Show targeting UI, pass castAdventure when target selected
-                      setTargeting({ cardUid: card._uid, card: { ...card, oracle_text: adv?.oracle_text ?? '', type_line: adv?.type_line ?? card.type_line, _isAdventure: true } });
+                      const optionalOnly = spellHasOnlyOptionalTargets(advFaceCard);
+                      setTargeting({ cardUid: card._uid, card: { ...card, oracle_text: adv?.oracle_text ?? '', type_line: adv?.type_line ?? card.type_line, _isAdventure: true }, optionalTarget: optionalOnly });
                     } else {
                       actions.castAdventure(card._uid);
                     }
                   }}
                 >
                   ✨ {adv?.name}<br/>
-                  <span style={{ fontSize: '11px' }}>{adv?.mana_cost} · {advLabel}</span>
+                  <span style={{ fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <ManaCostPips cost={adv?.mana_cost || ''} size={16} /> · {advLabel}
+                  </span>
                 </button>
               </div>
               <button
@@ -3029,7 +4146,7 @@ export function GameScreen() {
       {/* ── Full Control Mode indicator ── */}
       {fullControl && (
         <div className="auto-pass-indicator" style={{ bottom: 100, background: 'rgba(108,92,231,0.85)', color: 'white' }}>
-          🎮 Full Control (Ctrl to disable)
+          🎮 Full Control (X to disable)
         </div>
       )}
 
@@ -3053,6 +4170,27 @@ export function GameScreen() {
           <div key={t.id} className={`toast toast-${t.type}`}>{t.msg}</div>
         ))}
       </div>
+
+      {/* ── Trigger toast notifications (Arena-style) ── */}
+      {triggerToastItems.length > 0 && (
+        <div className="trigger-toast-panel">
+          {triggerToastItems.map(toast => (
+            <div
+              key={toast.id}
+              className={`trigger-toast ${toast.controllerId === 0 ? 'trigger-toast-mine' : 'trigger-toast-opp'}`}
+              onClick={() => setTriggerToastItems(prev => prev.filter(t => t.id !== toast.id))}
+            >
+              {(toast.imageUrlLarge || toast.imageUrl) && (
+                <img src={toast.imageUrlLarge || toast.imageUrl!} alt={toast.cardName} className="trigger-toast-img" />
+              )}
+              <div className="trigger-toast-info">
+                <div className="trigger-toast-name">{toast.cardName}</div>
+                <div className="trigger-toast-effect">{toast.effectDesc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── VFX sprite layer ── */}
       <VfxLayer />
@@ -3089,6 +4227,25 @@ export function GameScreen() {
         </>
       )}
 
+      {/* ── AI cast overlay: opponent spell reveal (Arena-style) ── */}
+      {aiCastOverlay && (
+        <div className="ai-cast-overlay" key={aiCastOverlay.card?.name + Date.now()}>
+          <div className="ai-cast-label">⚔️ Oponente</div>
+          <div className="ai-cast-card">
+            <img
+              src={aiCastOverlay.card.image_normal || aiCastOverlay.card.image_small}
+              alt={aiCastOverlay.card.name}
+            />
+          </div>
+          <div className="ai-cast-info">
+            <span className="ai-cast-name">{aiCastOverlay.card.name}</span>
+            {aiCastOverlay.targetDesc && aiCastOverlay.targetDesc.trim() && (
+              <span className="ai-cast-target">→ {aiCastOverlay.targetDesc.trim()}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Arena: Combat edge flash ── */}
       {combatFlash && <div className="combat-edge-flash" />}
 
@@ -3102,6 +4259,119 @@ export function GameScreen() {
               className={`mana-float-pip mana-float-${f.color}`}
               style={{ left: f.x, top: f.y }}>{f.color}</div>
       ))}
+
+      {/* ── Arena-style cascading stack display ── */}
+      {(() => {
+        const wiType = snap.waitingForInput?.type;
+        const isStackMoment = wiType === 'stack_priority' || wiType === 'instant_priority';
+        const pendingCard = (snap as any).pendingCastCard;
+        const stackItems: any[] = (snap as any).stackItems || [];
+
+        // Build display list from stack items
+        // NOTE: pendingCard is already included in stackItems (pushed at cast time), so don't add separately
+        const displayItems: Array<{ name: string; imageUrl: string; card: any; controller: number }> = [];
+        for (const item of stackItems) {
+          displayItems.push({ name: item.cardName, imageUrl: item.imageUrl, card: item.card, controller: item.controller });
+        }
+
+        if (!isStackMoment || displayItems.length === 0) return null;
+
+        // Vertical list: newest on top, each card fully visible
+        const CARD_W = 150;
+        const CARD_H = 210;
+
+        return (
+          <div style={{
+            position: 'fixed',
+            right: 12,
+            bottom: 80,
+            width: CARD_W + 24,
+            maxHeight: 'calc(100vh - 120px)',
+            zIndex: 210,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 8,
+            overflowY: 'auto',
+          }}>
+            {/* Label */}
+            <div style={{
+              fontSize: '10px', fontWeight: 700, color: 'var(--gold)',
+              letterSpacing: '1px', textTransform: 'uppercase',
+              textAlign: 'center', flexShrink: 0,
+            }}>
+              🔮 Stack ({displayItems.length})
+            </div>
+            {/* Cards: last item = top of stack, first = bottom */}
+            {[...displayItems].reverse().map((item, i) => {
+              const isTopOfStack = i === 0;
+              return (
+                <div
+                  key={i}
+                  onClick={() => item.card && setZoom(item.card)}
+                  style={{
+                    position: 'relative',
+                    width: CARD_W,
+                    height: CARD_H,
+                    flexShrink: 0,
+                    borderRadius: 8,
+                    cursor: item.card ? 'pointer' : 'default',
+                    boxShadow: isTopOfStack
+                      ? '0 0 18px rgba(240,192,64,0.7), 0 4px 16px rgba(0,0,0,0.8)'
+                      : '0 4px 12px rgba(0,0,0,0.5)',
+                    border: isTopOfStack ? '2px solid var(--gold)' : '1px solid rgba(255,255,255,0.15)',
+                    transition: 'transform 0.15s',
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'scale(1.04)'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ''; }}
+                >
+                  {item.imageUrl
+                    ? <img
+                        src={item.imageUrl}
+                        alt={item.name}
+                        style={{
+                          width: '100%', height: '100%', borderRadius: 7, objectFit: 'cover', display: 'block',
+                          animation: isTopOfStack ? 'stackCardAppear 0.25s ease-out' : 'none',
+                        }}
+                        onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    : <div style={{
+                        width: '100%', height: '100%', borderRadius: 7,
+                        background: 'rgba(20,15,40,0.95)',
+                        display: 'flex', flexDirection: 'column',
+                        alignItems: 'center', justifyContent: 'center',
+                        gap: 4, padding: 8,
+                      }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>{item.name}</div>
+                      </div>
+                  }
+                  {/* Top-of-stack badge */}
+                  {isTopOfStack && (
+                    <div style={{
+                      position: 'absolute', top: 4, left: 4,
+                      background: 'rgba(240,192,64,0.9)',
+                      borderRadius: 4, padding: '1px 5px',
+                      fontSize: 8, fontWeight: 800, color: '#111',
+                      letterSpacing: '0.5px',
+                    }}>TOP</div>
+                  )}
+                  {/* Controller badge */}
+                  <div style={{
+                    position: 'absolute', bottom: 4, left: 0, right: 0,
+                    textAlign: 'center',
+                    fontSize: 9, fontWeight: 700,
+                    color: item.controller === 0 ? '#4ecdc4' : '#f87171',
+                    textShadow: '0 1px 4px rgba(0,0,0,0.9)',
+                    pointerEvents: 'none',
+                  }}>
+                    {item.controller === 0 ? '▲ You' : '▼ Opp'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* ── Arena: Targeting arrow ── */}
       {targeting && (
@@ -3124,8 +4394,16 @@ export function GameScreen() {
           />
         </svg>
       )}
+
+      {/* Ver Campo button removed — viewingBattlefield toggle (line ~2598) handles this */}
     </div>
   );
+}
+
+// ── Art-crop URL helper (converts Scryfall /normal/ → /art_crop/) ─────────────
+function toArtCropUrl(url: string | undefined): string | undefined {
+  if (!url) return url;
+  return url.replace('/normal/', '/art_crop/');
 }
 
 // ── BattlefieldCard ───────────────────────────────────────────────────────────
@@ -3135,6 +4413,7 @@ interface BFCardProps {
   isAttacking: boolean;
   isAttacker: boolean;
   isTargetable?: boolean;
+  isNotTargetable?: boolean;  // dim when targeting mode active and this card is not a valid target
   isBlockingTarget?: boolean;
   isAssignedBlocker?: boolean;
   isSelectedBlocker?: boolean;
@@ -3143,16 +4422,19 @@ interface BFCardProps {
   isAutoTapPreview?: boolean;
   isRecentlyEntered?: boolean;
   isTriggerPulsing?: boolean;
+  cantBlock?: boolean;
   /** Cards currently equipped/enchanting this creature (shown as mini thumbnails) */
   attachmentCards?: any[];
   /** Cards exiled by this permanent (enchantments like Banishing Light) */
   exiledCards?: any[];
+  /** For Betor, Kin to All: cumulative toughness of all my creatures (shows threshold progress) */
+  betorToughnessTotal?: number;
   onClick?: (card: any) => void;
   onDoubleClick?: (card: any) => void;
   onRightClick: (card: any) => void;
 }
 
-function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, isRecentlyEntered, isTriggerPulsing, attachmentCards, exiledCards, onClick, onDoubleClick, onRightClick }: BFCardProps) {
+function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, isRecentlyEntered, isTriggerPulsing, cantBlock, attachmentCards, exiledCards, betorToughnessTotal, onClick, onDoubleClick, onRightClick }: BFCardProps) {
   const isLand = card.type_line?.includes('Land');
   const isCreature = card.type_line?.includes('Creature');
   const isPlaneswalkerCard = card.type_line?.includes('Planeswalker');
@@ -3177,21 +4459,28 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
         ${isAttacking ? 'attacking' : ''}
         ${card._summoningSick ? 'sick' : ''}
         ${isTargetable ? 'targetable' : ''}
+        ${isNotTargetable ? 'not-targetable' : ''}
         ${isBlockingTarget ? 'blocking-target' : ''}
         ${isAssignedBlocker ? 'assigned-blocker' : ''}
         ${isSelectedBlocker ? 'targetable' : ''}
         ${isAutoTapPreview ? 'auto-tap-preview' : ''}
         ${isRecentlyEntered ? 'card-entering' : ''}
         ${isTriggerPulsing ? 'trigger-pulse' : ''}
+        ${cantBlock ? 'cant-block' : ''}
+        ${attachmentCards && attachmentCards.length > 0 ? 'has-attachments' : ''}
+        ${exiledCards && exiledCards.length > 0 ? 'has-exiled' : ''}
       `}
       onClick={() => onClick?.(card)}
       onDoubleClick={() => onDoubleClick?.(card)}
-      onContextMenu={e => { e.preventDefault(); onRightClick(card); }}
+      onContextMenu={e => { e.preventDefault(); onRightClick?.(card); }}
     >
       {card._isToken && !(overrideArtUrl || card.image_normal || card.image_small) ? (
         <BfToken card={card} power={power} toughness={toughness} />
       ) : (
-        <img src={overrideArtUrl || card.image_normal || card.image_small || undefined} alt={card.name} loading="lazy" />
+        <img
+          src={overrideArtUrl || card.image_normal || card.image_small || undefined}
+          alt={card.name}
+        />
       )}
       {/* Real cards always show badge; token-copies (image_normal set) also show badge
           since their card image has base P/T but actual P/T may differ due to buffs.
@@ -3200,12 +4489,13 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
         <div className={`bf-pt${(card._powerMod || 0) > 0 || (card._toughnessMod || 0) > 0 ? ' buffed' : (card._powerMod || 0) < 0 || (card._toughnessMod || 0) < 0 ? ' debuffed' : ''}`}>{power}/{toughness}</div>
       )}
       {card._damage > 0 && <div className="bf-damage">💥{card._damage}</div>}
-      {counters.map(([type, n]) => (
-        <div key={type} className={`bf-counter ${type.includes('+') ? 'positive' : 'negative'}`}>
-          {n as number}
+      {counters.filter(([type]) => type === '+1/+1' || type === '-1/-1').map(([type, n]) => (
+        <div key={type} className={`bf-counter ${type.includes('+') ? 'positive' : 'negative'}`} title={`${n} ${type} counter${(n as number) > 1 ? 's' : ''}`}>
+          {type.includes('+') ? '+' : '-'}{n as number}
         </div>
       ))}
       {isAttacking && <div className="bf-attacking-indicator">⚔</div>}
+      {cantBlock && <div className="bf-cant-block-badge" title="Can't block this turn">🚫</div>}
 
       {/* ── Keyword badges ── */}
       {isCreature && (() => {
@@ -3218,19 +4508,21 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
         type KwEntry = { label: string; key: string };
         const badges: KwEntry[] = [];
         const push = (label: string, key: string) => badges.push({ label, key });
-        if (kws.includes('Flying') || text.includes('flying')) push('✈', 'Flying');
-        if (kws.includes('First Strike') || text.includes('first strike')) push('FS', 'First Strike');
-        if (kws.includes('Double Strike') || text.includes('double strike')) push('DS', 'Double Strike');
-        if (kws.includes('Deathtouch') || text.includes('deathtouch')) push('☠', 'Deathtouch');
-        if (kws.includes('Lifelink') || text.includes('lifelink')) push('♥', 'Lifelink');
-        if (kws.includes('Trample') || text.includes('trample')) push('Tpl', 'Trample');
-        if (kws.includes('Haste') || text.includes('haste')) push('H', 'Haste');
-        if (kws.includes('Reach') || text.includes('reach')) push('Rch', 'Reach');
-        if (kws.includes('Hexproof') || text.includes('hexproof')) push('Hex', 'Hexproof');
-        if (kws.includes('Indestructible') || text.includes('indestructible')) push('Ind', 'Indestructible');
-        if (kws.includes('Menace') || text.includes('menace')) push('Men', 'Menace');
-        if (kws.includes('Vigilance') || text.includes('vigilance')) push('Vig', 'Vigilance');
-        if (kws.includes('Flash') || text.includes('flash')) push('⚡', 'Flash');
+        if (kws.includes('Flying') || tempKwNames.has('Flying')) push('✈', 'Flying');
+        if (kws.includes('First Strike') || tempKwNames.has('First Strike')) push('FS', 'First Strike');
+        if (kws.includes('Double Strike') || tempKwNames.has('Double Strike')) push('DS', 'Double Strike');
+        if (kws.includes('Deathtouch') || tempKwNames.has('Deathtouch')) push('☠', 'Deathtouch');
+        if (kws.includes('Lifelink') || tempKwNames.has('Lifelink')) push('♥', 'Lifelink');
+        if (kws.includes('Trample') || tempKwNames.has('Trample')) push('Tpl', 'Trample');
+        if (kws.includes('Haste') || tempKwNames.has('Haste')) push('H', 'Haste');
+        if (kws.includes('Reach') || tempKwNames.has('Reach')) push('Rch', 'Reach');
+        if (kws.includes('Hexproof') || tempKwNames.has('Hexproof')) push('Hex', 'Hexproof');
+        if (kws.includes('Indestructible') || tempKwNames.has('Indestructible')) push('Ind', 'Indestructible');
+        if (kws.includes('Menace') || tempKwNames.has('Menace')) push('Men', 'Menace');
+        if (kws.includes('Vigilance') || tempKwNames.has('Vigilance')) push('Vig', 'Vigilance');
+        if (kws.includes('Flash') || tempKwNames.has('Flash')) push('⚡', 'Flash');
+        if (kws.includes('Defender') || tempKwNames.has('Defender')) push('🛡', 'Defender');
+        if (kws.includes('Ward') || tempKwNames.has('Ward')) push('W', 'Ward');
         if (badges.length === 0) return null;
         return (
           <div className="bf-keyword-badges">
@@ -3253,7 +4545,9 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
               className="bf-attachment-mini"
               src={a.image_small || a.image_normal}
               alt={a.name}
-              title={a.name}
+              title={`${a.name} — clique para re-equipar · botão direito para zoom`}
+              onClick={e => { e.stopPropagation(); onDoubleClick ? onDoubleClick(a) : onRightClick(a); }}
+              onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onRightClick(a); }}
               onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
             />
           ))}
@@ -3266,12 +4560,23 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
             <img
               key={ex._uid || i}
               className="bf-exiled-mini"
-              src={ex.image_small || ex.image_normal}
+              src={ex.image_small || ex.image_normal || ex.image_uris?.small || ex.image_uris?.normal}
               alt={ex.name}
               title={`Exilada: ${ex.name}`}
               onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
             />
           ))}
+        </div>
+      )}
+      {/* ── Betor toughness tracker ── */}
+      {betorToughnessTotal !== undefined && (
+        <div className="betor-tracker" title={`Resistência total: ${betorToughnessTotal}\n≥10: comprar carta | ≥20: desvirar criaturas | ≥40: oponente perde metade da vida`}>
+          <div className="betor-tracker-total">{betorToughnessTotal}</div>
+          <div className="betor-tracker-bars">
+            <div className={`betor-bar ${betorToughnessTotal >= 10 ? 'betor-bar-met' : ''}`} title="≥10: comprar">10</div>
+            <div className={`betor-bar ${betorToughnessTotal >= 20 ? 'betor-bar-met' : ''}`} title="≥20: desvirar">20</div>
+            <div className={`betor-bar ${betorToughnessTotal >= 40 ? 'betor-bar-met' : ''}`} title="≥40: metade vida">40</div>
+          </div>
         </div>
       )}
       {/* ── Saga badge ── */}
@@ -3281,8 +4586,8 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
         </div>
       )}
       {/* ── Stun badge ── */}
-      {(card._stunCounters || 0) > 0 && (
-        <div className="bf-stun-badge">STUN</div>
+      {((card._stunCounters || 0) + (card._counters?.stun || 0)) > 0 && (
+        <div className="bf-stun-badge">STUN {(card._stunCounters || 0) + (card._counters?.stun || 0) > 1 ? `×${(card._stunCounters || 0) + (card._counters?.stun || 0)}` : ''}</div>
       )}
       {/* ── Transform badge ── */}
       {card._canTransform && (
@@ -3290,7 +4595,9 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isBlocki
       )}
       {/* ── Planeswalker loyalty badge ── */}
       {isPlaneswalkerCard && card._loyalty !== undefined && (
-        <div className="bf-loyalty-badge">{card._loyalty}</div>
+        <div className={`bf-loyalty-badge${card._loyaltyUsedThisTurn ? ' bf-loyalty-used' : ''}`}>
+          {card._loyaltyUsedThisTurn ? '✓' : ''}{card._loyalty}
+        </div>
       )}
     </div>
   );
@@ -3320,7 +4627,7 @@ function ZoomModifiedPanel({ card }: { card: any }) {
 
   // Temp keywords
   const tempKws: string[] = card._tempKeywords || [];
-  const stunCount: number = card._stunCounters || 0;
+  const stunCount: number = (card._stunCounters || 0) + (card._counters?.stun || 0);
   const damage: number = card._damage || 0;
   const isTapped: boolean = !!card._tapped;
   const hasSummoningSick: boolean = !!card._summoningSick;

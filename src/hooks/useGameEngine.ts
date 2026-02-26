@@ -17,6 +17,7 @@ let _AI: typeof import('../engine/game-ai') | null = null;
 let _Combat: typeof import('../engine/combat') | null = null;
 let _Cards: typeof import('../engine/cards') | null = null;
 let _Mana: typeof import('../engine/mana') | null = null;
+let _Stack: typeof import('../engine/stack') | null = null;
 
 async function loadEngine() {
   if (!_GS) _GS = await import('../engine/game-state');
@@ -24,6 +25,7 @@ async function loadEngine() {
   if (!_Combat) _Combat = await import('../engine/combat');
   if (!_Cards) _Cards = await import('../engine/cards');
   if (!_Mana) _Mana = await import('../engine/mana');
+  if (!_Stack) _Stack = await import('../engine/stack');
 }
 
 // ── Card conversion: DB Card → GameCard ────────────────────────────────────
@@ -43,15 +45,41 @@ function dbCardToGameCard(card: Card, uid: string): any {
     _tempKeywords: [],
     _triggers: [],
   };
+  // Reversible cards (borderless adventure variants): fix triple name and normalize to adventure
+  // e.g. "Marang River Regent // Coil and Catch // Marang River Regent" → treat as adventure
+  if (card.layout === 'reversible_card' && gc.name && gc.name.split(' // ').length >= 3) {
+    const parts = gc.name.split(' // ');
+    gc.name = parts[0] + ' // ' + parts[1]; // Keep only "Front // Adventure"
+    if (gc.type_line && gc.type_line.split(' // ').length >= 3) {
+      const tParts = gc.type_line.split(' // ');
+      gc.type_line = tParts[0] + ' // ' + tParts[1];
+    }
+  }
   // The game engine uses card.adventure for adventure/omen face data,
   // but the DB stores it as card.back_face. Normalize here.
-  if (card.layout === 'adventure' && (card as any).back_face?.name) {
+  // Detect adventure/omen: explicit layout OR back_face with instant/sorcery type OR reversible_card
+  const isAdventureLayout = card.layout === 'adventure' || card.layout === 'reversible_card' ||
+    ((card as any).back_face?.type_line && /sorcery|instant/i.test((card as any).back_face.type_line));
+  if (isAdventureLayout && (card as any).back_face?.name) {
     gc.adventure = (card as any).back_face;
+    gc.layout = 'adventure';
   }
   // Scryfall stores combined mana_cost "{5}{B} // {1}{B}" for adventure/omen cards
   // (both from DB back_face and from JSON card_faces). Strip to face 0 cost only.
   if (gc.mana_cost && gc.mana_cost.includes('//')) {
     gc.mana_cost = gc.mana_cost.split('//')[0].trim();
+  }
+  // DB stores keywords/colors/color_identity as JSON strings — parse them to arrays
+  // so the engine's hasKeyword() and other array methods work correctly.
+  if (typeof gc.keywords === 'string') {
+    try { gc.keywords = JSON.parse(gc.keywords); } catch { gc.keywords = []; }
+  }
+  if (!Array.isArray(gc.keywords)) gc.keywords = [];
+  if (typeof gc.colors === 'string') {
+    try { gc.colors = JSON.parse(gc.colors); } catch { gc.colors = []; }
+  }
+  if (typeof gc.color_identity === 'string') {
+    try { gc.color_identity = JSON.parse(gc.color_identity); } catch { gc.color_identity = []; }
   }
   return gc;
 }
@@ -126,6 +154,20 @@ function snapshot(gs: any) {
     })),
     pendingCastCard: (gs as any)._pendingCastOnStack?.card || null,
 
+    // Exiled playable cards (exile_top_play, exile_top_choose) per player
+    exiledPlayable: (() => {
+      const result: Record<number, any[]> = { 0: [], 1: [] };
+      const ep = (gs as any)._exiledPlayable;
+      if (ep) {
+        for (const uid of Object.keys(ep)) {
+          const entry = ep[uid];
+          const pid = entry.controller ?? 0;
+          if (pid === 0 || pid === 1) result[pid].push({ ...entry.card, _freeCast: entry.freeCast });
+        }
+      }
+      return result;
+    })(),
+
     players: [
       {
         id: 0,
@@ -196,6 +238,7 @@ export interface TriggerToastItem {
   id: number;
   cardName: string;
   imageUrl: string | null;
+  imageUrlLarge: string | null;
   controllerId: number;
   effectDesc: string;
 }
@@ -214,6 +257,8 @@ export interface GameSnapshot {
   mulliganCount: number[];
   triggerToastQueue: TriggerToastItem[];
   _aiActions?: any[];
+  exiledPlayable: Record<number, any[]>;
+  pendingCastCard: any | null;
 }
 
 export interface GameActions {
@@ -265,6 +310,7 @@ export interface GameActions {
   resolvePlayerChoice(chosenPlayerId: number): void;
   resolveTriggerCostAction(choice: string): void;
   resolveUnlessPayAction(shouldPay: boolean): void;
+  resolveMillTargetChoice(targetSelf: boolean): void;
 
   // Special card effects
   resolveTravelingBotanist(toHand: boolean): void;
@@ -305,6 +351,9 @@ export interface GameActions {
   // ETB counter target choice (Sage of the Fang etc.)
   resolveETBCounterTarget(targetUid: string | null): void;
 
+  // ETB remove all counters target (Purging Stormbrood)
+  resolveETBRemoveCountersTarget(targetUid: string | null): void;
+
   // ETB "any target" damage choice (Sonic Shrieker etc.)
   resolveETBDamageTarget(target: { type: 'creature' | 'player'; uid?: string; player?: number }): void;
 
@@ -326,11 +375,17 @@ export interface GameActions {
   // Look-top choice
   resolveLookTop(choices: string[]): void;
 
+  // Trigger ordering (simultaneous triggers)
+  resolveTriggerOrder(orderedIndices: number[]): void;
+
   // Confirm optional
   resolveConfirmOptional(confirmed: boolean): void;
 
   // Ward payment confirm (human targeting a ward creature)
   resolveWardConfirm(pay: boolean): void;
+
+  // Exile reveal (Kotis etc.) — cast a card or dismiss
+  resolveExileReveal(cardUid: string | null): void;
 
   // Grant counter target (Alchemist's Assistant etc.)
   resolveGrantCounterTarget(cardUid: string): void;
@@ -465,6 +520,57 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
     }
   }, [snap?.winner]);
 
+  // Safety valve: if AI has stack/instant priority stuck for >2s, auto-pass.
+  // Human gets priority without timeout — they can take as long as they need.
+  useEffect(() => {
+    const wiType = snap?.waitingForInput?.type;
+    if (wiType !== 'stack_priority' && wiType !== 'instant_priority') return;
+    const wfi = snap.waitingForInput;
+    // Only auto-pass for AI (playerId=1). Human keeps priority until they press Space.
+    if (wfi.playerId !== 1) return;
+    const timer = setTimeout(() => {
+      const gs = gsRef.current;
+      if (!gs) return;
+      const curType = gs.waitingForInput?.type;
+      if (curType !== 'stack_priority' && curType !== 'instant_priority') return;
+      if (gs.waitingForInput?.playerId !== 1) return;
+      console.warn('[STUCK] AI priority stuck for 2s — forcing pass');
+      // Reset _processingPhases if stuck
+      if ((gs as any)._processingPhases) {
+        (gs as any)._processingPhases = false;
+      }
+      if ((gs as any)._pendingCastOnStack) {
+        const pending = (gs as any)._pendingCastOnStack;
+        delete (gs as any)._pendingCastOnStack;
+        if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
+        gs.waitingForInput = null;
+        if (pending?.card) {
+          (gs as any)._resumingFromStackPriority = true;
+          gs.players[pending.playerId].zones.hand.add(pending.card);
+          _GS.castSpell(gs, pending.playerId, pending.card._uid, pending.targets || [], pending.isAdventure || false, pending.isEvoke || false);
+        }
+      } else {
+        gs.waitingForInput = null;
+      }
+      if (!gs.waitingForInput && _GS?.reprocessCurrentPhase) _GS.reprocessCurrentPhase(gs);
+      refresh();
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [snap?.waitingForInput?.type, snap?.waitingForInput?.playerId]);
+
+  // Safety valve: reset _processingPhases if stuck for >3s (prevents Space from being blocked)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const gs = gsRef.current;
+      if (!gs) return;
+      if ((gs as any)._processingPhases && gs.waitingForInput?.playerId === 0) {
+        console.warn('[STUCK] _processingPhases was true while waiting for human input — resetting');
+        (gs as any)._processingPhases = false;
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Initialize
   useEffect(() => {
     mountedRef.current = true;
@@ -521,11 +627,16 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       // Don't advance during mulligan — handled by keepHand/mulligan actions
       if (gs.phase === 'mulligan') return;
-      // Guard: engine trampoline still running — skip
-      if ((gs as any)._processingPhases) return;
+      // Guard: engine trampoline still running — skip (but allow priority passes)
+      if ((gs as any)._processingPhases &&
+          gs.waitingForInput?.type !== 'stack_priority' &&
+          gs.waitingForInput?.type !== 'instant_priority') return;
       // Debounce: ignore if called within 250ms of last call
+      // EXCEPTION: stack_priority passes are NOT debounced — the AI can trigger multiple
+      // stack_priority states in rapid succession, and each one needs its own pass.
       const now = Date.now();
-      if (now - _lastNextPhaseMs < 250) return;
+      const isStackPriorityPass = gs.waitingForInput?.type === 'stack_priority';
+      if (!isStackPriorityPass && now - _lastNextPhaseMs < 250) return;
       _lastNextPhaseMs = now;
       clearManaUndo();
       try {
@@ -835,12 +946,12 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         }
 
         // Give AI a chance to react with removal/bounce/counter after human casts a spell.
-        // Only fires when: cast succeeded, no ETB overlay is immediately pending, not a land.
-        // The timer itself also guards against later-opening overlays (waitingForInput check).
+        // Fires when: cast succeeded and either no overlay OR stack_priority is active (AI must respond).
+        const isAIStackPriority = gs.waitingForInput?.type === 'stack_priority' && gs.waitingForInput?.playerId === 1;
         if (
           result?.success !== false &&
-          !gs.waitingForInput &&
-          _GameAI &&
+          (!gs.waitingForInput || isAIStackPriority) &&
+          _AI &&
           pid === 0
         ) {
           // Cancel any previous pending AI reaction
@@ -853,15 +964,40 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             (window as any).__aiStackReactTimer = setTimeout(() => {
               (window as any).__aiStackReactTimer = null;
               const currentGs = gsRef.current;
-              // Guard: don't react if any overlay is open (ETB, targeting, etc.)
-              if (!currentGs || currentGs.waitingForInput) return;
+              if (!currentGs) return;
+              // Guard: only block if an overlay OTHER than stack_priority is open
+              const wfi = currentGs.waitingForInput;
+              if (wfi && wfi.type !== 'stack_priority') return;
               // Guard: only react during main phase (not already in a special priority window)
               const ph = currentGs.phase;
               if (ph !== 'main1' && ph !== 'main2') return;
-              (_GameAI as any).playInstantPhase?.(currentGs, 1, 'stack_priority');
+              (_AI as any).playInstantPhase?.(currentGs, 1, 'stack_priority');
+              // Safety: if AI didn't react and stack_priority is still for AI (pid=1), auto-pass
+              if (currentGs.waitingForInput?.type === 'stack_priority' && currentGs.waitingForInput?.playerId === 1) {
+                const pending = (currentGs as any)._pendingCastOnStack;
+                if (pending) {
+                  if ((currentGs as any).stack?.items?.length > 0) (currentGs as any).stack.items.pop();
+                  delete (currentGs as any)._pendingCastOnStack;
+                  currentGs.waitingForInput = null;
+                  if (!pending.card._countered) {
+                    (currentGs as any)._resumingFromStackPriority = true;
+                    currentGs.players[pending.playerId].zones.hand.add(pending.card);
+                    _GS?.castSpell(currentGs, pending.playerId, pending.card._uid, pending.targets || [], pending.isAdventure || false, pending.isEvoke || false);
+                  }
+                } else {
+                  currentGs.waitingForInput = null;
+                }
+                if (!currentGs.waitingForInput && _GS) _GS.reprocessCurrentPhase(currentGs);
+              }
               refresh();
             }, 400); // slightly longer to let ETB overlays open first
           }
+        }
+
+        // Ensure human stays in main_phase after successful cast (prevents race with autoPass)
+        if (result?.success !== false && !gs.waitingForInput &&
+            (gs.phase === 'main1' || gs.phase === 'main2') && gs.players[pid]?.isHuman) {
+          gs.waitingForInput = { type: 'main_phase', playerId: pid };
         }
 
         refresh();
@@ -1027,7 +1163,9 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             (card.oracle_text || '').toLowerCase().includes('haste');
           const hasDefender = (card.keywords || []).some((k: string) => k?.toLowerCase() === 'defender') ||
             (card._tempKeywords || []).some((k: any) => (typeof k === 'string' ? k : k?.keyword || '').toLowerCase() === 'defender');
-          if (!card._tapped && (!card._summoningSick || hasHaste) && !hasDefender) {
+          const hasCanAttack = (card.keywords || []).some((k: string) => k?.toLowerCase().replace(/_/g, ' ') === 'can attack') ||
+            (card._tempKeywords || []).some((k: any) => (typeof k === 'string' ? k : k?.keyword || '').toLowerCase().replace(/_/g, ' ') === 'can attack');
+          if (!card._tapped && (!card._summoningSick || hasHaste) && (!hasDefender || hasCanAttack)) {
             card._attacking = true;
             if (!gs.combat.attackers) gs.combat.attackers = [];
             // Push CombatAttackerEntry — include attackTarget if attacking a planeswalker
@@ -1120,6 +1258,16 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveModal] error:', e); }
+    },
+
+    resolveMillTargetChoice(targetSelf: boolean) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveMillTargetChoice(gs, targetSelf);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveMillTargetChoice] error:', e); }
     },
 
     resolveChooseTarget(targets: any[]) {
@@ -1623,7 +1771,26 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         gs.waitingForInput = null;
         delete (gs as any)._pendingBeholdChoice;
 
+        // ETB behold (e.g. Sarkhan Dragon Ascendant): no cardUid, just set _beholding
+        // and let remaining ETB effects (saved in _pendingStackEffects) continue
         if (!pending?.cardUid) {
+          if (pending?.source === 'etb' && uid) {
+            // Find the dragon card by uid and mark as beheld
+            const dragonCard = (pending.cards || []).find((c: any) => c._uid === uid);
+            if (dragonCard) {
+              if (!gs._beholding) gs._beholding = {};
+              gs._beholding[0] = dragonCard;
+              gs.log.push(`${dragonCard.name} revelado (behold Dragon).`);
+            }
+          }
+          // Process remaining stack effects (e.g. create_token with if_beheld_dragon)
+          if ((gs as any)._pendingStackEffects) {
+            const pse = (gs as any)._pendingStackEffects;
+            (gs as any)._pendingStackEffects = null;
+            if (_Stack && pse.effects?.length > 0) {
+              _Stack.resolveEffects(gs, pse.controller, pse.card, pse.effects, pse.targets || []);
+            }
+          }
           afterResolve(gs);
           refresh();
           return;
@@ -1964,6 +2131,38 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveETBCounterTarget]', e); }
     },
 
+    // ── ETB remove all counters target (Purging Stormbrood) ──────────────────
+    resolveETBRemoveCountersTarget(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const pending = gs._pendingRemoveCountersAll;
+        delete gs._pendingRemoveCountersAll;
+        gs.waitingForInput = null;
+        if (targetUid && pending) {
+          // Find the creature across both players
+          for (const p of gs.players) {
+            const card = p.zones.battlefield.get(targetUid);
+            if (card && card._counters) {
+              let totalRemoved = 0;
+              for (const ct in card._counters) {
+                totalRemoved += card._counters[ct];
+                card._counters[ct] = 0;
+              }
+              gs.log.push(`Remove todos os ${totalRemoved} contador(es) de ${card.name}.`);
+              if (_Cards && _Cards.getToughness(card) <= 0) {
+                _GS?.creatureDies(gs, card, gs.players.indexOf(p));
+                gs.log.push(`${card.name} morre.`);
+              }
+              break;
+            }
+          }
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveETBRemoveCountersTarget]', e); }
+    },
+
     // ── ETB clone target (human chose which creature to copy) ────────────────
     resolveETBCloneTarget(targetUid: string | null) {
       const gs = gsRef.current;
@@ -2074,6 +2273,18 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveLookTop]', e); }
     },
 
+    // ── Trigger ordering ──────────────────────────────────────────────────
+
+    resolveTriggerOrder(orderedIndices: number[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveTriggerOrder(gs, orderedIndices);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveTriggerOrder]', e); }
+    },
+
     // ── Confirm optional ────────────────────────────────────────────────────
 
     resolveConfirmOptional(confirmed: boolean) {
@@ -2117,6 +2328,43 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           refresh();
         }
       } catch (e) { console.warn('[resolveWardConfirm]', e); }
+    },
+
+    // ── Exile reveal (Kotis etc.) ────────────────────────────────────────────
+
+    resolveExileReveal(cardUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const pending = (gs as any)._pendingExileReveal;
+        (gs as any)._pendingExileReveal = null;
+        gs.waitingForInput = null;
+
+        if (cardUid && pending?.canPlay) {
+          // Human chose to cast/play a card from exile
+          // _exiledPlayable was already set, so castSpell will find it there
+          const entry = gs._exiledPlayable?.[cardUid];
+          if (entry) {
+            const isLand = (entry.card.type_line || '').toLowerCase().includes('land');
+            if (isLand) {
+              // Play land from exile
+              for (const p of gs.players) p.zones.exile.remove?.(cardUid);
+              delete gs._exiledPlayable[cardUid];
+              const bfCard = _Cards?.prepareForBattlefield(entry.card) || entry.card;
+              gs.players[0].zones.battlefield.add(bfCard);
+              gs._landPlayedThisTurn = true;
+              gs.log.push(`${entry.card.name} jogado do exílio.`);
+              if (_GS?._applyStaticOnETB) _GS._applyStaticOnETB(gs, bfCard, 0);
+            } else {
+              // Cast spell from exile — castSpell checks _exiledPlayable
+              actions.castSpell(cardUid);
+              return; // castSpell handles refresh
+            }
+          }
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveExileReveal]', e); }
     },
 
     // ── Grant counter target (Alchemist's Assistant etc.) ───────────────────

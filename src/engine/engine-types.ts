@@ -33,6 +33,7 @@ export interface GameCard extends Card {
   _attacking: boolean;
   _blocking: string | null;
   _blockedBy: string[];
+  _hasDealtDamage?: boolean;
 
   // Modifiers
   _powerMod: number;
@@ -57,6 +58,9 @@ export interface GameCard extends Card {
   _vividPower?: boolean;
   _vividPowerValue?: number;
   _dynamicPower?: number;
+
+  // Granted keywords from external sources
+  _grantedKeywords?: string[];
 
   // Grants
   _grantAttackingTokens?: string;

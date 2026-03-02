@@ -1,6 +1,6 @@
 // token-images.ts — Scryfall token image fetcher with localStorage cache
 
-const CACHE_KEY = 'token_image_cache_v7'; // v7: TDM-first query strategy
+const CACHE_KEY = 'token_image_cache_v10'; // v10: force refresh after token colors/type_line fixes
 const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 interface CacheEntry { url: string; ts: number; }
@@ -63,9 +63,18 @@ export function preloadTokenImage(
     try {
       let url: string | null = null;
 
-      // Step 1: If preferredSet given, try a set-specific query first (e.g. set:tdm)
+      // Skip fetch for generic/unnamed tokens — no Scryfall card named "Token"
+      const normalizedName = name?.trim().toLowerCase();
+      if (!normalizedName || normalizedName === 'token') {
+        inFlight.delete(key);
+        return null;
+      }
+
+      // Step 1: If preferredSet given, try the TOKEN set (t + setcode, e.g. ttdm)
+      // Scryfall stores tokens in separate sets with 't' prefix
       if (preferredSet) {
-        const setQ = encodeURIComponent(`set:${preferredSet} type:token name:"${name}"`);
+        const tokenSet = `t${preferredSet.toLowerCase()}`;
+        const setQ = encodeURIComponent(`set:${tokenSet} !"${name}" type:token`);
         try {
           const setResp = await fetch(
             `https://api.scryfall.com/cards/search?q=${setQ}&order=released`,
@@ -90,8 +99,26 @@ export function preloadTokenImage(
         } catch { /* ignore, fall through to generic search */ }
       }
 
-      // Step 2: Fall back to any-set search if no set-specific result found
+      // Step 2: Fall back to broader token set search by name
+      if (!url && preferredSet) {
+        const tokenSet = `t${preferredSet.toLowerCase()}`;
+        const fallbackQ = encodeURIComponent(`set:${tokenSet}`);
+        try {
+          const fallbackResp = await fetch(`https://api.scryfall.com/cards/search?q=${fallbackQ}&order=released`);
+          if (fallbackResp.ok) {
+            const fallbackData = await fallbackResp.json();
+            if (fallbackData.data?.length) {
+              const match = fallbackData.data.find((c: any) =>
+                c.name?.toLowerCase() === normalizedName
+              );
+              if (match) url = match?.image_uris?.normal || null;
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
       if (!url) {
+        // Exact name match, prefer TDM set tokens
         const q = encodeURIComponent(`!"${name}" type:token`);
         const resp = await fetch(
           `https://api.scryfall.com/cards/search?q=${q}&order=released&unique=prints`,
@@ -113,9 +140,12 @@ export function preloadTokenImage(
           if (m) best = m;
         }
 
-        if (preferredSet) {
-          // Also check if fallback search accidentally has a set match
-          const setMatch = data.data.find((c: any) => c.set === preferredSet.toLowerCase());
+        // Always prefer TDM token set (ttdm) over other sets
+        const tdmMatch = data.data.find((c: any) => c.set === 'ttdm');
+        if (tdmMatch) best = tdmMatch;
+        else if (preferredSet) {
+          const tokenSet = `t${preferredSet.toLowerCase()}`;
+          const setMatch = data.data.find((c: any) => c.set === tokenSet || c.set === preferredSet.toLowerCase());
           if (setMatch) best = setMatch;
         }
 

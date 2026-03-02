@@ -11,7 +11,7 @@ import {
   ScryOverlay, ModalOverlay, TargetingPrompt, GraveyardOverlay,
   InstantPriorityBanner, StackPriorityBanner, BlockerConfirmBanner,
   DiscardOverlay, ManaColorOverlay, SearchLibraryOverlay, CreatureChoiceOverlay,
-  LookTopOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay, TriggerOrderOverlay,
+  LookTopOverlay, RevealPickOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay, TriggerOrderOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
   BounceMultiOverlay, DistributeCountersOverlay, ManaCostPips, MANA_IMAGES,
@@ -160,6 +160,7 @@ export function GameScreen() {
 
   const [showLog, setShowLog] = useState(false);
   const [zoom, setZoom] = useState<any>(null);
+  const [, forceUpdate] = useState(0);
   const [zoomModified, setZoomModified] = useState(false);
   const [myStopPhases, setMyStopPhases] = useState<Set<string>>(new Set());
   const [oppStopPhases, setOppStopPhases] = useState<Set<string>>(new Set());
@@ -171,6 +172,7 @@ export function GameScreen() {
 
   // ── Overlay states ────────────────────────────────────────────────────────
   const [graveyardOpen, setGraveyardOpen] = useState<{ pid: number } | null>(null);
+  const [graveyardLandsOpen, setGraveyardLandsOpen] = useState(false);
   const [exileOpen, setExileOpen] = useState<{ pid: number } | null>(null);
   // Targeting: pending spell waiting for player to click a target
   // Multi-step targeting: step/steps/collectedTargets for spells that need multiple sequential targets
@@ -189,9 +191,10 @@ export function GameScreen() {
   // Ability modal: double-click on creature/planeswalker
   const [abilityModal, setAbilityModal] = useState<{ card: any; abilities: any[] } | null>(null);
   // Equipment modal: double-click on equipment to pick which creature to attach
-  const [equipModal, setEquipModal] = useState<{ equipUid: string; equipName: string } | null>(null);
+  const [equipModal, setEquipModal] = useState<{ equipUid: string; equipName: string; equipCost?: string } | null>(null);
   // Attack target picker: when declaring an attacker and opponent has planeswalkers
-  const [attackTargetPicker, setAttackTargetPicker] = useState<{ attackerUid: string } | null>(null);
+  // isToken: true when picking target for an already-attacking token (mobilize etc.)
+  const [attackTargetPicker, setAttackTargetPicker] = useState<{ attackerUid: string; isToken?: boolean; tokenName?: string } | null>(null);
   // Adventure modal: choose between casting as creature or adventure/omen
   const [adventureModal, setAdventureModal] = useState<{ card: any } | null>(null);
   // Conditional cost confirmation (e.g. Dragon's Prey costs {2} more when targeting a Dragon)
@@ -323,6 +326,8 @@ export function GameScreen() {
     setToasts(prev => [...prev.slice(-4), { id, msg, type }]); // max 5 toasts
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 2500);
   }
+  // Expose toast globally so useGameEngine can show restricted mana warnings
+  (window as any).__gameToast = addToast;
 
   function addFloat(value: string, x: number, y: number, type: string) {
     const id = ++floatIdRef.current;
@@ -415,7 +420,10 @@ export function GameScreen() {
 
   // Keep refs in sync
   useEffect(() => { autoPassRef.current = autoPass; }, [autoPass]);
-  useEffect(() => { fullControlRef.current = fullControl; }, [fullControl]);
+  useEffect(() => {
+    fullControlRef.current = fullControl;
+    if (gsRef.current) gsRef.current._fullControl = fullControl;
+  }, [fullControl]);
 
   // Reset "view battlefield" mode when overlay changes or is dismissed
   const wiType = snap?.waitingForInput?.type;
@@ -643,9 +651,55 @@ export function GameScreen() {
   }, [targeting]);
 
   // ── Auto-set targeting arrow when entering post_modal_target mode ────────
+  // Also auto-fizzle if no valid targets exist (skip the OK button)
   useEffect(() => {
     const wi = snap?.waitingForInput;
     if (wi?.type === 'post_modal_target' && wi.playerId === 0) {
+      // Check if there are valid targets — if not, auto-fizzle immediately
+      const allBF = snap ? [...snap.players[0].battlefield, ...snap.players[1].battlefield] : [];
+      const tt = wi.targetType;
+      const hasValid = (() => {
+        if (tt === 'creature' || tt === 'any') return allBF.some((c: any) => c.type_line?.includes('Creature'));
+        if (tt === 'own_creature') return snap!.players[0].battlefield.some((c: any) => c.type_line?.includes('Creature'));
+        if (tt === 'own_nonlegendary_creature') return snap!.players[0].battlefield.some((c: any) => c.type_line?.includes('Creature') && !c.type_line?.includes('Legendary'));
+        if (tt === 'opponent_creature') return snap!.players[1].battlefield.some((c: any) => c.type_line?.includes('Creature'));
+        if (tt === 'creature_with_flying') return allBF.some((c: any) => c.type_line?.includes('Creature') && ((c.keywords || []).map((k: string) => (k || '').toLowerCase()).includes('flying') || (c.oracle_text || '').toLowerCase().includes('flying')));
+        if (tt === 'creature_or_planeswalker') return allBF.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Planeswalker'));
+        if (tt === 'opponent_creature_or_planeswalker') return snap!.players[1].battlefield.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Planeswalker'));
+        if (tt === 'artifact') return allBF.some((c: any) => c.type_line?.includes('Artifact'));
+        if (tt === 'enchantment') return allBF.some((c: any) => c.type_line?.includes('Enchantment'));
+        if (tt === 'permanent') return allBF.length > 0;
+        if (tt === 'nonland_permanent') return allBF.some((c: any) => !c.type_line?.includes('Land'));
+        if (tt === 'creature_power4+') return allBF.some((c: any) => c.type_line?.includes('Creature') && parseInt(c.power || '0', 10) >= 4);
+        if (tt === 'artifact_or_enchantment' || tt === 'opponent_artifact_or_enchantment') {
+          const pool = tt === 'opponent_artifact_or_enchantment' ? snap!.players[1].battlefield : allBF;
+          return (pool as any[]).some((c: any) => c.type_line?.includes('Artifact') || c.type_line?.includes('Enchantment'));
+        }
+        if (tt === 'noncreature_artifact') return allBF.some((c: any) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
+        if (tt === 'creature_or_artifact') return allBF.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Artifact'));
+        if (tt === 'creature_or_enchantment') return allBF.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Enchantment'));
+        return true;
+      })();
+
+      if (!hasValid) {
+        // No valid targets — auto-fizzle with brief toast message
+        setTargeting(null);
+        actions.resolvePostModalTarget(null);
+        // Show brief floating message
+        const toast = document.createElement('div');
+        toast.textContent = '⚠ Sem alvos válidos — mágica cancelada';
+        Object.assign(toast.style, {
+          position: 'fixed', bottom: '140px', left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(231,76,60,0.92)', color: '#fff', padding: '10px 24px',
+          borderRadius: '10px', fontSize: '14px', fontWeight: '600', zIndex: '99999',
+          pointerEvents: 'none', transition: 'opacity 0.5s',
+        });
+        document.body.appendChild(toast);
+        setTimeout(() => { toast.style.opacity = '0'; }, 1500);
+        setTimeout(() => { toast.remove(); }, 2100);
+        return;
+      }
+
       const gs = gsRef.current;
       const pendingCard = gs?._pendingModalResolution?.card;
       if (pendingCard?._uid) {
@@ -676,6 +730,21 @@ export function GameScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap?.waitingForInput?.type]);
 
+  // ── Auto-set targeting arrow for choose_target (saga chapters) ─
+  useEffect(() => {
+    const wi = snap?.waitingForInput;
+    if (wi?.type === 'choose_target' && wi.playerId === 0) {
+      const gs = gsRef.current;
+      const sagaCard = gs?._pendingSagaChapter?.saga;
+      if (sagaCard?._uid) {
+        setTargeting({ cardUid: sagaCard._uid, card: sagaCard, _fromSaga: true } as any);
+      }
+    } else {
+      setTargeting(prev => (prev && (prev as any)?._fromSaga ? null : prev));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap?.waitingForInput?.type]);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -701,8 +770,23 @@ export function GameScreen() {
           }
           break;
         case 'Escape':
+          if (viewingBattlefield) { setViewingBattlefield(false); break; }
           if (showHelpModal) { setShowHelpModal(false); break; }
-          if (targeting) { setTargeting(null); break; }
+          // Cancel modal choice (Heritage Reclamation etc.) — undo spell
+          if (snap?.waitingForInput?.type === 'modal_choice') {
+            actions.cancelModal?.();
+            break;
+          }
+          // Cancel post_modal_target (Heritage Reclamation target selection) — undo spell
+          if (snap?.waitingForInput?.type === 'post_modal_target' || gsRef.current?.waitingForInput?.type === 'post_modal_target') {
+            setTargeting(null);
+            actions.resolvePostModalTarget(null);
+            break;
+          }
+          if (targeting) {
+            setTargeting(null);
+            break;
+          }
           if (blockingWith.length > 0) { setBlockingWith([]); break; }
           if (graveyardOpen) { setGraveyardOpen(null); break; }
           if (exileOpen) { setExileOpen(null); break; }
@@ -738,6 +822,80 @@ export function GameScreen() {
               .forEach((c: any) => actions.declareAttacker(c._uid));
           }
           break;
+        case 'p': case 'P': {
+          // DEBUG: spawn Elspeth planeswalker on opponent's battlefield
+          const gs = (window as any).__gsRef?.current;
+          if (gs) {
+            const pw = {
+              _uid: 'debug-pw-' + Date.now(),
+              name: 'Elspeth, Storm Slayer',
+              type_line: 'Legendary Planeswalker — Elspeth',
+              mana_cost: '{3}{W}{W}',
+              oracle_text: '+1: Create a 1/1 white Soldier creature token.\n0: Put a +1/+1 counter on each creature you control.\n−3: Destroy target creature an opponent controls with mana value 3 or greater.',
+              image_small: '', image_normal: '',
+              _tapped: false, _loyalty: 4, _loyaltyUsedThisTurn: false,
+              _summoningSick: false, _powerMod: 0, _toughnessMod: 0,
+              _tempPowerMod: 0, _tempToughnessMod: 0, _damage: 0, _counters: {},
+            };
+            gs.players[1].zones.battlefield.add(pw);
+            gs.log.push('[DEBUG] Elspeth spawned com 4 loyalty no campo do oponente.');
+            const ref = (window as any).__gsRefresh;
+            if (ref) ref();
+          }
+          break;
+        }
+        case 'w': case 'W': {
+          // DEBUG: spawn a creature with Ward 2 on opponent's battlefield
+          const gs2 = (window as any).__gsRef?.current;
+          if (gs2) {
+            const wardCreature = {
+              _uid: 'debug-ward-' + Date.now(),
+              name: 'Ward Sentinel',
+              type_line: 'Creature — Human Knight',
+              mana_cost: '{2}{W}',
+              oracle_text: 'Ward {2}',
+              power: '3', toughness: '4',
+              keywords: ['Ward'],
+              cmc: 3,
+              image_small: '', image_normal: '',
+              _tapped: false, _summoningSick: false,
+              _powerMod: 0, _toughnessMod: 0,
+              _tempPowerMod: 0, _tempToughnessMod: 0,
+              _damage: 0, _counters: {},
+            };
+            gs2.players[1].zones.battlefield.add(wardCreature);
+            gs2.log.push('[DEBUG] Ward Sentinel (3/4 Ward {2}) spawned no campo do oponente.');
+            const ref2 = (window as any).__gsRefresh;
+            if (ref2) ref2();
+          }
+          break;
+        }
+        case 'q': case 'Q': {
+          // DEBUG: spawn a creature with Ward—Pay 2 life on opponent's battlefield
+          const gsQ = (window as any).__gsRef?.current;
+          if (gsQ) {
+            const wardLifeCreature = {
+              _uid: 'debug-ward-life-' + Date.now(),
+              name: 'Ward Life Golem',
+              type_line: 'Creature — Golem',
+              mana_cost: '{3}',
+              oracle_text: 'Ward—Pay 2 life.',
+              power: '3', toughness: '4',
+              keywords: ['Ward'],
+              cmc: 3,
+              image_small: '', image_normal: '',
+              _tapped: false, _summoningSick: false,
+              _powerMod: 0, _toughnessMod: 0,
+              _tempPowerMod: 0, _tempToughnessMod: 0,
+              _damage: 0, _counters: {},
+            };
+            gsQ.players[1].zones.battlefield.add(wardLifeCreature);
+            gsQ.log.push('[DEBUG] Ward Life Golem (3/4 Ward—Pay 2 life) spawned no campo do oponente.');
+            const refQ = (window as any).__gsRefresh;
+            if (refQ) refQ();
+          }
+          break;
+        }
         case 'k': case 'K':
           if (snap?.phase === 'mulligan') actions.keepHand();
           break;
@@ -787,7 +945,42 @@ export function GameScreen() {
     }
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [snap, actions, targeting, graveyardOpen, blockingWith, showStack, autoPass, exileOpen, abilityModal, equipModal, attackTargetPicker, adventureModal, conditionalCostConfirm, showHelpModal]);
+  }, [snap, actions, targeting, graveyardOpen, blockingWith, showStack, autoPass, exileOpen, abilityModal, equipModal, attackTargetPicker, adventureModal, conditionalCostConfirm, showHelpModal, viewingBattlefield]);
+
+  // ── Pending attack target tokens (mobilize etc. entering attacking when PW on field) ──
+  // Pop next token from queue and show attackTargetPicker
+  function _popNextPendingToken() {
+    const gs = (window as any).__gsRef?.current;
+    if (!gs || !gs._pendingAttackTargetTokens || gs._pendingAttackTargetTokens.length === 0) {
+      setAttackTargetPicker(null);
+      if (gs) delete gs._pendingAttackTargetTokens;
+      return;
+    }
+    const nextUid = gs._pendingAttackTargetTokens.shift();
+    if (gs._pendingAttackTargetTokens.length === 0) delete gs._pendingAttackTargetTokens;
+    // Find the token card on battlefield
+    const tokenCard = gs.players[0].zones.battlefield.get(nextUid);
+    setAttackTargetPicker({
+      attackerUid: nextUid,
+      isToken: true,
+      tokenName: tokenCard?.name || 'Token',
+    });
+    const ref = (window as any).__gsRefresh;
+    if (ref) ref();
+  }
+  function _clearPendingTokens() {
+    const gs = (window as any).__gsRef?.current;
+    if (gs) delete gs._pendingAttackTargetTokens;
+  }
+
+  // Auto-open attack target picker for pending tokens after refresh
+  useEffect(() => {
+    const gs = (window as any).__gsRef?.current;
+    if (gs && gs._pendingAttackTargetTokens && gs._pendingAttackTargetTokens.length > 0 && !attackTargetPicker) {
+      // Small delay so the token appears on BF first
+      setTimeout(() => _popNextPendingToken(), 100);
+    }
+  }, [snap, attackTargetPicker]);
 
   // Helper: does this spell need interactive targeting?
   // Strips activated ability lines (e.g. "{1}, {T}: Target creature...") to avoid
@@ -823,14 +1016,19 @@ export function GameScreen() {
     if (typeLineLower.includes('creature') && !typeLineLower.includes('aura')) return false;
     // Sagas never need targets at cast time — chapter effects are resolved during upkeep
     if (typeLineLower.includes('saga')) return false;
+    // Planeswalkers never need targets at cast time — loyalty abilities are activated after ETB
+    if (typeLineLower.includes('planeswalker')) return false;
+    // Equipment never needs targets at cast time — equip is an activated ability after ETB
+    if (typeLineLower.includes('equipment')) return false;
 
-    // GY-return spells: targeting handled during resolution via GY overlay, not BF targeting
+    // GY-return spells, optional_discard spells: targeting handled during resolution, not at cast time
     const db = getPreprocessedEffects(card as any);
     if (db && db.cast && db.cast.length > 0 && db.cast.every((e: any) =>
       e.type === 'return_from_graveyard' || e.type === 'draw' ||
       e.type === 'gain_life' || e.type === 'scry' || e.type === 'surveil' ||
       e.type === 'mill' || e.type === 'create_token' || e.type === 'counter_self' ||
-      e.type === 'reveal_hand' ||
+      e.type === 'reveal_hand' || e.type === 'optional_discard' ||
+      e.type === 'optional_discard_draw' || e.type === 'loot' ||
       (e.type === 'exile' && (e.target === 'opponent_hand_nonland' || e.target === 'opponent_hand')) ||
       (e.type === 'counter' && e.target === 'own_creature' && e.optional)
     )) {
@@ -846,6 +1044,10 @@ export function GameScreen() {
       }).join('\n');
     }
 
+    // Check if card's effect DB has prevent_damage_shield with explicit targeting (New Way Forward)
+    if (db && db.cast && db.cast.some((e: any) => e.type === 'prevent_damage_shield' && e.target)) {
+      return true;
+    }
     // Aura enchantments always need an enchant target on cast
     if (typeLineLower.includes('aura') && text.includes('enchant ')) return true;
     // Attacking/blocking creature targeting: valid only during combat, handle in getValidTargets
@@ -919,7 +1121,7 @@ export function GameScreen() {
 
     // Pattern A: ... then that creature fights target creature (Dragonclaw Strike)
     // Oracle: "...then it fights up to one target creature an opponent controls."
-    if ((text.includes('fights') || text.includes('fight')) && text.includes('target creature') && !text.includes('deals damage')) {
+    if ((text.includes('fights') || text.includes('fight')) && text.includes('target creature') && !text.includes('deals damage equal to its power to target')) {
       const buffVerb = text.includes('double') ? 'to double' : text.includes('counter') ? 'for the counter' : 'to buff';
       return [
         { side: 'own', prompt: `Choose a creature you control ${buffVerb}` },
@@ -992,6 +1194,17 @@ export function GameScreen() {
       return targets; // Player targets handled separately via handlePlayerTarget
     }
 
+    // prevent_damage_shield with target in effect DB (New Way Forward): target any creature on either side
+    const db2 = getPreprocessedEffects(card as any);
+    if (db2?.cast?.some((e: any) => e.type === 'prevent_damage_shield' && e.target)) {
+      [0, 1].forEach(pid => {
+        snap.players[pid].battlefield
+          .filter((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Planeswalker'))
+          .forEach((c: any) => targets.push({ type: 'creature', uid: c._uid, player: pid, card: c }));
+      });
+      return targets;
+    }
+
     // Restrict to attacking/blocking creatures when oracle text specifies it
     if (text.includes('attacking or blocking') || (text.includes('attacking') && text.includes('blocking') && text.includes('creature'))) {
       const allBF = [...snap.players[0].battlefield, ...snap.players[1].battlefield];
@@ -1019,7 +1232,7 @@ export function GameScreen() {
     // for cards like "deals 5 damage to target creature". 'any target' is handled via wantsAny below.
     const wantsPlayer = text.includes('target player') || text.includes('target opponent') ||
       text.includes('target player or planeswalker') || text.includes('target opponent or planeswalker');
-    const wantsEnemy = text.includes('target opponent') || (text.includes('destroy') && text.includes('target'));
+    const wantsEnemy = text.includes('target opponent') || text.includes('target opponent\'s');
     const wantsAny = text.includes('target creature or player') || text.includes('any target');
     // Planeswalkers are valid targets for: "planeswalker", "target permanent", "target nonland permanent", "any target"
     const wantsPlaneswalker = text.includes('planeswalker') || text.includes('target permanent') || text.includes('target nonland') || wantsAny;
@@ -1072,12 +1285,36 @@ export function GameScreen() {
       if (!wantsEnemy) targets.push({ type: 'player', player: 0, name: 'You' });
     }
 
-    return targets;
+    // Filter out opponent's hexproof/shroud creatures (player 0 = human, can't target opponent's hexproof)
+    const filteredTargets = targets.filter((t: any) => {
+      if (t.type === 'player') return true;
+      if (!t.card || t.player === 0) return true; // Own creatures always targetable
+      // Check hexproof (opponent's creatures with hexproof can't be targeted by us)
+      const kws = (t.card.keywords || []).map((k: string) => (k || '').toLowerCase());
+      const tempKws = (t.card._tempKeywords || []).map((tk: any) => (typeof tk === 'string' ? tk : tk.keyword || '').toLowerCase());
+      const grantedKws = (t.card._grantedKeywords || []).map((g: string) => (g || '').toLowerCase());
+      const hasHexproof = kws.includes('hexproof') || tempKws.includes('hexproof') || grantedKws.includes('hexproof') ||
+        (t.card._counters?.hexproof > 0) || (t.card._counters?.Hexproof > 0) ||
+        (t.card._hexproofUntilDamage && !t.card._hasDealtDamage);
+      const hasShroud = kws.includes('shroud') || tempKws.includes('shroud') || grantedKws.includes('shroud');
+      if (hasHexproof || hasShroud) return false;
+      return true;
+    });
+
+    // Filter by mana value if oracle text specifies it (e.g. "mana value 3 or greater")
+    const mvMatch = text.match(/mana value (\d+) or greater/);
+    if (mvMatch) {
+      const minMV = parseInt(mvMatch[1], 10);
+      return filteredTargets.filter((t: any) => t.type === 'player' || (t.card?.cmc ?? 0) >= minMV);
+    }
+
+    return filteredTargets;
   }
 
   function handleCardClick(card: any, pid: number) {
     if (!snap) return;
     const wi = snap.waitingForInput;
+    console.log(`[CLICK] ${card.name}, pid=${pid}, wfi=${wi?.type}, phase=${snap.phase}, targeting=${!!targeting}, inHand=${snap.players[0].hand.some((c:any) => c._uid === card._uid)}`);
 
     // ── post_modal_target: pick a creature/permanent after modal mode chosen ──
     // Must be checked BEFORE the targeting block so modal target clicks aren't
@@ -1124,6 +1361,18 @@ export function GameScreen() {
         isValid = tl.includes('creature') || tl.includes('enchantment');
       }
 
+      // Check hexproof/shroud — opponent's creatures with hexproof can't be targeted
+      if (isValid && pid === 1) {
+        const cKws = ((card.keywords || []) as string[]).map(k => (k || '').toLowerCase());
+        const cTempKws = ((card._tempKeywords || []) as any[]).map((tk: any) => (typeof tk === 'string' ? tk : tk.keyword || '').toLowerCase());
+        const cGrantedKws = ((card._grantedKeywords || []) as string[]).map((g: string) => (g || '').toLowerCase());
+        const hex = cKws.includes('hexproof') || cTempKws.includes('hexproof') || cGrantedKws.includes('hexproof') ||
+          (card._counters?.hexproof > 0) || (card._counters?.Hexproof > 0) ||
+          (card._hexproofUntilDamage && !card._hasDealtDamage);
+        const shr = cKws.includes('shroud') || cTempKws.includes('shroud') || cGrantedKws.includes('shroud');
+        if (hex || shr) isValid = false;
+      }
+
       if (isValid) {
         setTargeting(null); // clear the modal targeting arrow
         actions.resolvePostModalTarget({ type: 'creature', uid: card._uid, player: pid });
@@ -1136,8 +1385,13 @@ export function GameScreen() {
       // ETB damage targeting (Sonic Shrieker etc.): arrow leads here, resolve directly
       if ((targeting as any)._fromEtbDamage) {
         if (wi?.type === 'etb_any_damage_target' && wi.playerId === 0) {
-          if (card.type_line?.includes('Creature')) {
+          const isCreatureTarget = card.type_line?.includes('Creature') || card._isToken || card.power != null;
+          const isPWTarget = card.type_line?.includes('Planeswalker');
+          if (isCreatureTarget) {
             actions.resolveETBDamageTarget({ type: 'creature', uid: card._uid, player: pid });
+            setTargeting(null);
+          } else if (isPWTarget) {
+            actions.resolveETBDamageTarget({ type: 'permanent', uid: card._uid, player: pid });
             setTargeting(null);
           }
         }
@@ -1276,16 +1530,25 @@ export function GameScreen() {
 
     // ── etb_any_damage_target: pick a creature or player for ETB damage ──────
     if (wi?.type === 'etb_any_damage_target' && wi.playerId === 0) {
-      if (card.type_line?.includes('Creature')) {
+      const isCreatureTarget = card.type_line?.includes('Creature') || card._isToken || card.power != null;
+      const isPWTarget = card.type_line?.includes('Planeswalker');
+      if (isCreatureTarget) {
         actions.resolveETBDamageTarget({ type: 'creature', uid: card._uid, player: pid });
+      } else if (isPWTarget) {
+        actions.resolveETBDamageTarget({ type: 'permanent', uid: card._uid, player: pid });
       }
       return;
     }
 
     // ── choose_target engine waiting (saga chapters) ──────────────────────
     if (wi?.type === 'choose_target') {
-      actions.resolveChooseTarget([{ type: 'permanent', uid: card._uid, player: pid }]);
-      return;
+      // Only accept battlefield cards as targets (not hand/exile cards)
+      const onBF0 = snap.players[0].battlefield.some((c: any) => c._uid === card._uid);
+      const onBF1 = snap.players[1].battlefield.some((c: any) => c._uid === card._uid);
+      if (onBF0 || onBF1) {
+        actions.resolveChooseTarget([{ type: 'permanent', uid: card._uid, player: pid }]);
+      }
+      return; // Always return during choose_target — block other clicks
     }
 
     const phase = snap.phase;
@@ -1307,14 +1570,20 @@ export function GameScreen() {
       card.oracle_text?.toLowerCase().includes('flash') ||
       backFaceIsInstant;
 
-    // Exiled playable cards (Breaching Dragonstorm, Riverwheel Sweep, etc.)
-    if (inExiledPlayable && isMainPhase) {
+    // Exiled playable cards (Breaching Dragonstorm, Riverwheel Sweep, Tersa, etc.)
+    // Allow main phase for any card, or instant-speed during priority windows
+    if (inExiledPlayable && (isMainPhase || ((isInstantPriority || isStackPriority) && isInstant))) {
       if (spellNeedsTargeting(card)) {
         setTargeting({ cardUid: card._uid, card });
       } else {
         showCastAnimation(card);
         actions.castSpell(card._uid);
       }
+      return;
+    }
+    // Exiled playable clicked outside valid window — show hint
+    if (inExiledPlayable && !isMainPhase) {
+      addToast('Você pode conjurar esta carta na fase principal', 'info');
       return;
     }
 
@@ -1339,11 +1608,13 @@ export function GameScreen() {
       }
 
       // Counter spells: auto-target opponent's topmost stack spell
+      // Skip for creatures — their counter ability is in ETB modal, not a cast effect
       const cardText = (card.oracle_text || '').toLowerCase();
-      const isCounterSpell = cardText.includes('counter target spell') ||
+      const isCreatureCard = (card.type_line || '').includes('Creature');
+      const isCounterSpell = !isCreatureCard && (cardText.includes('counter target spell') ||
                               cardText.includes('counter target creature spell') ||
                               cardText.includes('counter target instant') ||
-                              cardText.includes('counter target sorcery');
+                              cardText.includes('counter target sorcery'));
       if (isCounterSpell) {
         const gs = gsRef.current;
         // Check both stack.items AND _pendingCastOnStack for the target spell
@@ -1433,6 +1704,17 @@ export function GameScreen() {
   function handlePlayerTarget(pid: number) {
     if (!snap) return;
     if (targeting) {
+      // ETB damage targeting (Reliquary Dragon etc.): allow player targeting (unless creatureOnly)
+      if ((targeting as any)._fromEtbDamage) {
+        if (snap.waitingForInput?.type === 'etb_any_damage_target' && snap.waitingForInput.playerId === 0) {
+          const pendingDmg = gsRef.current?._pendingEtbAnyDamage;
+          if (!pendingDmg?.creatureOnly) {
+            actions.resolveETBDamageTarget({ type: 'player', player: pid });
+            setTargeting(null);
+          }
+        }
+        return;
+      }
       // Multi-step targeting: handle player as a target in any_target steps
       if (targeting.steps && targeting.step) {
         const currentStep = targeting.steps[targeting.step - 1];
@@ -1468,8 +1750,10 @@ export function GameScreen() {
     if (snap.waitingForInput?.type === 'choose_target') {
       actions.resolveChooseTarget([{ type: 'player', player: pid }]);
     }
-    // etb_any_damage_target: player targeting for ETB damage
+    // etb_any_damage_target: player targeting for ETB damage (unless creatureOnly)
     if (snap.waitingForInput?.type === 'etb_any_damage_target' && snap.waitingForInput.playerId === 0) {
+      const pendingDmg2 = gsRef.current?._pendingEtbAnyDamage;
+      if (pendingDmg2?.creatureOnly) return; // block player targeting
       actions.resolveETBDamageTarget({ type: 'player', player: pid });
     }
     // post_modal_target: allow player targeting for damage/drain-type modes
@@ -1509,7 +1793,21 @@ export function GameScreen() {
 
     // Equipment: show creature picker to attach to
     if ((card.type_line || '').includes('Equipment')) {
-      setEquipModal({ equipUid: card._uid, equipName: card.name });
+      // Extract equip cost from oracle text (e.g. "Equip {1}{R}")
+      const equipMatch = (card.oracle_text || '').match(/[Ee]quip\s+((?:\{[^}]+\})+)/);
+      const equipCost = equipMatch ? equipMatch[1] : '';
+      setEquipModal({ equipUid: card._uid, equipName: card.name, equipCost });
+      return;
+    }
+
+    // Granted activated abilities (e.g. "{5}: Untap this creature" from aura)
+    if (card._grantedActivated && card._grantedActivated.length > 0) {
+      const grantedAbilities = card._grantedActivated.map((ab: any, idx: number) => ({
+        cost: `{${ab.cost}}`,
+        text: ab.effect === 'untap_self' ? `{${ab.cost}}: Untap this creature` : `{${ab.cost}}: Activate ability`,
+        _grantedIdx: idx,
+      }));
+      setAbilityModal({ card, abilities: grantedAbilities, isGranted: true });
       return;
     }
 
@@ -1529,20 +1827,29 @@ export function GameScreen() {
 
   // Handle activating an ability from the ability modal
   function handleActivateAbility(cardUid: string, abilityIdx: number, card: any, xValue?: number) {
+    if ((abilityModal as any)?.isGranted) {
+      const ab = card._grantedActivated?.[abilityIdx];
+      if (ab) actions.activateGrantedAbility(cardUid, abilityIdx);
+      setAbilityModal(null);
+      return;
+    }
     const isPlaneswalker = card.type_line?.includes('Planeswalker');
     if (isPlaneswalker) {
       actions.activateLoyaltyAbility(cardUid, abilityIdx);
     } else {
-      // Use battlefield ability activation (not graveyard)
       actions.activateBattlefieldAbility(cardUid, abilityIdx, xValue);
     }
   }
 
-  // ── Floating mana pip on land tap ────────────────────────────────────────────
+  // ── Floating mana pip on land tap / auto-tap ────────────────────────────────
   function spawnManaFloat(landCard: any) {
     const colors = getLandManaColors(landCard);
     const color = colors[0] || 'C';
-    const el = document.querySelector(`[data-uid="${landCard._uid}"]`) as HTMLElement | null;
+    _spawnManaFloatAt(landCard._uid, color);
+  }
+
+  function _spawnManaFloatAt(uid: string, color: string) {
+    const el = document.querySelector(`[data-uid="${uid}"]`) as HTMLElement | null;
     let x = window.innerWidth * 0.5 + (Math.random() - 0.5) * 120;
     let y = window.innerHeight * 0.72;
     if (el) {
@@ -1550,10 +1857,20 @@ export function GameScreen() {
       x = rect.left + rect.width / 2;
       y = rect.top + rect.height / 2;
     }
-    const id = landCard._uid + '_' + Date.now();
+    const id = uid + '_' + Date.now() + '_' + Math.random();
     setFloatingManas(prev => [...prev, { id, color, x, y }]);
     setTimeout(() => setFloatingManas(prev => prev.filter(f => f.id !== id)), 850);
   }
+
+  // Listen for auto-tap mana:float events from the engine
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { uid, color } = (e as CustomEvent).detail;
+      if (uid && color) _spawnManaFloatAt(uid, color);
+    };
+    window.addEventListener('mana:float', handler);
+    return () => window.removeEventListener('mana:float', handler);
+  }, []);
 
   // ── Loading / Error ──────────────────────────────────────────────────────────
 
@@ -1699,7 +2016,7 @@ export function GameScreen() {
       let cheapestCost = '';
       let cheapestCmc = Infinity;
       for (const ab of abilities) {
-        const abCostStr = typeof ab.cost === 'string' ? ab.cost : (ab.cost?.mana || '');
+        const abCostStr = typeof ab.cost === 'string' ? ab.cost : ((ab.cost as any)?.mana || '');
         const abCmc = (abCostStr.match(/\{[^}]+\}/g) || []).reduce((sum: number, s: string) => {
           const inner = s.replace(/[{}]/g, '');
           if (/^\d+$/.test(inner)) return sum + parseInt(inner);
@@ -1838,10 +2155,14 @@ export function GameScreen() {
     }
 
     // Phase 1: view hand + keep/mulligan
+    const youGoFirst = snap.startingPlayer === 0;
     return (
       <div className="game-screen animate-fade-in">
         <div className="game-mulligan-overlay">
           <h2>Opening Hand{mulligansTaken > 0 ? ` (Mulligan #${mulligansTaken})` : ''}</h2>
+          <p style={{ marginBottom: 8, fontSize: '1.05em', color: youGoFirst ? '#ffd700' : '#aab' }}>
+            {youGoFirst ? '🪙 You won the coin flip — you go first!' : '🪙 Opponent won the coin flip — they go first.'}
+          </p>
           <div className="game-mulligan-hand">
             {p0.hand.map((card: any) => (
               <div key={card._uid} className="game-hand-card">
@@ -1959,7 +2280,7 @@ export function GameScreen() {
                   <>
                     <img
                       className="gy-zone-card"
-                      src={topGyCard.image_normal || topGyCard.image_small}
+                      src={getLandArtUrl(topGyCard) || topGyCard.image_normal || topGyCard.image_small}
                       alt={topGyCard.name}
                       onError={e => { (e.currentTarget as HTMLImageElement).src = CARD_BACK; }}
                     />
@@ -1988,19 +2309,78 @@ export function GameScreen() {
               const makeCard = (card: any) => {
                 const _stepFilter = targeting?.steps && targeting.step ? targeting.steps[targeting.step - 1]?.side : undefined;
                 const validTgts = targeting ? getValidTargets(targeting.card, _stepFilter) : [];
+                // Saga choose_target: highlight valid targets
+                const isSagaChoose = snap.waitingForInput?.type === 'choose_target' && snap.waitingForInput.playerId === 0;
+                const sagaPending = isSagaChoose ? gsRef.current?._pendingSagaChapter : null;
+                const isSagaTarget = !!(sagaPending && sagaPending.effects?.some((eff: any) => {
+                  const t = (eff.target || '') as string;
+                  if (t === 'nonland_permanent') return !card.type_line?.includes('Land');
+                  if (t === 'creature') return card.type_line?.includes('Creature');
+                  if (t === 'opponent_creature') return card.type_line?.includes('Creature');
+                  if (t === 'artifact') return card.type_line?.includes('Artifact');
+                  if (t === 'enchantment') return card.type_line?.includes('Enchantment');
+                  return false;
+                }));
+                // post_modal_target: highlight valid targets on opponent battlefield
+                const isPostModalTgt = wi?.type === 'post_modal_target' && wi.playerId === 0;
+                const isPostModalValidOpp = (() => {
+                  if (!isPostModalTgt) return false;
+                  // Hexproof/shroud: opponent's protected creatures can't be targeted
+                  const _ckws = ((card.keywords || []) as string[]).map(k => (k || '').toLowerCase());
+                  const _hex = _ckws.includes('hexproof') || (card._hexproofUntilDamage && !card._hasDealtDamage) ||
+                    (card._counters?.hexproof > 0) || (card._counters?.Hexproof > 0) ||
+                    ((card._tempKeywords || []) as any[]).some((tk: any) => (typeof tk === 'string' ? tk : tk.keyword || '').toLowerCase() === 'hexproof') ||
+                    ((card._grantedKeywords || []) as string[]).some((g: string) => (g || '').toLowerCase() === 'hexproof');
+                  if (_hex || _ckws.includes('shroud')) return false;
+                  const tt = wi.targetType;
+                  const tl = (card.type_line || '').toLowerCase();
+                  if (tt === 'opponent_creature') return tl.includes('creature');
+                  if (tt === 'creature' || tt === 'any') return tl.includes('creature');
+                  if (tt === 'creature_or_planeswalker' || tt === 'opponent_creature_or_planeswalker') return tl.includes('creature') || tl.includes('planeswalker');
+                  if (tt === 'enchantment') return tl.includes('enchantment');
+                  if (tt === 'artifact') return tl.includes('artifact');
+                  if (tt === 'artifact_or_enchantment' || tt === 'opponent_artifact_or_enchantment') return tl.includes('artifact') || tl.includes('enchantment');
+                  if (tt === 'permanent') return !tl.includes('instant') && !tl.includes('sorcery');
+                  if (tt === 'nonland_permanent') return !tl.includes('land');
+                  if (tt === 'creature_with_flying') return tl.includes('creature') && ((card.keywords || []) as string[]).some(k => (k || '').toLowerCase() === 'flying');
+                  if (tt === 'creature_power4+') return tl.includes('creature') && parseInt(card.power || '0', 10) >= 4;
+                  if (tt === 'creature_or_enchantment') return tl.includes('creature') || tl.includes('enchantment');
+                  if (tt === 'creature_or_artifact') return tl.includes('creature') || tl.includes('artifact');
+                  // own_creature targets should NOT highlight opponent's creatures
+                  if (tt === 'own_creature' || tt === 'own_nonlegendary_creature') return false;
+                  return false;
+                })();
+                // etb_any_damage_target: highlight creatures as valid targets
+                const isEtbDmgTarget = wi?.type === 'etb_any_damage_target' && wi.playerId === 0;
+                const isEtbDmgValid = isEtbDmgTarget && (card.type_line || '').toLowerCase().includes('creature');
                 const isTargetable = !!(targeting &&
-                  validTgts.some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
-                const isNotTargetable = !!(targeting && !isTargetable && validTgts.length > 0);
+                  validTgts.some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid)) || !!isSagaTarget || isPostModalValidOpp || !!isEtbDmgValid;
+                const isNotTargetable = !!(targeting && !isTargetable && validTgts.length > 0) || !!(isSagaChoose && !isSagaTarget) || !!(isPostModalTgt && !isPostModalValidOpp) || !!(isEtbDmgTarget && !isEtbDmgValid);
                 const isBlockingTarget = !!(snap.waitingForInput?.type === 'declare_blockers' &&
                   blockingWith.length > 0 && card._attacking);
                 // Show "being attacked" glow on a PW that is currently targeted by an attacker
                 const isAttackTarget = !!(card.type_line?.includes('Planeswalker') &&
                   combat.attackers.some((a: any) => a.attackTarget === card._uid));
-                // Resolve attachment card objects (equipment/auras on this creature)
+                // Resolve attachment card objects (equipment/auras — may come from either player's BF)
+                const p0BfMapForOpp = new Map(p0.battlefield.map((c: any) => [c._uid, c]));
                 const attachmentCards = (card._attachments || [])
-                  .map((uid: string) => p1BfMap.get(uid)).filter(Boolean);
+                  .map((uid: string) => p1BfMap.get(uid) || p0BfMapForOpp.get(uid)).filter(Boolean);
                 // Cards exiled by this permanent (e.g. Banishing Light)
                 const exiledCards = card._exiledCards || [];
+                // Compute granted keywords from other permanents (e.g. Call the Spirit Dragons → indestructible)
+                let grantedKws: Set<string> | undefined;
+                if (card.type_line?.includes('Dragon')) {
+                  const bf = snap.players[1].battlefield;
+                  for (const g of bf) {
+                    if (g._grantDragons) {
+                      if (!grantedKws) grantedKws = new Set();
+                      String(g._grantDragons).split(',').forEach((k: string) => {
+                        const kw = k.trim();
+                        grantedKws!.add(kw.charAt(0).toUpperCase() + kw.slice(1));
+                      });
+                    }
+                  }
+                }
                 return (
                   <BattlefieldCard
                     key={card._uid}
@@ -2016,6 +2396,8 @@ export function GameScreen() {
                     overrideArtUrl={getLandArtUrl(card)}
                     attachmentCards={attachmentCards}
                     exiledCards={exiledCards}
+                    grantedKeywords={grantedKws}
+                    onAttachmentTargetClick={wi?.type === 'post_modal_target' ? (a => handleCardClick(a, a._ownerId ?? 0)) : undefined}
                     onClick={c => handleCardClick(c, 1)}
                     onRightClick={c => setZoom(c)}
                   />
@@ -2035,6 +2417,14 @@ export function GameScreen() {
       <div className="game-center-strip">
         {/* Phase strip */}
         <div className="game-phase-strip">
+          {/* Full Control toggle */}
+          <button
+            className={`full-control-btn ${fullControl ? 'active' : ''}`}
+            onClick={() => { fullControlRef.current = !fullControlRef.current; setFullControl(v => !v); }}
+            title="Full Control (X) — Pausar em cada fase e escolher ordem dos triggers"
+          >
+            FC
+          </button>
           {/* My Turn Row */}
           {(() => {
             const displayPhases = PHASES.filter(p => !['mulligan', 'untap', 'cleanup'].includes(p.key));
@@ -2208,7 +2598,7 @@ export function GameScreen() {
                     </div>
               ))
             )}
-            {canUndoMana && isMainPhaseHuman && (
+            {canUndoMana && humanHasPriority && (
               <button
                 className="btn-undo-mana"
                 onClick={() => actions.undoTapLand()}
@@ -2218,6 +2608,30 @@ export function GameScreen() {
           </div>
         )}
       </div>
+
+      {/* ── Pending temp triggers indicator (Dalkovan Encampment etc.) ── */}
+      {(() => {
+        const triggers = (snap as any)?._tempTriggers || [];
+        const myTriggers = triggers.filter((t: any) => t.controller === 0);
+        if (myTriggers.length === 0) return null;
+        return (
+          <div style={{
+            position: 'absolute', bottom: 160, left: '50%', transform: 'translateX(-50%)',
+            background: 'rgba(40,120,60,0.92)', color: '#fff', padding: '4px 14px',
+            borderRadius: 8, fontSize: 13, fontWeight: 600, zIndex: 50,
+            display: 'flex', gap: 8, alignItems: 'center', pointerEvents: 'none',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+          }}>
+            <span>⚡</span>
+            {myTriggers.map((t: any, i: number) => {
+              const desc = t.event === 'attacks'
+                ? `Ao atacar: cria ${t.effects?.[0]?.count || '?'} ${t.effects?.[0]?.name || 'token'}(s)`
+                : `Trigger pendente: ${t.event}`;
+              return <span key={i}>{desc}</span>;
+            })}
+          </div>
+        );
+      })()}
 
       {/* ── My battlefield ── */}
       <div
@@ -2261,22 +2675,73 @@ export function GameScreen() {
               const makeCard = (card: any) => {
                 const _stepFilter2 = targeting?.steps && targeting.step ? targeting.steps[targeting.step - 1]?.side : undefined;
                 const _ownValidTgts2 = targeting ? getValidTargets(targeting.card, _stepFilter2) : [];
+                // Saga choose_target: highlight valid targets on own battlefield too
+                const isSagaChoose2 = snap.waitingForInput?.type === 'choose_target' && snap.waitingForInput.playerId === 0;
+                const sagaPending2 = isSagaChoose2 ? gsRef.current?._pendingSagaChapter : null;
+                const isSagaTarget2 = !!(sagaPending2 && sagaPending2.effects?.some((eff: any) => {
+                  const t = (eff.target || '') as string;
+                  if (t === 'nonland_permanent') return !card.type_line?.includes('Land');
+                  if (t === 'creature') return card.type_line?.includes('Creature');
+                  if (t === 'artifact') return card.type_line?.includes('Artifact');
+                  if (t === 'enchantment') return card.type_line?.includes('Enchantment');
+                  return false;
+                }));
+                // post_modal_target: highlight valid targets on own battlefield
+                const isPostModalTarget = wi?.type === 'post_modal_target' && wi.playerId === 0;
+                const isPostModalValid = (() => {
+                  if (!isPostModalTarget) return false;
+                  const tt = wi.targetType;
+                  const tl = (card.type_line || '').toLowerCase();
+                  if (tt === 'creature' || tt === 'any') return tl.includes('creature');
+                  if (tt === 'own_creature') return tl.includes('creature');
+                  if (tt === 'own_nonlegendary_creature') return tl.includes('creature') && !tl.includes('legendary');
+                  if (tt === 'artifact') return tl.includes('artifact');
+                  if (tt === 'enchantment') return tl.includes('enchantment');
+                  if (tt === 'permanent') return !tl.includes('instant') && !tl.includes('sorcery');
+                  if (tt === 'nonland_permanent') return !tl.includes('land');
+                  if (tt === 'artifact_or_enchantment' || tt === 'opponent_artifact_or_enchantment') return tl.includes('artifact') || tl.includes('enchantment');
+                  if (tt === 'creature_or_planeswalker') return tl.includes('creature') || tl.includes('planeswalker');
+                  if (tt === 'creature_or_enchantment') return tl.includes('creature') || tl.includes('enchantment');
+                  if (tt === 'creature_or_artifact') return tl.includes('creature') || tl.includes('artifact');
+                  if (tt === 'creature_with_flying') return tl.includes('creature') && ((card.keywords || []) as string[]).some(k => (k || '').toLowerCase() === 'flying');
+                  if (tt === 'creature_power4+') return tl.includes('creature') && parseInt(card.power || '0', 10) >= 4;
+                  return false;
+                })();
+                // etb_any_damage_target: highlight creatures on own BF too (can target any creature)
+                const isEtbDmgTarget2 = wi?.type === 'etb_any_damage_target' && wi.playerId === 0;
+                const isEtbDmgValid2 = isEtbDmgTarget2 && (card.type_line || '').toLowerCase().includes('creature');
                 const isTargetable = !!(targeting &&
-                  _ownValidTgts2.some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid));
-                const isNotTargetable2 = !!(targeting && !isTargetable && _ownValidTgts2.length > 0);
+                  _ownValidTgts2.some((t: any) => (t.type === 'creature' || t.type === 'permanent') && t.uid === card._uid)) || !!isSagaTarget2 || isPostModalValid || !!isEtbDmgValid2;
+                const isNotTargetable2 = !!(targeting && !isTargetable && _ownValidTgts2.length > 0) || !!(isSagaChoose2 && !isSagaTarget2) || !!(isPostModalTarget && !isPostModalValid) || !!(isEtbDmgTarget2 && !isEtbDmgValid2);
                 const isAssignedBlocker = !!(card._blocking);
                 const isSelectedBlocker = blockingWith.includes(card._uid);
                 const canActivatePW = !!(
                   card.type_line?.includes('Planeswalker') &&
                   isMainPhaseHuman &&
-                  !card._loyaltyUsedThisTurn
+                  !card._loyaltyUsedThisTurn &&
+                  !snap.stackSize
                 );
-                // Resolve attachment card objects (equipment/auras on this creature)
+                // Resolve attachment card objects (equipment/auras — may come from either player's BF)
+                const p1BfMapForOwn = new Map(p1.battlefield.map((c: any) => [c._uid, c]));
                 const attachmentCards = (card._attachments || [])
-                  .map((uid: string) => p0BfMap.get(uid)).filter(Boolean);
+                  .map((uid: string) => p0BfMap.get(uid) || p1BfMapForOwn.get(uid)).filter(Boolean);
                 // Cards exiled by this permanent (e.g. Banishing Light)
                 const exiledCards = card._exiledCards || [];
                 const isBetor = (card.name || '').toLowerCase() === 'betor, kin to all';
+                // Compute granted keywords from other permanents
+                let grantedKws0: Set<string> | undefined;
+                if (card.type_line?.includes('Dragon')) {
+                  const bf = snap.players[0].battlefield;
+                  for (const g of bf) {
+                    if (g._grantDragons) {
+                      if (!grantedKws0) grantedKws0 = new Set();
+                      String(g._grantDragons).split(',').forEach((k: string) => {
+                        const kw = k.trim();
+                        grantedKws0!.add(kw.charAt(0).toUpperCase() + kw.slice(1));
+                      });
+                    }
+                  }
+                }
                 return (
                   <div key={card._uid} onMouseEnter={() => setHoveredBfCard(card._uid)} onMouseLeave={() => setHoveredBfCard(null)}>
                   <BattlefieldCard
@@ -2295,7 +2760,9 @@ export function GameScreen() {
                     cantBlock={!!card._cantBlockThisTurn}
                     attachmentCards={attachmentCards}
                     exiledCards={exiledCards}
+                    grantedKeywords={grantedKws0}
                     betorToughnessTotal={isBetor ? myTotalToughness : undefined}
+                    onAttachmentTargetClick={wi?.type === 'post_modal_target' ? (a => handleCardClick(a, a._ownerId ?? 0)) : undefined}
                     onClick={c => handleCardClick(c, 0)}
                     onDoubleClick={c => handleDoubleClick(c)}
                     onRightClick={c => setZoom(c)}
@@ -2542,6 +3009,46 @@ export function GameScreen() {
             );
           })()}
 
+          {/* ── Graveyard Lands slot (Glacierwood Siege Sultai mode) ── */}
+          {(() => {
+            const canPlayGYLand = !snap.landPlayedThisTurn && (snap.phase === 'main1' || snap.phase === 'main2') && !!(gsRef.current as any)?._playLandsFromGraveyard?.[0];
+            if (!canPlayGYLand) return null;
+            const gyLands = (p0.graveyard || []).filter((c: any) => c.type_line?.toLowerCase().includes('land'));
+            if (gyLands.length === 0) return null;
+            return (
+              <div style={{ order: 0, flexShrink: 0, padding: '4px 6px', alignSelf: 'center' }}>
+                <div
+                  onClick={() => setGraveyardLandsOpen(true)}
+                  title="Play land from graveyard"
+                  style={{
+                    width: 56, height: 56, borderRadius: '50%', cursor: 'pointer',
+                    background: 'linear-gradient(135deg, rgba(40,140,60,0.4), rgba(80,200,100,0.2))',
+                    border: '2px solid rgba(60,180,80,0.7)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 0 10px rgba(60,180,80,0.4)',
+                    transition: 'transform 0.15s, box-shadow 0.15s',
+                    position: 'relative',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.1)'; e.currentTarget.style.boxShadow = '0 0 16px rgba(60,180,80,0.7)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 0 10px rgba(60,180,80,0.4)'; }}
+                >
+                  <img
+                    src="/img/land-icon.png"
+                    alt="land"
+                    style={{ width: 34, height: 34, filter: 'invert(1) sepia(1) saturate(3) hue-rotate(80deg) brightness(1.2)', objectFit: 'contain' }}
+                  />
+                  <span style={{
+                    position: 'absolute', top: -4, right: -4,
+                    background: '#2a2', color: '#fff', fontSize: 11, fontWeight: 800,
+                    width: 20, height: 20, borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    border: '1.5px solid #111',
+                  }}>{gyLands.length}</span>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* ── Deck + Graveyard panel (right side of hand row) ── */}
           {(() => {
             const CARD_BACK = sleeveArt || 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg';
@@ -2558,7 +3065,7 @@ export function GameScreen() {
                   {topGyCard ? (
                     <img
                       className="hand-zone-card"
-                      src={topGyCard.image_normal || topGyCard.image_small}
+                      src={getLandArtUrl(topGyCard) || topGyCard.image_normal || topGyCard.image_small}
                       alt={topGyCard.name}
                       onError={e => { (e.currentTarget as HTMLImageElement).src = CARD_BACK; }}
                     />
@@ -2610,6 +3117,11 @@ export function GameScreen() {
           <div className="game-zoom-info glass" onClick={e => e.stopPropagation()}>
             <div className="game-zoom-header">
               <div className="game-zoom-name">{zoom.name}</div>
+              {(zoom as any)._isCopy && (zoom as any)._originalCard && (
+                <div style={{ color: '#b388ff', fontSize: '12px', fontWeight: 700, marginTop: '2px' }}>
+                  🔮 Copia — Original: {(zoom as any)._originalCard.name}
+                </div>
+              )}
               {(zoom.power != null || zoom._powerMod || zoom._counters) && (
                 <button
                   className={`btn btn-sm zoom-toggle-btn ${zoomModified ? 'active' : ''}`}
@@ -2647,15 +3159,18 @@ export function GameScreen() {
             <button
               onClick={() => setViewingBattlefield(false)}
               style={{
-                position: 'fixed', top: 10, right: 12, zIndex: 9999,
-                padding: '8px 18px', borderRadius: '10px',
-                background: 'rgba(240,192,64,0.95)', color: '#1a1025',
-                fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.6)', letterSpacing: '0.5px',
+                position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                zIndex: 9999,
+                padding: '16px 40px', borderRadius: '14px',
+                background: 'linear-gradient(135deg, #f0c040, #e0a020)', color: '#1a1025',
+                fontWeight: 900, fontSize: '18px', border: '2px solid #fff3',
+                cursor: 'pointer',
+                boxShadow: '0 6px 30px rgba(0,0,0,0.7), 0 0 60px rgba(240,192,64,0.3)',
+                letterSpacing: '0.5px',
                 animation: 'pulse 1.5s ease-in-out infinite',
               }}
             >
-              ↩ Voltar à seleção
+              ↩ Voltar à escolha (Esc)
             </button>
           );
         }
@@ -2685,13 +3200,18 @@ export function GameScreen() {
           case 'scry':
           case 'surveil':
             return gs?._pendingScry ? (
-              <ScryOverlay pendingScry={gs._pendingScry} onConfirm={actions.resolveScry} />
+              <ScryOverlay pendingScry={gs._pendingScry} onConfirm={actions.resolveScry} onViewBattlefield={() => setViewingBattlefield(true)} />
             ) : null;
 
           // ── Modal spell picker ──────────────────────────────────────────
           case 'modal_choice':
             return gs?._pendingModal ? (
-              <ModalOverlay pendingModal={gs._pendingModal} onConfirm={actions.resolveModal} />
+              <ModalOverlay
+                pendingModal={gs._pendingModal}
+                onConfirm={actions.resolveModal}
+                onCancel={() => actions.cancelModal?.()}
+                onViewBattlefield={() => setViewingBattlefield(true)}
+              />
             ) : null;
 
           // ── Post-modal target selection banner ──────────────────────────
@@ -2751,24 +3271,21 @@ export function GameScreen() {
                 boxShadow: `0 0 20px ${hasValidTargets ? 'rgba(124,58,237,0.5)' : 'rgba(231,76,60,0.5)'}`,
               }}>
                 🎯 {wi.cardName || 'Spell'}: choose {label}
-                {hasValidTargets ? (
-                  <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4 }}>
-                    Click a valid target on the battlefield
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: '#ff6b6b', marginTop: 4 }}>
-                    ⚠ Nenhum alvo válido no campo
-                  </div>
-                )}
+                <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4 }}>
+                  Click a valid target on the battlefield
+                </div>
                 <button
                   style={{
                     marginTop: 10, display: 'block', width: '100%',
                     background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.3)',
                     borderRadius: 6, color: '#fff', cursor: 'pointer', padding: '4px 0', fontSize: 12,
                   }}
-                  onClick={() => actions.resolvePostModalTarget(null)}
+                  onClick={() => {
+                    setTargeting(null);
+                    actions.resolvePostModalTarget(null);
+                  }}
                 >
-                  {hasValidTargets ? 'Cancelar (Esc)' : 'OK — sem alvo, a mágica fizzla'}
+                  Cancelar (Esc)
                 </button>
               </div>
             );
@@ -2824,7 +3341,34 @@ export function GameScreen() {
               />
             );
           case 'mandatory_discard':
-            return gs?._pendingDiscard ? (
+            if (!gs?._pendingDiscard) return null;
+            // unless_creature step 1: offer to discard a creature (highlighted)
+            if (gs._pendingDiscard.unless_creature && !gs._pendingDiscard._skippedCreature) {
+              const creaturesInHand = snap.players[0].hand.filter((c: any) => (c.type_line || '').includes('Creature'));
+              if (creaturesInHand.length > 0) {
+                return (
+                  <DiscardOverlay
+                    hand={creaturesInHand}
+                    amount={1}
+                    optional
+                    title="🗑 Discard a Creature?"
+                    hint="Discard 1 creature to avoid discarding 2 cards. If you click Skip, you will discard 2 cards instead."
+                    onConfirm={(uids: string[]) => {
+                      if (uids.length > 0) {
+                        actions.resolveMandatoryDiscard(uids);
+                      } else {
+                        // Skip: move to step 2 (discard 2 non-creature)
+                        gs._pendingDiscard._skippedCreature = true;
+                        forceUpdate(n => n + 1);
+                      }
+                    }}
+                  />
+                );
+              }
+              // No creatures in hand: fall through to discard 2
+              gs._pendingDiscard._skippedCreature = true;
+            }
+            return (
               <DiscardOverlay
                 hand={snap.players[0].hand}
                 amount={gs._pendingDiscard.amount || 1}
@@ -2832,7 +3376,7 @@ export function GameScreen() {
                 title={gs._pendingDiscard.up_to ? '🗑 Discard (Optional — up to N)' : '🗑 Mandatory Discard'}
                 onConfirm={actions.resolveMandatoryDiscard}
               />
-            ) : null;
+            );
           case 'discard_for_loot':
             return (
               <DiscardOverlay
@@ -2853,16 +3397,24 @@ export function GameScreen() {
                 onConfirm={actions.resolveRummage}
               />
             ) : null;
-          case 'optional_discard_choice':
-            return gs?._pendingOptionalDiscard ? (
+          case 'optional_discard_choice': {
+            const discPending = gs?._pendingOptionalDiscard;
+            if (!discPending) return null;
+            const discSource = discPending.sourceName || '';
+            const discHint = discPending.returnFromGY
+              ? `Discard a card to return a creature or land from your graveyard to your hand.`
+              : (discPending.hint || (discPending.onNonlandDiscard ? 'Discard a nonland card to trigger bonus effect!' : ''));
+            return (
               <DiscardOverlay
                 hand={snap.players[0].hand}
-                amount={gs._pendingOptionalDiscard.amount || 1}
+                amount={discPending.amount || 1}
                 optional
-                title="🗑 Optional Discard"
+                title={`🗑 Optional Discard${discSource ? ` — ${discSource}` : ''}`}
+                hint={discHint}
                 onConfirm={uids => actions.resolveDiscard(uids)}
               />
-            ) : null;
+            );
+          }
 
           // ── Search library / Ramp choice ────────────────────────────────
           case 'ramp_choice':
@@ -2877,8 +3429,9 @@ export function GameScreen() {
               enchantment: 'an Enchantment', dragon: 'a Dragon', permanent: 'a Permanent',
             };
             const typeHint = searchTypeLabel[searchTarget] || '';
-            const titleBase = pending?.tapped ? '🌳 Search — Put Land into Play (Tapped)' : '📚 Search Library';
-            const title = typeHint ? `${titleBase} — Choose ${typeHint}` : titleBase;
+            const titleBase = pending?.tapped ? '🌳 Search — Put Land into Play (Tapped)' : (pending?.toBattlefield ? '📚 Search — Put onto Battlefield' : '📚 Search Library');
+            const mvHint = pending?.maxMV !== undefined ? ` (MV ≤ ${pending.maxMV})` : '';
+            const title = typeHint ? `${titleBase} — Choose ${typeHint}${mvHint}` : `${titleBase}${mvHint}`;
             return candidates.length > 0 ? (
               <SearchLibraryOverlay
                 candidates={candidates}
@@ -2887,6 +3440,53 @@ export function GameScreen() {
                 onConfirm={actions.resolveSearchLibrary}
               />
             ) : null;
+          }
+
+          // ── Search library to graveyard (Lotuslight Dancers) ─────────────
+          case 'search_library_to_gy': {
+            const pendingGY = gs?._pendingSearchToGY;
+            if (!pendingGY) return null;
+            const colorIdx = pendingGY.currentColorIndex || 0;
+            const currentColor = pendingGY.colors[colorIdx];
+            const colorNames: Record<string, string> = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
+            const colorCands = (pendingGY.colorCandidates[currentColor] || [])
+              .filter((c: any) => !pendingGY.chosen.some((ch: any) => ch._uid === c._uid));
+            return colorCands.length > 0 ? (
+              <SearchLibraryOverlay
+                candidates={colorCands}
+                optional={true}
+                title={`📚 Search — Choose a ${colorNames[currentColor] || currentColor} card to put into graveyard (${colorIdx + 1}/${pendingGY.colors.length})`}
+                onConfirm={actions.resolveSearchToGY}
+              />
+            ) : null;
+          }
+
+          // ── X cost choice (human chooses how much X to pay) ──────────────
+          case 'choose_x_cost': {
+            const xPending = gs?._pendingXCast;
+            if (!xPending) return null;
+            const maxX = xPending.maxX || 0;
+            const cardName = xPending.card?.name || 'Spell';
+            return (
+              <div className="overlay-backdrop" style={{ zIndex: 9999 }}>
+                <div className="overlay-panel" style={{ padding: '24px', minWidth: '320px', textAlign: 'center' }}>
+                  <h3 style={{ marginBottom: '12px' }}>🔢 Choose X for {cardName}</h3>
+                  <p style={{ marginBottom: '16px', opacity: 0.8 }}>How much mana to pay for X? (max {maxX})</p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center' }}>
+                    {Array.from({ length: maxX + 1 }, (_, i) => (
+                      <button
+                        key={i}
+                        className="btn-overlay"
+                        style={{ minWidth: '48px', padding: '8px 12px', fontSize: '16px', fontWeight: i === maxX ? 'bold' : 'normal' }}
+                        onClick={() => actions.resolveXChoice(i)}
+                      >
+                        X = {i}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
           }
 
           // ── Blight choice (pick own creature for -1/-1) ──────────────────
@@ -2919,16 +3519,71 @@ export function GameScreen() {
             );
           }
 
+          // ── Ward choice (pay ward cost or pick different target) ────────
+          case 'ward_choice': {
+            const wardPending = gs?._pendingWardChoice;
+            if (!wardPending) return null;
+            const canAfford = (() => {
+              if (wardPending.wardType === 'life') {
+                return snap.players[0].life > wardPending.wardCost;
+              }
+              const pool = gs?.manaPool?.[0] || {};
+              const poolTotal = Object.values(pool).reduce((s: number, v) => s + ((v as number) || 0), 0) as number;
+              const untapped = snap.players[0].battlefield.filter((c: any) =>
+                (c.type_line || '').includes('Land') && !c._tapped
+              ).length;
+              return (poolTotal + untapped) >= wardPending.wardCost;
+            })();
+            return (
+              <div style={{
+                position: 'fixed', bottom: 130, left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(10, 10, 30, 0.96)', border: '2px solid #f59e0b',
+                borderRadius: 12, padding: '16px 28px', zIndex: 9999, color: '#fff',
+                fontSize: 15, fontWeight: 600, textAlign: 'center',
+                boxShadow: '0 0 20px rgba(245,158,11,0.5)', minWidth: 280,
+              }}>
+                🛡️ {wardPending.creatureName} has Ward{wardPending.wardType === 'life' ? `—Pay ${wardPending.wardCost} life` : ` {${wardPending.wardCost}}`}
+                <div style={{ fontSize: 12, color: '#fbbf24', marginTop: 6 }}>
+                  Pay {wardPending.wardCost} {wardPending.wardType === 'life' ? 'life' : 'mana'} to target this creature, or choose another target.
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }}>
+                  {canAfford && (
+                    <button style={{
+                      background: '#16a34a', border: 'none', borderRadius: 6, color: '#fff',
+                      cursor: 'pointer', padding: '6px 16px', fontSize: 13, fontWeight: 600,
+                    }} onClick={() => actions.resolveWardChoice('pay')}>
+                      Pay {wardPending.wardCost} {wardPending.wardType === 'life' ? '❤️' : '💰'}
+                    </button>
+                  )}
+                  <button style={{
+                    background: '#7c3aed', border: 'none', borderRadius: 6, color: '#fff',
+                    cursor: 'pointer', padding: '6px 16px', fontSize: 13, fontWeight: 600,
+                  }} onClick={() => actions.resolveWardChoice('repick')}>
+                    Choose Other Target
+                  </button>
+                  <button style={{
+                    background: '#dc2626', border: 'none', borderRadius: 6, color: '#fff',
+                    cursor: 'pointer', padding: '6px 16px', fontSize: 13, fontWeight: 600,
+                  }} onClick={() => actions.resolveWardChoice('decline')}>
+                    Don't Pay (Countered)
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
           // ── Buff choice (pick own creature to buff) ──────────────────────
           case 'buff_choice': {
             const pending = gs?._pendingBuffChoice;
+            const allBf = [...snap.players[0].battlefield, ...snap.players[1].battlefield];
             const candidates = (pending?.candidates || [])
-              .map((uid: string) => snap.players[0].battlefield.find((c: any) => c._uid === uid))
+              .map((uid: string) => allBf.find((c: any) => c._uid === uid))
               .filter(Boolean);
+            const isDebuff = pending && ((pending.resolvedPower || 0) < 0 || (pending.resolvedToughness || 0) < 0);
             return (
               <CreatureChoiceOverlay
                 creatures={candidates}
-                title="⬆ Buff — Choose Creature"
+                title={isDebuff ? "⬇ Debuff — Choose Target" : "⬆ Buff — Choose Creature"}
                 onConfirm={uid => uid && actions.resolveBuffChoiceAction(uid)}
               />
             );
@@ -3075,10 +3730,12 @@ export function GameScreen() {
           // ── ETB "any target" damage (Sonic Shrieker etc.) ────────────────────
           // No blocking overlay — use click-to-target: clicking a creature or life total resolves this.
           case 'etb_any_damage_target': {
-            const dmgAmount = (snap as any)._pendingEtbAnyDamage?.amount || gs?._pendingEtbAnyDamage?.amount || 1;
+            const pendingEtbDmg = gs?._pendingEtbAnyDamage || (snap as any)._pendingEtbAnyDamage;
+            const dmgAmount = pendingEtbDmg?.amount || 1;
+            const isCreatureOnly = pendingEtbDmg?.creatureOnly;
             return (
               <div className="instant-priority-banner" style={{ background: 'rgba(255,120,0,0.92)', color: '#fff', zIndex: 80 }}>
-                <span style={{ fontWeight: 700 }}>⚡ Deal {dmgAmount} damage — click a creature or life total to target</span>
+                <span style={{ fontWeight: 700 }}>⚡ Deal {dmgAmount} damage — click a {isCreatureOnly ? 'creature' : 'creature or life total'} to target</span>
               </div>
             );
           }
@@ -3089,11 +3746,13 @@ export function GameScreen() {
             const pending = gs?._pendingETBCounter;
             const counterType = pending?.effect?.counter || '+1/+1';
             const counterAmt = pending?.effect?.amount ?? 1;
+            const isOptional = pending?.effect?.optional || false;
             return (
               <CreatureChoiceOverlay
                 creatures={choices}
                 title={`⬆ +1/+1 Counter — Choose a creature`}
-                hint={`Click a creature to put ${counterAmt} ${counterType} counter on it.`}
+                hint={`Click a creature to put ${counterAmt} ${counterType} counter on it.${isOptional ? ' (optional)' : ''}`}
+                optional={isOptional}
                 onConfirm={uid => actions.resolveETBCounterTarget(uid || null)}
               />
             );
@@ -3133,6 +3792,7 @@ export function GameScreen() {
                 creatures={choices}
                 title="☄ Exile — Choose a permanent to exile"
                 hint="Click a permanent to exile it."
+                optional={!!(wi as any).optional}
                 onConfirm={uid => actions.resolveETBExileTarget(uid ? [uid] : [])}
               />
             );
@@ -3189,13 +3849,16 @@ export function GameScreen() {
               ltKeepLabel = '✋ Mão';
               ltDiscardLabel = '⬇ Grimório';
             } else {
-              // look_top_choice: pick to hand, rest to graveyard or bottom
+              // look_top_choice: pick to hand/top, rest to graveyard or bottom
               ltCards = pending.cards || [];
               ltPickCount = pending.pickCount ?? 1;
               const toBottom = pending.restDestination === 'bottom';
+              const pickToTop = pending.pickTo === 'top';
               ltTitle = 'Escolher Cartas';
-              ltHint = `Escolha ${ltPickCount} carta(s) para colocar na mão. O resto vai para o ${toBottom ? 'fundo do grimório' : 'cemitério'}.`;
-              ltKeepLabel = '✋ Mão';
+              ltHint = pickToTop
+                ? `Escolha ${ltPickCount} carta(s) para o topo do grimório. O resto vai para o cemitério.`
+                : `Escolha ${ltPickCount} carta(s) para colocar na mão. O resto vai para o ${toBottom ? 'fundo do grimório' : 'cemitério'}.`;
+              ltKeepLabel = pickToTop ? '📚 Topo' : '✋ Mão';
               ltDiscardLabel = toBottom ? '⬇ Grimório' : '💀 Cemitério';
             }
             return (
@@ -3207,6 +3870,21 @@ export function GameScreen() {
                 keepLabel={ltKeepLabel}
                 discardLabel={ltDiscardLabel}
                 onConfirm={actions.resolveLookTop}
+              />
+            );
+          }
+
+          // ── Reveal pick (Dragonologist etc.) ────────────────────────────
+          case 'reveal_pick': {
+            const pending = gs?._pendingRevealPick;
+            if (!pending) return null;
+            return (
+              <RevealPickOverlay
+                cards={pending.cards}
+                validUids={pending.validUids}
+                title="👁 Revelar — Escolha uma carta"
+                hint="Escolha uma carta válida (destacada) para a mão, ou pule."
+                onConfirm={actions.resolveRevealPick}
               />
             );
           }
@@ -3246,6 +3924,17 @@ export function GameScreen() {
                 onConfirm={actions.resolveConfirmOptional}
               />
             );
+
+          // ── Optional mill ──────────────────────────────────────────────────
+          case 'optional_mill': {
+            const millPending = gs?._pendingOptionalMill;
+            return millPending ? (
+              <ConfirmOptionalOverlay
+                message={`Mill ${millPending.amount} cards?`}
+                onConfirm={(yes: boolean) => actions.resolveOptionalMill(yes)}
+              />
+            ) : null;
+          }
 
           // ── Ward payment ──────────────────────────────────────────────────
           case 'ward_confirm': {
@@ -3287,18 +3976,65 @@ export function GameScreen() {
                   <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
                     {exCards.map((ec: any) => {
                       const isLandCard = (ec.type_line || '').toLowerCase().includes('land');
-                      const isPlayable = canPlayExile && (isLandCard || !!(ec.mana_cost));
+                      const isCreatureCard = (ec.type_line || '').includes('Creature');
+                      // Check if spell requires targets and has valid targets available
+                      let hasTargets = true;
+                      if (!isLandCard && !isCreatureCard && gs) {
+                        const spellEffects = getPreprocessedEffects(ec)?.cast || [];
+                        for (const eff of spellEffects) {
+                          if (eff.target === 'creature' || eff.target === 'opponent_creature') {
+                            const oppBf = gs.players[1].zones.battlefield.cards.filter((c: any) => c.type_line?.includes('Creature'));
+                            const myBf = gs.players[0].zones.battlefield.cards.filter((c: any) => c.type_line?.includes('Creature'));
+                            const pool = eff.target === 'opponent_creature' ? oppBf : [...oppBf, ...myBf];
+                            if (pool.length === 0) hasTargets = false;
+                          }
+                        }
+                      }
+                      const isFreeExile = !!ec._freeCast || !!(gs?._exiledPlayable?.[ec._uid]?.freeCast);
+                      // Check max_mv restriction (Kotis: can only cast spells with mana value ≤ X)
+                      const exileMaxMv = exReveal.maxMv;
+                      const mvAllowed = exileMaxMv === undefined || exileMaxMv === null || (ec.cmc || 0) <= exileMaxMv;
+                      // castOnly: lands can't be "cast" (Kotis says "cast", not "play")
+                      const landBlocked = isLandCard && !!exReveal.castOnly;
+                      const isPlayable = canPlayExile && !landBlocked && (isLandCard || !!(ec.mana_cost) || isFreeExile || isCreatureCard) && hasTargets && mvAllowed;
+                      const isAdventureCard = ec.layout === 'adventure' && ec.back_face?.name;
                       return (
-                        <div key={ec._uid} style={{ textAlign: 'center', cursor: isPlayable ? 'pointer' : 'default', opacity: isPlayable ? 1 : 0.45 }}
-                          onClick={() => {
-                            if (isPlayable) {
-                              actions.resolveExileReveal(ec._uid);
-                            }
-                          }}
-                          title={isPlayable ? 'Clique para jogar' : 'Não pode ser jogado'}>
+                        <div key={ec._uid} style={{ textAlign: 'center', cursor: isPlayable ? 'pointer' : 'default', opacity: isPlayable ? 1 : 0.45 }}>
                           <img src={ec.image_normal || ec.image_small} alt={ec.name}
+                            onClick={() => {
+                              if (isPlayable && !isAdventureCard) {
+                                // If spell needs targeting, close overlay and enter targeting mode
+                                if (spellNeedsTargeting(ec)) {
+                                  const gs2 = gsRef.current;
+                                  if (gs2) {
+                                    (gs2 as any)._pendingExileReveal = null;
+                                    gs2.waitingForInput = null;
+                                  }
+                                  setTargeting({ cardUid: ec._uid, card: ec });
+                                } else {
+                                  actions.resolveExileReveal(ec._uid);
+                                }
+                              }
+                            }}
+                            title={isPlayable ? (isAdventureCard ? 'Escolha qual lado castar' : 'Clique para jogar') : 'Não pode ser jogado'}
                             style={{ width: 140, borderRadius: 8, border: isPlayable ? '2px solid #ffd700' : '2px solid #555' }} />
                           <div style={{ color: isPlayable ? '#ffd700' : '#888', fontSize: 11, marginTop: 4 }}>{ec.name}</div>
+                          {isPlayable && isAdventureCard && (
+                            <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
+                              <button className="btn btn-gold btn-sm" onClick={() => {
+                                actions.resolveExileReveal(ec._uid);
+                              }}>{ec.name} (Criatura)</button>
+                              <button className="btn btn-gold btn-sm" onClick={() => {
+                                // Close overlay, then cast adventure face
+                                const gs2 = gsRef.current;
+                                if (gs2) {
+                                  (gs2 as any)._pendingExileReveal = null;
+                                  gs2.waitingForInput = null;
+                                }
+                                actions.castAdventure(ec._uid);
+                              }}>{ec.back_face?.name} (Omen)</button>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -3543,10 +4279,12 @@ export function GameScreen() {
             const pending = gs?._pendingGraveyardCardChoice;
             if (!pending) return null;
             const pid = pending.playerId ?? 0;
-            const gy = snap.players[pid].graveyard;
+            // Use filtered card list from engine (respects creature/noncreature filter)
+            // Fallback to full graveyard only if pending.cards not available
+            const gyFiltered = pending.cards ?? snap.players[pid].graveyard;
             return (
               <GraveyardMultiSelectOverlay
-                cards={gy}
+                cards={gyFiltered}
                 amount={pending.amount ?? 1}
                 minAmount={pending.minAmount ?? 0}
                 exactAmount={pending.exactAmount}
@@ -3567,6 +4305,22 @@ export function GameScreen() {
                 title="⬆ Return from Graveyard"
                 hint="Choose a card to return to hand."
                 onConfirm={uid => actions.resolveGYReturn(uid ? [uid] : [])}
+              />
+            );
+          }
+
+          case 'choose_gy_bottom_library': {
+            const pending = gs?._pendingGYBottomLibrary;
+            const allCands = pending?.candidates?.map((c: any) => c.card) || [
+              ...snap.players[0].graveyard, ...snap.players[1].graveyard
+            ];
+            return (
+              <SearchLibraryOverlay
+                candidates={allCands}
+                optional={false}
+                title="📥 Put on Bottom of Library"
+                hint="Choose a card from any graveyard to put on the bottom of its owner's library."
+                onConfirm={uid => actions.resolveGYBottomLibrary(uid)}
               />
             );
           }
@@ -3662,6 +4416,41 @@ export function GameScreen() {
             );
           }
 
+          // ── Legend rule sacrifice: choose which legendary to sacrifice ──
+          case 'legend_rule_sacrifice': {
+            const legPending = gs?._pendingLegendRuleSacrifice;
+            if (!legPending) return null;
+            const legCandidates = legPending.candidates || [];
+            return (
+              <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 7000 }}>
+                <div className="glass overlay-panel" style={{ maxWidth: 500, padding: 20 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, textAlign: 'center' }}>Legend Rule — Choose which to sacrifice</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, textAlign: 'center' }}>
+                    You control two legendary permanents with the same name. Choose one to send to the graveyard.
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    {legCandidates.map((lc: any) => {
+                      const bfCard = snap.players[legPending.controllerId].battlefield.find((c: any) => c._uid === lc.uid);
+                      return (
+                        <div key={lc.uid} style={{ textAlign: 'center', cursor: 'pointer' }}
+                          onClick={() => actions.resolveLegendRuleSacrifice(lc.uid)}>
+                          {bfCard && <CardImage card={bfCard} size="medium" />}
+                          <div style={{ fontSize: 11, marginTop: 4, color: '#fff' }}>
+                            {lc.isCopy ? `${lc.originalName} (copy)` : lc.name}
+                            {' '}{lc.isNew ? '(acabou de entrar)' : '(já em campo)'}
+                          </div>
+                          <button className="btn btn-sm" style={{ marginTop: 4, fontSize: 10 }}>
+                            Sacrifice this
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
           // ── target_choice_single: pick one creature from pending targets ──
           case 'target_choice_single': {
             const pending = gs?._pendingTargetChoice;
@@ -3709,6 +4498,117 @@ export function GameScreen() {
                 optional={false}
                 onConfirm={uid => {
                   if (uid) actions.resolveHideaway(uid);
+                }}
+              />
+            );
+          }
+
+          case 'spirit_dragons_choose':
+            return null; // handled by standalone overlay below
+
+          // ── Exile GY creature cost (Great Arashin City etc.) ────────────
+          case 'exile_gy_creature_cost': {
+            const gyChoices = (wi as any).choices || [];
+            return (
+              <div className="overlay-backdrop">
+                <div className="overlay-panel glass" style={{ maxWidth: 500 }}>
+                  <h3 className="overlay-title">Exilar Criatura do Cemiterio</h3>
+                  <p className="overlay-hint">Escolha uma criatura do cemiterio para exilar como custo:</p>
+                  <div className="overlay-card-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 12 }}>
+                    {gyChoices.map((c: any) => (
+                      <div key={c._uid} className="overlay-card-option"
+                        onClick={() => actions.resolveExileGYCreatureCost(c._uid)}
+                        style={{ cursor: 'pointer', border: '2px solid transparent', borderRadius: 8, padding: 4 }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = '#ffd700')}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}>
+                        <img src={c.image_small || c.image_normal} alt={c.name} style={{ width: 90, borderRadius: 6 }}
+                          onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                        <div style={{ textAlign: 'center', fontSize: 11, marginTop: 2 }}>{c.name}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <button className="btn btn-muted" style={{ marginTop: 12 }}
+                    onClick={() => actions.resolveExileGYCreatureCost(null)}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
+          // ── Move counters target (Host of the Hereafter) ────────────
+          case 'move_counters_target': {
+            const mcWi = wi as any;
+            const mcChoices = mcWi.choices || [];
+            return (
+              <div className="overlay-backdrop">
+                <div className="overlay-panel glass" style={{ maxWidth: 500 }}>
+                  <h3 className="overlay-title">Mover Counters</h3>
+                  <p className="overlay-hint">
+                    {mcWi.dyingCardName} morreu com counters. Escolha uma criatura para receber os counters:
+                    {Object.entries(mcWi.counterMap || {}).map(([t, n]) => ` ${n}x ${t}`).join(',')}
+                  </p>
+                  <div className="overlay-card-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginTop: 12 }}>
+                    {mcChoices.map((c: any) => (
+                      <div key={c._uid} className="overlay-card-option"
+                        onClick={() => actions.resolveMoveCountersTarget(c._uid)}
+                        style={{ cursor: 'pointer', border: '2px solid transparent', borderRadius: 8, padding: 4 }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = '#ffd700')}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}>
+                        <img src={c.image_small || c.image_normal} alt={c.name} style={{ width: 90, borderRadius: 6 }} />
+                        <div style={{ textAlign: 'center', fontSize: 11, marginTop: 2 }}>{c.name}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {mcWi.optional && (
+                    <button className="btn btn-muted" style={{ marginTop: 12 }}
+                      onClick={() => actions.resolveMoveCountersTarget(null)}>
+                      Recusar
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          }
+
+          // ── Graveyard trigger pay (e.g. Furious Forebear) ────────────
+          case 'graveyard_trigger_pay': {
+            const gyTrig = wi as any;
+            const gyManaCost = gyTrig.cost?.mana || '?';
+            return (
+              <div className="overlay-backdrop">
+                <div className="overlay-panel glass" style={{ maxWidth: 380, textAlign: 'center' }}>
+                  <h3 className="overlay-title">{gyTrig.cardName}</h3>
+                  <p className="overlay-hint">
+                    Uma criatura sua morreu. Pagar <ManaCostPips cost={gyManaCost} size={16} /> para retornar {gyTrig.cardName} do cemiterio para sua mao?
+                  </p>
+                  <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 16 }}>
+                    <button className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={() => actions.resolveGraveyardTrigger(true)}>
+                      Pagar <ManaCostPips cost={gyManaCost} size={16} />
+                    </button>
+                    <button className="btn btn-muted" onClick={() => actions.resolveGraveyardTrigger(false)}>
+                      Recusar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ── Grant counter target (Naga Fleshcrafter GY ability etc.) ──
+          case 'grant_counter_target': {
+            const gctChoices = (wi as any).choices || [];
+            const gctPending = gsRef.current?._pendingGrantCounter;
+            const gctCounterType = (gctPending?.counters && Array.isArray(gctPending.counters))
+              ? gctPending.counters.join(', ')
+              : (gctPending?.counter || '+1/+1');
+            return (
+              <CreatureChoiceOverlay
+                creatures={gctChoices}
+                title={`Escolha uma criatura — ${gctCounterType}`}
+                hint={`Coloque contador(es) ${gctCounterType} na criatura escolhida.`}
+                onConfirm={uid => {
+                  if (uid) (actions as any).resolveGrantCounterTarget(uid);
                 }}
               />
             );
@@ -3800,21 +4700,7 @@ export function GameScreen() {
         );
       })()}
 
-      {/* ── Grant counter target (Alchemist's Assistant etc.) ── */}
-      {snap.waitingForInput?.type === 'grant_counter_target' && snap.waitingForInput.playerId === 0 && (() => {
-        const choices = snap.waitingForInput.choices || [];
-        const counterType = gsRef.current?._pendingGrantCounter?.counter || '+1/+1';
-        return (
-          <CreatureChoiceOverlay
-            creatures={choices}
-            title={`Escolha uma criatura — ${counterType}`}
-            hint={`Coloque um contador ${counterType} na criatura escolhida.`}
-            onConfirm={uid => {
-              if (uid) (actions as any).resolveGrantCounterTarget(uid);
-            }}
-          />
-        );
-      })()}
+      {/* grant_counter_target is now handled inside the switch/case above */}
 
       {/* ── choose_target engine waiting (saga chapters etc.) ── */}
       {snap.waitingForInput?.type === 'choose_target' &&
@@ -3826,15 +4712,140 @@ export function GameScreen() {
         const effectDesc = effects.map((e: any) => {
           if (e.type === 'destroy') return `Destroy target ${(e.target || 'permanent').replace(/_/g, ' ')}`;
           if (e.type === 'exile') return `Exile target ${(e.target || 'permanent').replace(/_/g, ' ')}`;
+          if (e.type === 'bounce') return `Return target ${(e.target || 'permanent').replace(/_/g, ' ')} to hand`;
           return `Choose a target`;
         }).join('; ');
+
+        // Compute valid targets based on saga effects
+        const sagaTargets: any[] = [];
+        for (const eff of effects) {
+          const t = (eff.target || '') as string;
+          [0, 1].forEach(pid => {
+            snap.players[pid].battlefield.forEach((c: any) => {
+              if (t === 'nonland_permanent' && !c.type_line?.includes('Land')) {
+                sagaTargets.push({ type: 'permanent', uid: c._uid, player: pid, card: c });
+              } else if (t === 'creature' && c.type_line?.includes('Creature')) {
+                sagaTargets.push({ type: 'creature', uid: c._uid, player: pid, card: c });
+              } else if (t === 'artifact' && c.type_line?.includes('Artifact')) {
+                sagaTargets.push({ type: 'permanent', uid: c._uid, player: pid, card: c });
+              } else if (t === 'enchantment' && c.type_line?.includes('Enchantment')) {
+                sagaTargets.push({ type: 'permanent', uid: c._uid, player: pid, card: c });
+              } else if (t === 'opponent_creature' && pid !== 0 && c.type_line?.includes('Creature')) {
+                sagaTargets.push({ type: 'creature', uid: c._uid, player: pid, card: c });
+              } else if (!t || t === 'permanent') {
+                sagaTargets.push({ type: 'permanent', uid: c._uid, player: pid, card: c });
+              }
+            });
+          });
+        }
+
         return (
           <TargetingPrompt
             spell={{ name: `${sagaName} — Ch.${chapter}: ${effectDesc}` }}
-            validTargets={[]}
+            validTargets={sagaTargets}
             onTarget={() => {}}
             onCancel={() => actions.resolveChooseTarget([])}
           />
+        );
+      })()}
+
+      {/* ── Call the Spirit Dragons: choose dragon for each color ── */}
+      {snap.waitingForInput?.type === 'spirit_dragons_choose' &&
+       snap.waitingForInput.playerId === 0 && (() => {
+        const wi = snap.waitingForInput as any;
+        const colorBg: Record<string, string> = { W: 'rgba(249,250,244,0.15)', U: 'rgba(14,104,171,0.2)', B: 'rgba(80,60,80,0.25)', R: 'rgba(211,32,42,0.2)', G: 'rgba(0,115,62,0.2)' };
+        const allColors = ['W', 'U', 'B', 'R', 'G'];
+        const colorNameMap: Record<string, string> = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
+
+        // Read assigned dragons from pending state for progress display
+        const gs = gsRef.current;
+        const pending = gs?._pendingSpiritDragons;
+        const assignments: Record<string, { uid: string; name: string }> = {};
+        const availableColors: string[] = pending?.availableColors || [];
+        if (pending?.assignments) {
+          const bf = gs?.players[pending.controllerId]?.zones?.battlefield;
+          for (const [color, uid] of Object.entries(pending.assignments)) {
+            const dragon = bf?.get(uid as string);
+            if (dragon) assignments[color] = { uid: uid as string, name: dragon.name };
+          }
+        }
+        const distinctUids = new Set(Object.values(assignments).map(a => a.uid));
+
+        return (
+          <div className="overlay-backdrop" style={{ zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="glass overlay-panel" style={{ maxWidth: 520, padding: 20, textAlign: 'center', background: colorBg[wi.color] || 'rgba(30,30,30,0.95)' }}>
+              <h3 style={{ margin: '0 0 8px', color: 'var(--gold)', fontSize: 16 }}>Call the Spirit Dragons</h3>
+
+              {/* ── Progress: 5 mana pips showing assigned/current/pending ── */}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginBottom: 12 }}>
+                {allColors.map(c => {
+                  const isAvail = availableColors.includes(c);
+                  const isAssigned = !!assignments[c];
+                  const isCurrent = c === wi.color;
+                  const opacity = !isAvail ? 0.2 : isAssigned ? 1 : isCurrent ? 1 : 0.4;
+                  const border = isCurrent ? '2px solid var(--gold)' : isAssigned ? '2px solid #4caf50' : '2px solid transparent';
+                  return (
+                    <div key={c} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: '50%', border, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity, transition: 'all 0.2s' }}>
+                        {MANA_IMAGES[c] ? <img src={MANA_IMAGES[c]} alt={c} style={{ width: 24, height: 24 }} /> : <span>{c}</span>}
+                      </div>
+                      <span style={{ fontSize: 9, color: isAssigned ? '#4caf50' : isCurrent ? 'var(--gold)' : 'var(--text-muted)' }}>
+                        {isAssigned ? assignments[c].name.split(',')[0].split(' ').slice(0, 2).join(' ') : !isAvail ? '—' : isCurrent ? '?' : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* ── Win progress ── */}
+              <div style={{ fontSize: 12, marginBottom: 12, padding: '4px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.3)', display: 'inline-block' }}>
+                <span style={{ color: distinctUids.size >= 5 ? '#4caf50' : 'var(--gold)', fontWeight: 700 }}>{distinctUids.size}</span>
+                <span style={{ color: 'var(--text-muted)' }}>/5 distinct dragons </span>
+                {distinctUids.size >= 5
+                  ? <span style={{ color: '#4caf50', fontWeight: 700 }}>WIN!</span>
+                  : <span style={{ color: 'var(--text-muted)' }}>(need {5 - distinctUids.size} more)</span>
+                }
+              </div>
+
+              {/* ── Current color choice ── */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, margin: '0 0 10px' }}>
+                {MANA_IMAGES[wi.color] && <img src={MANA_IMAGES[wi.color]} alt={wi.color} style={{ width: 20, height: 20 }} />}
+                <span style={{ fontSize: 13 }}>Choose a <strong>{wi.colorName}</strong> Dragon for +1/+1:</span>
+              </div>
+
+              {/* ── Dragon choices ── */}
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+                {(wi.dragons || []).map((d: any) => {
+                  const alreadyUsed = distinctUids.has(d.uid);
+                  return (
+                  <div
+                    key={d.uid}
+                    onClick={() => actions.resolveSpiritDragonsChoice(d.uid)}
+                    style={{
+                      cursor: 'pointer', borderRadius: 8, overflow: 'hidden',
+                      border: alreadyUsed ? '2px solid rgba(255,165,0,0.6)' : '2px solid transparent',
+                      transition: 'border-color 0.15s, transform 0.15s',
+                      width: 130, textAlign: 'center', background: 'rgba(0,0,0,0.4)',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--gold)'; e.currentTarget.style.transform = 'scale(1.05)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = alreadyUsed ? 'rgba(255,165,0,0.6)' : 'transparent'; e.currentTarget.style.transform = 'scale(1)'; }}
+                  >
+                    {d.image ? (
+                      <img src={d.image} alt={d.name} style={{ width: '100%', height: 'auto', display: 'block' }} onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                    ) : (
+                      <div style={{ height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>{d.name}</div>
+                    )}
+                    <div style={{ padding: '4px 6px', fontSize: 11, fontWeight: 600 }}>
+                      {d.name}
+                      {d.counters > 0 && <span style={{ color: 'var(--gold)', marginLeft: 4 }}>+1/+1 x{d.counters}</span>}
+                      {alreadyUsed && <div style={{ fontSize: 9, color: 'orange' }}>already chosen</div>}
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         );
       })()}
 
@@ -3844,6 +4855,9 @@ export function GameScreen() {
           cards={snap.players[graveyardOpen.pid].graveyard}
           playerId={graveyardOpen.pid}
           onActivate={graveyardOpen.pid === 0 ? actions.activateGraveyardAbility : undefined}
+          canPlayLand={graveyardOpen.pid === 0 && !snap.landPlayedThisTurn && (snap.phase === 'main1' || snap.phase === 'main2') && !!(gsRef.current as any)?._playLandsFromGraveyard?.[0]}
+          onPlayLand={graveyardOpen.pid === 0 ? (uid: string) => { actions.playLand(uid); } : undefined}
+          getLandArt={getLandArtUrl}
           onClose={() => setGraveyardOpen(null)}
         />
       )}
@@ -3858,6 +4872,48 @@ export function GameScreen() {
           availableMana={totalAvailableMana}
         />
       )}
+
+      {/* ── Graveyard Lands modal (Glacierwood Siege Sultai) ── */}
+      {graveyardLandsOpen && (() => {
+        const gyLands = (p0.graveyard || []).filter((c: any) => c.type_line?.toLowerCase().includes('land'));
+        return (
+          <div className="overlay-backdrop" onClick={() => setGraveyardLandsOpen(false)}>
+            <div className="overlay-panel glass" onClick={e => e.stopPropagation()} style={{ maxWidth: 600 }}>
+              <div className="overlay-header">
+                <h3 className="overlay-title">Play Land from Graveyard</h3>
+                <button className="btn btn-muted btn-sm" onClick={() => setGraveyardLandsOpen(false)}>X</button>
+              </div>
+              {gyLands.length === 0 ? (
+                <p className="overlay-hint">No lands in graveyard.</p>
+              ) : (
+                <div style={{ display: 'flex', gap: 12, padding: '16px 8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {gyLands.map((card: any) => (
+                    <div
+                      key={card._uid}
+                      onClick={() => { actions.playLand(card._uid); setGraveyardLandsOpen(false); }}
+                      onContextMenu={e => { e.preventDefault(); setZoom(card); }}
+                      style={{ cursor: 'pointer', textAlign: 'center', transition: 'transform 0.1s' }}
+                      onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.05)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+                    >
+                      <img
+                        src={getLandArtUrl(card) || card.image_normal || card.image_small}
+                        alt={card.name}
+                        style={{
+                          width: 130, height: 182, objectFit: 'cover', borderRadius: 8,
+                          border: '2px solid rgba(60,180,80,0.7)',
+                          boxShadow: '0 2px 16px rgba(60,180,80,0.3)',
+                        }}
+                      />
+                      <div style={{ fontSize: 11, color: '#cec', marginTop: 4, fontWeight: 600 }}>{card.name}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Equipment: pick creature to attach to ── */}
       {equipModal && (() => {
@@ -3878,25 +4934,42 @@ export function GameScreen() {
               <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 15 }}>
                 ⚔️ Equip {equipModal.equipName}
               </div>
+              {equipModal.equipCost && (
+                <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  Custo: <ManaCostPips cost={equipModal.equipCost} size={18} />
+                </div>
+              )}
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-                Choose a creature to equip:
+                Escolha uma criatura para equipar:
               </div>
               {myCreatures.length === 0 ? (
                 <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>No creatures available.</div>
               ) : (
-                myCreatures.map((c: any) => (
-                  <button
-                    key={c._uid}
-                    className="btn btn-muted"
-                    style={{ display: 'block', width: '100%', marginBottom: 8, textAlign: 'left' }}
-                    onClick={() => {
-                      actions.equipCreature(equipModal.equipUid, c._uid);
-                      setEquipModal(null);
-                    }}
-                  >
-                    {c.name} ({c.power}/{c.toughness})
-                  </button>
-                ))
+                myCreatures.map((c: any) => {
+                  // Show reduced equip cost for equipment with per_color reduction (e.g. Dragonfire Blade)
+                  const equipCard = snap.players[0].battlefield.find((e: any) => e._uid === equipModal.equipUid);
+                  const dbE = equipCard ? getPreprocessedEffects(equipCard as any) : null;
+                  let costHint = '';
+                  if ((dbE as any)?.equip_cost_reduction === 'per_color' && (dbE as any)?.equip_cost) {
+                    const baseEquipCmc = parseInt(((dbE as any).equip_cost as string).replace(/[{}]/g, '')) || 0;
+                    const colors = (c.colors || c.color_identity || []).filter((cl: string) => ['W','U','B','R','G'].includes(cl));
+                    const reduced = Math.max(0, baseEquipCmc - colors.length);
+                    costHint = ` — Equip {${reduced}}`;
+                  }
+                  return (
+                    <button
+                      key={c._uid}
+                      className="btn btn-muted"
+                      style={{ display: 'block', width: '100%', marginBottom: 8, textAlign: 'left' }}
+                      onClick={() => {
+                        actions.equipCreature(equipModal.equipUid, c._uid);
+                        setEquipModal(null);
+                      }}
+                    >
+                      {c.name} ({c.power}/{c.toughness}){costHint}
+                    </button>
+                  );
+                })
               )}
               <button className="btn" style={{ marginTop: 8 }} onClick={() => setEquipModal(null)}>
                 Cancel
@@ -3923,18 +4996,25 @@ export function GameScreen() {
               onClick={e => e.stopPropagation()}
             >
               <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 15 }}>
-                ⚔️ Who to attack?
+                ⚔️ {attackTargetPicker.isToken
+                  ? `${attackTargetPicker.tokenName || 'Token'} — atacar quem?`
+                  : 'Who to attack?'}
               </div>
               {/* Attack player button */}
               <button
                 className="btn btn-gold"
                 style={{ display: 'block', width: '100%', marginBottom: 8, textAlign: 'left' }}
                 onClick={() => {
-                  actions.declareAttacker(attackTargetPicker.attackerUid);
-                  setAttackTargetPicker(null);
+                  if (attackTargetPicker.isToken) {
+                    // Token already attacking player by default — just close and show next
+                    _popNextPendingToken();
+                  } else {
+                    actions.declareAttacker(attackTargetPicker.attackerUid);
+                    setAttackTargetPicker(null);
+                  }
                 }}
               >
-                👤 Attack the player
+                👤 Atacar o jogador
               </button>
               {/* One button per opponent planeswalker */}
               {oppPlaneswalkers.map((pw: any) => (
@@ -3943,17 +5023,27 @@ export function GameScreen() {
                   className="btn btn-muted"
                   style={{ display: 'block', width: '100%', marginBottom: 8, textAlign: 'left' }}
                   onClick={() => {
-                    actions.declareAttacker(attackTargetPicker.attackerUid, pw._uid);
-                    setAttackTargetPicker(null);
+                    if (attackTargetPicker.isToken) {
+                      // Update existing attacker entry with PW target
+                      const gs = (window as any).__gsRef?.current;
+                      if (gs && gs.combat) {
+                        const att = gs.combat.attackers.find((a: any) => (typeof a === 'string' ? a : a.uid) === attackTargetPicker.attackerUid);
+                        if (att && typeof att !== 'string') att.attackTarget = pw._uid;
+                      }
+                      _popNextPendingToken();
+                    } else {
+                      actions.declareAttacker(attackTargetPicker.attackerUid, pw._uid);
+                      setAttackTargetPicker(null);
+                    }
                   }}
                 >
-                  🌟 Attack {pw.name} <span style={{ color: 'rgba(230,120,0,0.9)', fontWeight: 800 }}>★{pw._loyalty ?? '?'}</span>
+                  🌟 Atacar {pw.name} <span style={{ color: 'rgba(230,120,0,0.9)', fontWeight: 800 }}>★{pw._loyalty ?? '?'}</span>
                 </button>
               ))}
               <button
                 className="btn btn-muted"
                 style={{ marginTop: 4, width: '100%' }}
-                onClick={() => setAttackTargetPicker(null)}
+                onClick={() => { setAttackTargetPicker(null); _clearPendingTokens(); }}
               >
                 Cancel
               </button>
@@ -4143,12 +5233,7 @@ export function GameScreen() {
       {/* ── Keyboard help modal ── */}
       {showHelpModal && <KeyboardHelpOverlay onClose={() => setShowHelpModal(false)} />}
 
-      {/* ── Full Control Mode indicator ── */}
-      {fullControl && (
-        <div className="auto-pass-indicator" style={{ bottom: 100, background: 'rgba(108,92,231,0.85)', color: 'white' }}>
-          🎮 Full Control (X to disable)
-        </div>
-      )}
+      {/* Full Control indicator removed — now inline in phase strip */}
 
       {/* ── Combat arrows SVG ── */}
       {(snap.phase === 'combat_blockers' || snap.phase === 'combat_damage') && (
@@ -4408,6 +5493,28 @@ function toArtCropUrl(url: string | undefined): string | undefined {
 
 // ── BattlefieldCard ───────────────────────────────────────────────────────────
 
+/** Mini attachment thumbnail with image→text fallback */
+function AttachmentThumb({ a, onAttachmentTargetClick, onDoubleClick, onRightClick }: {
+  a: any; onAttachmentTargetClick?: (c: any) => void; onDoubleClick?: (c: any) => void; onRightClick: (c: any) => void;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const directImg = a.image_small || a.image_normal || a.image_uris?.small || a.image_uris?.normal;
+  const fallbackImg = !directImg && (a.set_code && (a.collector_number || a.set_number))
+    ? `https://api.scryfall.com/cards/${a.set_code.toLowerCase()}/${a.collector_number || a.set_number}?format=image&version=small`
+    : null;
+  const imgSrc = directImg || (!imgFailed ? fallbackImg : null);
+  const handleClick = (e: React.MouseEvent) => { e.stopPropagation(); onAttachmentTargetClick ? onAttachmentTargetClick(a) : onDoubleClick ? onDoubleClick(a) : onRightClick(a); };
+  const handleCtx = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); onRightClick(a); };
+  if (imgSrc) {
+    return <img className="bf-attachment-mini" src={imgSrc} alt={a.name}
+      title={`${a.name} — clique para re-equipar · botão direito para zoom`}
+      onClick={handleClick} onContextMenu={handleCtx}
+      onError={() => setImgFailed(true)} />;
+  }
+  return <div className="bf-attachment-mini bf-attachment-text" title={a.name}
+    onClick={handleClick} onContextMenu={handleCtx}>{a.name}</div>;
+}
+
 interface BFCardProps {
   card: any;
   isAttacking: boolean;
@@ -4429,12 +5536,15 @@ interface BFCardProps {
   exiledCards?: any[];
   /** For Betor, Kin to All: cumulative toughness of all my creatures (shows threshold progress) */
   betorToughnessTotal?: number;
+  grantedKeywords?: Set<string>;
+  /** When set, attachment thumbnail clicks call this instead of onDoubleClick (for targeting auras) */
+  onAttachmentTargetClick?: (card: any) => void;
   onClick?: (card: any) => void;
   onDoubleClick?: (card: any) => void;
   onRightClick: (card: any) => void;
 }
 
-function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, isRecentlyEntered, isTriggerPulsing, cantBlock, attachmentCards, exiledCards, betorToughnessTotal, onClick, onDoubleClick, onRightClick }: BFCardProps) {
+function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTargetable, isBlockingTarget, isAssignedBlocker, isSelectedBlocker, canActivate, overrideArtUrl, isAutoTapPreview, isRecentlyEntered, isTriggerPulsing, cantBlock, attachmentCards, exiledCards, betorToughnessTotal, grantedKeywords, onAttachmentTargetClick, onClick, onDoubleClick, onRightClick }: BFCardProps) {
   const isLand = card.type_line?.includes('Land');
   const isCreature = card.type_line?.includes('Creature');
   const isPlaneswalkerCard = card.type_line?.includes('Planeswalker');
@@ -4470,6 +5580,10 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
         ${attachmentCards && attachmentCards.length > 0 ? 'has-attachments' : ''}
         ${exiledCards && exiledCards.length > 0 ? 'has-exiled' : ''}
       `}
+      style={attachmentCards && attachmentCards.length > 0 ? {
+        marginTop: Math.max(16, attachmentCards.length * 12),
+        marginLeft: Math.max(20, attachmentCards.length * 8),
+      } : undefined}
       onClick={() => onClick?.(card)}
       onDoubleClick={() => onDoubleClick?.(card)}
       onContextMenu={e => { e.preventDefault(); onRightClick?.(card); }}
@@ -4486,9 +5600,12 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
           since their card image has base P/T but actual P/T may differ due to buffs.
           Regular tokens (no image) use BfToken placeholder which shows P/T internally. */}
       {isCreature && power !== null && (!card._isToken || !!(overrideArtUrl || card.image_normal || card.image_small)) && (
-        <div className={`bf-pt${(card._powerMod || 0) > 0 || (card._toughnessMod || 0) > 0 ? ' buffed' : (card._powerMod || 0) < 0 || (card._toughnessMod || 0) < 0 ? ' debuffed' : ''}`}>{power}/{toughness}</div>
+        <div className={`bf-pt${(card._powerMod || 0) > 0 || (card._toughnessMod || 0) > 0 ? ' buffed' : (card._powerMod || 0) < 0 || (card._toughnessMod || 0) < 0 ? ' debuffed' : ''}`}>
+          {power}/{card._damage > 0
+            ? <span className="toughness-damaged">{(toughness ?? 0) - (card._damage || 0)}</span>
+            : toughness}
+        </div>
       )}
-      {card._damage > 0 && <div className="bf-damage">💥{card._damage}</div>}
       {counters.filter(([type]) => type === '+1/+1' || type === '-1/-1').map(([type, n]) => (
         <div key={type} className={`bf-counter ${type.includes('+') ? 'positive' : 'negative'}`} title={`${n} ${type} counter${(n as number) > 1 ? 's' : ''}`}>
           {type.includes('+') ? '+' : '-'}{n as number}
@@ -4505,24 +5622,39 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
         const tempKwNames = new Set<string>(
           (card._tempKeywords || []).map((t: any) => typeof t === 'string' ? t : t.keyword)
         );
+        // Check keyword counters (flying counter, etc.)
+        const counterKws = new Set<string>();
+        if (card._counters) {
+          for (const [k, v] of Object.entries(card._counters)) {
+            if (v && (v as number) > 0 && !k.includes('/')) counterKws.add(k.toLowerCase());
+          }
+        }
+        const has = (kw: string) => {
+          const kwL = kw.toLowerCase();
+          if (counterKws.has(kwL)) return true;
+          // Conditional hexproof (Karakyk Guardian)
+          if (kwL === 'hexproof' && card._hexproofUntilDamage && !card._hasDealtDamage) return true;
+          return kws.some((k: string) => k?.toLowerCase() === kwL) || tempKwNames.has(kw) || [...(tempKwNames)].some(t => t.toLowerCase() === kwL) || (grantedKeywords ? [...grantedKeywords].some(g => g.toLowerCase() === kwL) : false);
+        };
         type KwEntry = { label: string; key: string };
         const badges: KwEntry[] = [];
         const push = (label: string, key: string) => badges.push({ label, key });
-        if (kws.includes('Flying') || tempKwNames.has('Flying')) push('✈', 'Flying');
-        if (kws.includes('First Strike') || tempKwNames.has('First Strike')) push('FS', 'First Strike');
-        if (kws.includes('Double Strike') || tempKwNames.has('Double Strike')) push('DS', 'Double Strike');
-        if (kws.includes('Deathtouch') || tempKwNames.has('Deathtouch')) push('☠', 'Deathtouch');
-        if (kws.includes('Lifelink') || tempKwNames.has('Lifelink')) push('♥', 'Lifelink');
-        if (kws.includes('Trample') || tempKwNames.has('Trample')) push('Tpl', 'Trample');
-        if (kws.includes('Haste') || tempKwNames.has('Haste')) push('H', 'Haste');
-        if (kws.includes('Reach') || tempKwNames.has('Reach')) push('Rch', 'Reach');
-        if (kws.includes('Hexproof') || tempKwNames.has('Hexproof')) push('Hex', 'Hexproof');
-        if (kws.includes('Indestructible') || tempKwNames.has('Indestructible')) push('Ind', 'Indestructible');
-        if (kws.includes('Menace') || tempKwNames.has('Menace')) push('Men', 'Menace');
-        if (kws.includes('Vigilance') || tempKwNames.has('Vigilance')) push('Vig', 'Vigilance');
-        if (kws.includes('Flash') || tempKwNames.has('Flash')) push('⚡', 'Flash');
-        if (kws.includes('Defender') || tempKwNames.has('Defender')) push('🛡', 'Defender');
-        if (kws.includes('Ward') || tempKwNames.has('Ward')) push('W', 'Ward');
+        if (has('Flying')) push('✈', 'Flying');
+        if (has('First Strike')) push('FS', 'First Strike');
+        if (has('Double Strike')) push('DS', 'Double Strike');
+        if (has('Deathtouch')) push('☠', 'Deathtouch');
+        if (has('Lifelink')) push('♥', 'Lifelink');
+        if (has('Trample')) push('Tpl', 'Trample');
+        if (has('Haste')) push('H', 'Haste');
+        if (has('Reach')) push('Rch', 'Reach');
+        if (has('Hexproof')) push('Hex', 'Hexproof');
+        if (has('hexproof_from_monocolored')) push('HxM', 'Hexproof from Monocolored');
+        if (has('Indestructible')) push('Ind', 'Indestructible');
+        if (has('Menace')) push('Men', 'Menace');
+        if (has('Vigilance')) push('Vig', 'Vigilance');
+        if (has('Flash')) push('⚡', 'Flash');
+        if (has('Defender')) push('🛡', 'Defender');
+        if (has('Ward')) push('W', 'Ward');
         if (badges.length === 0) return null;
         return (
           <div className="bf-keyword-badges">
@@ -4539,18 +5671,21 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
       {/* ── Arena-style: equipment/aura thumbnails on creature ── */}
       {attachmentCards && attachmentCards.length > 0 && (
         <div className="bf-attachment-strip">
-          {attachmentCards.map((a: any) => (
-            <img
-              key={a._uid}
-              className="bf-attachment-mini"
-              src={a.image_small || a.image_normal}
-              alt={a.name}
-              title={`${a.name} — clique para re-equipar · botão direito para zoom`}
-              onClick={e => { e.stopPropagation(); onDoubleClick ? onDoubleClick(a) : onRightClick(a); }}
-              onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onRightClick(a); }}
-              onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-            />
-          ))}
+          {attachmentCards.map((a: any, i: number) => {
+            const attImg = a.image_small || a.image_normal || a.image_uris?.small || a.image_uris?.normal;
+            const attClick = (e: React.MouseEvent) => { e.stopPropagation(); onAttachmentTargetClick ? onAttachmentTargetClick(a) : onDoubleClick ? onDoubleClick(a) : onRightClick(a); };
+            const attCtx = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); onRightClick(a); };
+            const n = i + 1;
+            const pos = { top: n * -12, left: n * -8, zIndex: -n } as React.CSSProperties;
+            return attImg ? (
+              <img key={a._uid} className="bf-attachment-mini" style={pos} src={attImg} alt={a.name}
+                title={`${a.name} — clique para re-equipar · botão direito para zoom`}
+                onClick={attClick} onContextMenu={attCtx} />
+            ) : (
+              <div key={a._uid} className="bf-attachment-mini bf-attachment-text" style={pos}
+                title={a.name} onClick={attClick} onContextMenu={attCtx}>{a.name}</div>
+            );
+          })}
         </div>
       )}
       {/* ── Arena-style: exiled-by-enchantment thumbnails ── */}
@@ -4584,6 +5719,14 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
         <div className="bf-saga-badge">
           CH {card._sagaChapter || 1}/{card._sagaMaxChapter || '?'}
         </div>
+      )}
+      {/* ── Finality counter badge ── */}
+      {card._finalityCounter && (
+        <div className="bf-finality-badge">FINALITY</div>
+      )}
+      {/* ── Loses all abilities badge (Fresh Start aura) ── */}
+      {card._losesAllAbilities && (
+        <div className="bf-finality-badge" style={{ background: '#8b0000' }}>NO ABILITIES</div>
       )}
       {/* ── Stun badge ── */}
       {((card._stunCounters || 0) + (card._counters?.stun || 0)) > 0 && (

@@ -83,6 +83,12 @@ export interface GameCard extends Card {
   _transformed?: boolean;
   _frontFaceData?: Partial<Card>;
 
+  // Combat tracking
+  _hasDealtDamage?: boolean;
+
+  // Granted keywords from external sources
+  _grantedKeywords?: string[];
+
   // Misc
   _evoked?: boolean;
   _championedCard?: GameCard;
@@ -258,7 +264,7 @@ export interface DeckList {
 // App Navigation
 // ============================================
 
-export type Screen = 'home' | 'draft' | 'deckbuilder' | 'game' | 'collection' | 'settings';
+export type Screen = 'home' | 'draft' | 'deckbuilder' | 'game' | 'settings' | 'sealed';
 
 // ============================================
 // Database Row Types (from SQLite)

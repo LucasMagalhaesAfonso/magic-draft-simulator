@@ -1,7 +1,12 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import type { Card } from '../../lib/types';
 import { getTokenImageUrl, preloadTokenImage } from '../../engine/token-images';
+import { useAppStore } from '../../store/useAppStore';
 import './CardImage.css';
+
+const LAND_COLOR_MAP: Record<string, string> = {
+  Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G',
+};
 
 interface CardImageProps {
   card: Card;
@@ -44,21 +49,36 @@ function getTokenGradient(card: any): string {
 export const CardImage = memo(function CardImage({ card, size = 'medium', selected, overrideArtUrl, onClick, onRightClick, className = '' }: CardImageProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const landArts = useAppStore(s => s.landArts);
 
   const isToken = !!(card as any)._isToken;
-  const imgSrc = overrideArtUrl || (size === 'small' ? card.image_small : card.image_normal);
+  // Auto-resolve land art from settings if no explicit override
+  const landArtUrl = !overrideArtUrl && card.name ? (() => {
+    const color = LAND_COLOR_MAP[card.name];
+    return color ? landArts?.[color] : undefined;
+  })() : undefined;
+  const imgSrc = overrideArtUrl || landArtUrl || (size === 'small' ? card.image_small : card.image_normal);
   const hasImage = !!(imgSrc && imgSrc.length > 4); // ''/undefined → no image
 
   // Token image: try cache first, then async fetch
+  const tokenSet = (card as any).set_code || (card as any)._set || (card as any).set || 'TDM';
   const [tokenImg, setTokenImg] = useState<string | null>(
-    isToken && !hasImage ? getTokenImageUrl(card.name) : null,
+    isToken && !hasImage ? getTokenImageUrl(card.name, tokenSet) : null,
   );
   useEffect(() => {
     if (!isToken || hasImage || tokenImg) return;
-    preloadTokenImage(card.name, (card as any).colors || []).then(url => {
+    preloadTokenImage(card.name, (card as any).colors || [], tokenSet).then(url => {
       if (url) setTokenImg(url);
     });
   }, [card.name, isToken, hasImage]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // If image is already cached by the browser, skip the placeholder flash
+  useEffect(() => {
+    if (imgRef.current?.complete && imgRef.current.naturalWidth > 0) {
+      setLoaded(true);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
@@ -107,6 +127,29 @@ export const CardImage = memo(function CardImage({ card, size = 'medium', select
     );
   }
 
+  // Non-token cards with no image: show text fallback instead of card back
+  if (!isToken && !hasImage) {
+    const typeLine = card.type_line || '';
+    return (
+      <div
+        className={`card-image card-${size} ${selected ? 'card-selected' : ''} ${className}`}
+        style={{ background: 'linear-gradient(160deg, #2a2a3e, #1a1a2e)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 4 }}
+        onClick={() => onClick?.(card)}
+        onContextMenu={handleContextMenu}
+        title={card.name}
+      >
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#e0d0b0', textAlign: 'center', lineHeight: 1.2 }}>{card.name}</div>
+        <div style={{ fontSize: 8, color: '#999', marginTop: 2 }}>{typeLine}</div>
+        {card.mana_cost && <div style={{ fontSize: 9, color: '#aaa', marginTop: 2 }}>{card.mana_cost}</div>}
+        {selected && <div className="card-selected-overlay" />}
+      </div>
+    );
+  }
+
+  // If no valid image URL, treat as error immediately (show card back)
+  const resolvedSrc = (!error && hasImage) ? imgSrc! : CARD_BACK;
+  const isResolved = error || !hasImage;
+
   return (
     <div
       className={`card-image card-${size} ${selected ? 'card-selected' : ''} ${className}`}
@@ -114,16 +157,24 @@ export const CardImage = memo(function CardImage({ card, size = 'medium', select
       onContextMenu={handleContextMenu}
       title={card.name}
     >
-      {!loaded && !error && <div className="card-placeholder" />}
+      {!loaded && !isResolved && <div className="card-placeholder" />}
       <img
-        src={error ? CARD_BACK : imgSrc}
+        ref={imgRef}
+        src={resolvedSrc}
         alt={card.name}
-        loading="lazy"
         onLoad={() => setLoaded(true)}
         onError={() => setError(true)}
-        style={{ opacity: loaded || error ? 1 : 0 }}
+        style={{ opacity: loaded || isResolved ? 1 : 0 }}
       />
       {selected && <div className="card-selected-overlay" />}
+      {(card as any)._isCopy && (
+        <>
+          <div className="copy-badge" title={`Originally: ${(card as any)._originalCard?.name || '?'}`}>
+            {(card as any)._originalCard?.name || 'COPY'}
+          </div>
+          <div className="copy-border-overlay" />
+        </>
+      )}
     </div>
   );
 }, (prev, next) =>
@@ -132,5 +183,8 @@ export const CardImage = memo(function CardImage({ card, size = 'medium', select
   prev.size === next.size &&
   prev.selected === next.selected &&
   prev.overrideArtUrl === next.overrideArtUrl &&
-  prev.className === next.className
+  prev.className === next.className &&
+  !!(prev.card as any)._isCopy === !!(next.card as any)._isCopy &&
+  prev.card.image_normal === next.card.image_normal &&
+  prev.card.name === next.card.name
 );

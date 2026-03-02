@@ -344,24 +344,37 @@ export function _chooseTargets(state, playerId, card) {
   const targets = [];
   const opponentId = playerId === 0 ? 1 : 0;
 
-  // Aura: target own best creature, preferring hexproof/evasive/synergy
+  // Aura: detect if debuff aura (should target opponent) or buff aura (target own)
   if (CardEngine.isAura(card)) {
+    const db = CardEngine.getPreprocessedEffects(card);
+    const isDebuffAura = db?.static?.some((s: any) =>
+      s.type === 'aura_debuff' || s.type === 'aura_prevent_untap' || s.type === 'loses_abilities'
+    ) || (card.oracle_text || '').toLowerCase().match(/enchanted creature (can't|doesn't|gets -|loses)/);
+
+    if (isDebuffAura) {
+      // Target opponent's best creature (highest power/toughness)
+      const oppCreatures = state.players[opponentId].zones.battlefield.cards
+        .filter(c => CardEngine.isCreature(c) && CardEngine.canBeTargeted(c, playerId))
+        .sort((a, b) => (CardEngine.getPower(b) + CardEngine.getToughness(b)) - (CardEngine.getPower(a) + CardEngine.getToughness(a)));
+      if (oppCreatures.length > 0) {
+        targets.push({ type: 'creature', player: opponentId, uid: oppCreatures[0]._uid });
+      }
+      return targets;
+    }
+
+    // Buff aura: target own best creature
     const myCreatures = state.players[playerId].zones.battlefield.cards
       .filter(c => CardEngine.isCreature(c))
       .sort((a, b) => {
-        // Hexproof creatures are safest aura targets (can't be removed in response)
         const aHex = CardEngine.hasKeyword(a, 'Hexproof') ? 10 : 0;
         const bHex = CardEngine.hasKeyword(b, 'Hexproof') ? 10 : 0;
         if (aHex !== bHex) return bHex - aHex;
-        // Indestructible also good
         const aInd = CardEngine.hasIndestructible(a) ? 5 : 0;
         const bInd = CardEngine.hasIndestructible(b) ? 5 : 0;
         if (aInd !== bInd) return bInd - aInd;
-        // Evasion creatures get more value from power/toughness buffs
         const aEva = (CardEngine.hasKeyword(a, 'Flying') ? 3 : 0) + (CardEngine.hasKeyword(a, 'Menace') ? 2 : 0) + (CardEngine.hasKeyword(a, 'Trample') ? 1 : 0);
         const bEva = (CardEngine.hasKeyword(b, 'Flying') ? 3 : 0) + (CardEngine.hasKeyword(b, 'Menace') ? 2 : 0) + (CardEngine.hasKeyword(b, 'Trample') ? 1 : 0);
         if (aEva !== bEva) return bEva - aEva;
-        // Synergy: creatures with attack/combat triggers benefit most from stat buffs
         const aTriggers = CardEngine.getTriggeredAbilities(a);
         const bTriggers = CardEngine.getTriggeredAbilities(b);
         const aSyn = aTriggers.some((t: any) => t.event === 'attacks' || t.event === 'combat_damage_player') ? 2 : 0;
@@ -1140,6 +1153,17 @@ export function _chooseTargets(state, playerId, card) {
           .sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
         if (opCreatures.length > 0) {
           targets.push({ type: 'creature', player: opponentId, uid: opCreatures[0]._uid });
+        }
+        break;
+      }
+
+      case 'prevent_damage_shield': {
+        // New Way Forward: target the biggest threat (opponent's creature most likely to deal damage)
+        const oppThreats = state.players[opponentId].zones.battlefield.cards
+          .filter((c: any) => CardEngine.isCreature(c))
+          .sort((a: any, b: any) => CardEngine.getPower(b) - CardEngine.getPower(a));
+        if (oppThreats.length > 0) {
+          targets.push({ type: 'creature', player: opponentId, uid: oppThreats[0]._uid });
         }
         break;
       }

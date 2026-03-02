@@ -80,8 +80,9 @@ export async function browserGetCardsBySet(setCode: string): Promise<Card[]> {
   const transaction = db.transaction('cards', 'readonly');
   const index = transaction.objectStore('cards').index('set_code');
   const rows = await idbGetAll<CardRow>(index, IDBKeyRange.only(setCode.toLowerCase()));
-  rows.sort((a, b) => parseInt(a.collector_number || '0') - parseInt(b.collector_number || '0'));
-  return rows.map(rowToCard);
+  const filtered = rows.filter(r => !r.name?.startsWith('A-'));
+  filtered.sort((a, b) => parseInt(a.collector_number || '0') - parseInt(b.collector_number || '0'));
+  return filtered.map(rowToCard);
 }
 
 export async function browserGetCardByName(name: string): Promise<Card | null> {

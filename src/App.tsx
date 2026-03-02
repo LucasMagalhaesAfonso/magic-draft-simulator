@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, Component, type ReactNode } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { getCardCount } from './lib/database';
 import { Header } from './components/shared/Header';
@@ -7,8 +7,48 @@ import { DraftScreen } from './components/DraftScreen';
 import { DeckBuilderScreen } from './components/DeckBuilderScreen';
 import { GameScreen } from './components/GameScreen';
 import { SettingsScreen } from './components/SettingsScreen';
+import { SealedRevealScreen } from './components/SealedRevealScreen';
 import './styles/global.css';
 import './components/shared/Header.css';
+
+class ErrorBoundary extends Component<
+  { children: ReactNode; onReset: () => void },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('ErrorBoundary caught:', error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          height: '100%', gap: 16, padding: 40, textAlign: 'center',
+          background: 'var(--bg-primary)', color: 'var(--text-primary)',
+        }}>
+          <h2 style={{ color: 'var(--danger, #e74c3c)' }}>Something went wrong</h2>
+          <p style={{ color: 'var(--text-muted)', maxWidth: 500 }}>
+            {this.state.error?.message || 'An unexpected error occurred.'}
+          </p>
+          <button
+            className="btn btn-primary"
+            onClick={() => { this.setState({ hasError: false, error: null }); this.props.onReset(); }}
+          >
+            Return to Home
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function App() {
   const { screen, setDbReady, setTotalCards } = useAppStore();
@@ -39,10 +79,10 @@ function App() {
         return <DeckBuilderScreen />;
       case 'game':
         return <GameScreen />;
-      case 'collection':
-        return <PlaceholderScreen name="Collection Browser" />;
       case 'settings':
         return <SettingsScreen />;
+      case 'sealed':
+        return <SealedRevealScreen />;
       default:
         return <HomeScreen />;
     }
@@ -52,21 +92,10 @@ function App() {
     <div className="app-layout">
       <Header />
       <main className="app-main">
-        {renderScreen()}
+        <ErrorBoundary onReset={() => useAppStore.getState().setScreen('home')}>
+          {renderScreen()}
+        </ErrorBoundary>
       </main>
-    </div>
-  );
-}
-
-function PlaceholderScreen({ name }: { name: string }) {
-  const { setScreen } = useAppStore();
-  return (
-    <div className="placeholder-screen animate-fade-in">
-      <h2>{name}</h2>
-      <p className="text-muted">Coming soon...</p>
-      <button className="btn" onClick={() => setScreen('home')} style={{ marginTop: 20 }}>
-        Back to Home
-      </button>
     </div>
   );
 }

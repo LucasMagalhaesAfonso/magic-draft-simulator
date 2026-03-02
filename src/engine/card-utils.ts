@@ -122,6 +122,11 @@ export function hasKeyword(card: GameCard, keyword: string, gameState: EngineGam
           const grantedKeywords = String(granter._grantDragons).split(',').map((k: string) => k.trim().toLowerCase());
           if (grantedKeywords.includes(kwLower)) return true;
         }
+        // Dragonologist-style: grant keywords to untapped dragons only
+        if ((granter as any)._grantUntappedDragons && !card._tapped) {
+          const grantedKeywords = String((granter as any)._grantUntappedDragons).split(',').map((k: string) => k.trim().toLowerCase());
+          if (grantedKeywords.includes(kwLower)) return true;
+        }
       }
     }
   }
@@ -129,8 +134,8 @@ export function hasKeyword(card: GameCard, keyword: string, gameState: EngineGam
   return false;
 }
 
-export function hasIndestructible(card: GameCard): boolean {
-  return hasKeyword(card, 'Indestructible');
+export function hasIndestructible(card: GameCard, gameState: EngineGameState | null = null): boolean {
+  return hasKeyword(card, 'Indestructible', gameState);
 }
 
 export function hasFlash(card: GameCard): boolean {
@@ -320,8 +325,8 @@ export function isTransformCard(card: GameCard): boolean {
   return !!(card.backFace || card._backFace);
 }
 
-// Can be targeted check (respects hexproof, shroud)
-export function canBeTargeted(card: GameCard, byPlayerId: number, gameState: EngineGameState | null = null): boolean {
+// Can be targeted check (respects hexproof, shroud, hexproof from monocolored)
+export function canBeTargeted(card: GameCard, byPlayerId: number, gameState: EngineGameState | null = null, sourceCard?: GameCard | null): boolean {
   if (hasKeyword(card, 'Shroud', gameState)) return false;
 
   if (hasKeyword(card, 'Hexproof', gameState)) {
@@ -329,6 +334,29 @@ export function canBeTargeted(card: GameCard, byPlayerId: number, gameState: Eng
     if (!gameState) return false; // Can't determine controller, assume protected
     const controller = findCardController(gameState, card);
     if (controller !== null && controller !== byPlayerId) return false;
+  }
+
+  // Conditional hexproof: hexproof until this creature deals damage (Karakyk Guardian)
+  if ((card as any)._hexproofUntilDamage && !(card as any)._hasDealtDamage) {
+    if (!gameState) return false;
+    const controller = findCardController(gameState, card);
+    if (controller !== null && controller !== byPlayerId) return false;
+  }
+
+  // Hexproof from monocolored: can't be targeted by monocolored sources from opponents
+  if ((card.keywords || []).some(k => typeof k === 'string' && k.toLowerCase() === 'hexproof_from_monocolored') ||
+      (card._grantedKeywords || []).some((k: string) => k.toLowerCase() === 'hexproof_from_monocolored')) {
+    const controller = gameState ? findCardController(gameState, card) : null;
+    if (controller !== null && controller !== byPlayerId) {
+      // Check if the source/spell is monocolored (1 color or colorless counts as mono)
+      if (sourceCard) {
+        const srcColors = getCardColors(sourceCard);
+        if (srcColors.length <= 1) return false; // monocolored or colorless — blocked
+      } else {
+        // No source info — assume monocolored (conservative protection)
+        return false;
+      }
+    }
   }
 
   return true;

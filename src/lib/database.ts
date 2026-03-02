@@ -43,7 +43,7 @@ export async function getCardsBySet(setCode: string): Promise<Card[]> {
   const { rowToCard } = await import('./database-utils');
   const db = await getTauriDb();
   const rows = await db.select(
-    'SELECT * FROM cards WHERE set_code = $1 ORDER BY CAST(collector_number AS INTEGER)',
+    "SELECT * FROM cards WHERE set_code = $1 AND name NOT LIKE 'A-%' ORDER BY CAST(collector_number AS INTEGER)",
     [setCode.toLowerCase()]
   ) as CardRow[];
   return rows.map(rowToCard);

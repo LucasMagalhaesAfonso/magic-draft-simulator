@@ -73,11 +73,9 @@ export function getETBEffects(card: GameCard): Effect[] {
   if (db) {
     // Modal ETB (Siege enchantments)
     if (db.modal && (db.modal as any).chooseOnETB && (db.modal as any).modes) {
-      const normalizedModes = ((db.modal as any).modes as any[]).map(m => {
-        if (m.effects && Array.isArray(m.effects)) return m.effects;
-        return [m];
-      });
-      return [{ type: 'modal', modes: normalizedModes, chooseTwo: false, isETBModal: true } as any];
+      // Pass ModalMode objects intact (preserving {label, effects}) so the overlay
+      // can display human-readable labels and describeMode can describe each mode.
+      return [{ type: 'modal', modes: (db.modal as any).modes, chooseTwo: false, isETBModal: true } as any];
     }
     if (db.etb) return db.etb;
   }
@@ -105,6 +103,9 @@ export function getSpellEffects(card: GameCard): Effect[] {
 export function getTriggeredAbilities(card: GameCard): TriggerDefinition[] {
   const db = getPreprocessedEffects(card);
   if (db && db.triggered) return db.triggered;
+  // Modal cards (Sieges) have triggers registered via resolveModal, not here
+  // Skip oracle text parsing to avoid double-registering triggers
+  if (db && db.modal) return [];
   return parseTriggeredAbilities(card);
 }
 
@@ -185,6 +186,12 @@ export function getGraveyardAbilities(card: GameCard): ActivatedAbility[] {
   return abilities;
 }
 
+export function getGraveyardTriggers(card: GameCard): any[] {
+  const db = getPreprocessedEffects(card);
+  if (db && (db as any).gy_trigger) return (db as any).gy_trigger;
+  return [];
+}
+
 export function getSagaChapters(card: GameCard): any[] | null {
   const db = getPreprocessedEffects(card);
   if (db && (db as any).saga && (db as any).chapters) return (db as any).chapters;
@@ -237,20 +244,23 @@ export function hasAdditionalCosts(card: GameCard): boolean {
 // ============================================
 
 export function isAdventureInstant(card: GameCard): boolean {
-  return !!(card.adventure?.name) && (card.adventure.type_line || '').includes('Instant');
+  const adv = card.adventure || card.back_face;
+  return !!(adv?.name) && (adv.type_line || '').includes('Instant');
 }
 
 export function isAdventureSorcery(card: GameCard): boolean {
-  return !!(card.adventure?.name) && (card.adventure.type_line || '').includes('Sorcery');
+  const adv = card.adventure || card.back_face;
+  return !!(adv?.name) && (adv.type_line || '').includes('Sorcery');
 }
 
 export function getAdventureCost(card: GameCard): string {
-  return card.adventure?.mana_cost ?? '';
+  return card.adventure?.mana_cost ?? card.back_face?.mana_cost ?? '';
 }
 
 export function getAdventureCMC(card: GameCard): number {
-  if (!card.adventure) return 0;
-  const parsed = parseCost(card.adventure.mana_cost);
+  const adv = card.adventure || card.back_face;
+  if (!adv) return 0;
+  const parsed = parseCost(adv.mana_cost);
   return parsed.total || 0;
 }
 
@@ -553,7 +563,8 @@ export function parseEquipmentEffects(card: GameCard): any[] {
     effects.push({ type: 'buff', power: parseInt(buffMatch[1]), toughness: parseInt(buffMatch[2]) });
   }
 
-  const kwGrant = text.match(/equipped creature (?:has|gains) ([\w\s,]+?)(?:\.|$)/);
+  // Match "equipped creature has X" or "equipped creature gets +N/+N and has X"
+  const kwGrant = text.match(/equipped creature (?:gets? [^\.]+ and )?(?:has|gains) ([\w\s,]+?)(?:\.|$)/);
   if (kwGrant) {
     const kwText = kwGrant[1];
     const possibleKw = ['flying', 'first strike', 'double strike', 'deathtouch', 'lifelink',
@@ -650,7 +661,7 @@ export function createToken(
     colors: [],
     color_identity: [],
     rarity: 'common' as any,
-    keywords,
+    keywords: keywords.map(k => k.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')),
     set_code: 'TDM',
     set_name: 'Tarkir: Dragonstorm',
     collector_number: '',
@@ -660,7 +671,7 @@ export function createToken(
     layout: 'token',
     _isToken: true,
     _tapped: false,
-    _summoningSick: !isTreasure,
+    _summoningSick: !isTreasure && !keywords.some(k => k.toLowerCase() === 'haste'),
     _powerMod: 0,
     _toughnessMod: 0,
     _tempPowerMod: 0,

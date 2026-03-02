@@ -11,6 +11,7 @@ import {
   canBlock,
 } from './card-utils';
 import { vfxPlay } from './vfx-bridge';
+import { checkPreventDamageShield } from './game-state';
 
 // ============================================
 // Combat State Interface
@@ -66,6 +67,7 @@ interface CombatGameState extends EngineGameState {
     event: string,
     data: Record<string, unknown>
   ) => string[];
+  flushBatchedTriggers: (batched: Array<{ trigger: any; fireData: any }>) => string[];
   creatureDies: (card: GameCard, playerId: number) => boolean;
 }
 
@@ -260,25 +262,25 @@ export function fireAttackTriggers(
   const attackersSnapshot = [...combatState.attackers];
   const initialCount = attackersSnapshot.length;
 
+  // Batch mode: collect all attack triggers across all attackers,
+  // then resolve them together (allows trigger ordering overlay to show ALL triggers)
+  (gameState as any)._batchAttackTriggers = true;
+  (gameState as any)._batchedTriggers = [];
+
   for (const { uid, card: attacker } of attackersSnapshot) {
-    // Fire "attacks" trigger
-    const atkLogs = gameState.fireTrigger('attacks', {
+    gameState.fireTrigger('attacks', {
       cardUid: uid,
       card: attacker,
       controllerId: attackingPlayerId,
       attackingCreatureCount: initialCount,
     });
-    log.push(...atkLogs);
 
-    // Fire "enters_or_attacks" trigger (for cards like Inspirited Vanguard)
-    const enterOrAtkLogs = gameState.fireTrigger('enters_or_attacks', {
+    gameState.fireTrigger('enters_or_attacks', {
       cardUid: uid,
       attacking: true,
       playerId: attackingPlayerId,
     });
-    log.push(...enterOrAtkLogs);
 
-    // Fire equipped_attacks if creature has equipment attached
     if (attacker._attachments && attacker._attachments.length > 0) {
       const hasEquip = attacker._attachments.some(aUid => {
         const att = gameState.players[attackingPlayerId].zones.battlefield.cards.find(
@@ -287,14 +289,23 @@ export function fireAttackTriggers(
         return att && isEquipment(att);
       });
       if (hasEquip) {
-        const eqAtkLogs = gameState.fireTrigger('equipped_attacks', {
+        gameState.fireTrigger('equipped_attacks', {
           cardUid: uid,
           card: attacker,
           playerId: attackingPlayerId,
         });
-        log.push(...eqAtkLogs);
       }
     }
+  }
+
+  // Flush: resolve all batched triggers at once
+  (gameState as any)._batchAttackTriggers = false;
+  const batched = (gameState as any)._batchedTriggers as Array<{ trigger: any; fireData: any }> || [];
+  (gameState as any)._batchedTriggers = null;
+
+  if (batched.length > 0) {
+    const flushLogs = (gameState as any).flushBatchedTriggers(batched);
+    log.push(...flushLogs);
   }
 
   return log;
@@ -450,6 +461,7 @@ export function resolveDamagePhase(
         if (pwCard) {
           const pwDmg = applyDamageModifiers(gameState, uid, attackPower);
           if (pwDmg > 0) {
+            attacker._hasDealtDamage = true;
             pwCard._loyalty = Math.max(0, (pwCard._loyalty || 0) - pwDmg);
             log.push(`${attacker.name} ataca ${pwCard.name} e causa ${pwDmg} de dano (lealdade: ${pwCard._loyalty}).`);
             vfxPlay('playerDamage', 'p' + defendingPlayer.id);
@@ -495,6 +507,10 @@ export function resolveDamagePhase(
         }
 
         if (dmg > 0) {
+          // Check New Way Forward shield
+          if (checkPreventDamageShield(gameState, defendingPlayer.id, dmg, attackingPlayer.id, attacker._uid)) {
+            log.push(`${attacker.name} combat damage prevented by New Way Forward!`);
+          } else {
           defendingPlayer.life -= dmg;
 
           // Track damage dealt this turn (for Spinerock Knoll hideaway)
@@ -517,13 +533,16 @@ export function resolveDamagePhase(
             vfxPlay('heal', 'p' + attackingPlayer.id);
           }
 
+          attacker._hasDealtDamage = true;
           // Fire combat_damage_player trigger
           const cbtLogs = gameState.fireTrigger('combat_damage_player', {
             cardUid: uid,
             card: attacker,
             amount: dmg,
+            controllerId: attackingPlayer.id,
           });
           log.push(...cbtLogs);
+          } // end else (no shield)
         }
       }
       } // end attacking player
@@ -555,6 +574,7 @@ export function resolveDamagePhase(
         }
 
         dealDamageToCreature(attacker, blocker, dmgToBlocker);
+        if (dmgToBlocker > 0) attacker._hasDealtDamage = true;
         remainingAttackPower -= dmgToBlocker;
 
         if (hasKeyword(attacker, 'Deathtouch', gameState) && dmgToBlocker > 0) {
@@ -573,6 +593,7 @@ export function resolveDamagePhase(
           : (!hasKeyword(blocker, 'First Strike', gameState) || hasKeyword(blocker, 'Double Strike', gameState));
         if (blockerDeals) {
           dealDamageToCreature(blocker, attacker, blockerPower);
+          if (blockerPower > 0) blocker._hasDealtDamage = true;
           if (hasKeyword(blocker, 'Deathtouch', gameState) && blockerPower > 0) {
             if (!hasKeyword(blocker, 'Wither', gameState)) {
               attacker._damage = getToughness(attacker);
@@ -616,6 +637,9 @@ export function resolveDamagePhase(
           }
         } else {
           // Trample overflow → defending player
+          if (checkPreventDamageShield(gameState, defendingPlayer.id, remainingAttackPower, attackingPlayer.id, attacker._uid)) {
+            log.push(`${attacker.name} trample damage prevented by New Way Forward!`);
+          } else {
           defendingPlayer.life -= remainingAttackPower;
 
           // Track trample damage for Spinerock Knoll hideaway
@@ -629,13 +653,16 @@ export function resolveDamagePhase(
 
           vfxPlay('playerDamage', 'p' + defendingPlayer.id);
 
+          attacker._hasDealtDamage = true;
           // Trample combat damage trigger
           const trampleLogs = gameState.fireTrigger('combat_damage_player', {
             cardUid: uid,
             card: attacker,
             amount: remainingAttackPower,
+            controllerId: attackingPlayer.id,
           });
           log.push(...trampleLogs);
+          } // end else (no shield)
         }
       }
 

@@ -9,6 +9,7 @@ import manau from '../assets/mana-U.png';
 import manab from '../assets/mana-B.png';
 import manar from '../assets/mana-R.png';
 import manag from '../assets/mana-G.png';
+import manac from '../assets/mana-C.svg';
 
 const LAND_NAMES: Record<string, string> = {
   W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest',
@@ -26,6 +27,7 @@ const MANA_SYMBOLS: Record<string, string> = {
   B: manab,
   R: manar,
   G: manag,
+  C: manac,
 };
 const COLOR_ORDER = ['W', 'U', 'B', 'R', 'G'];
 const MANA_COLORS: Record<string, string> = { W: '#f9faf4', U: '#0e68ab', B: '#6b4fa0', R: '#d3202a', G: '#00733e', M: '#f0c040', C: '#888' };
@@ -56,6 +58,9 @@ export function DeckBuilderScreen() {
   const [typeOverrides, setTypeOverrides] = useState<Record<number, string>>({});
   const [typeRows, setTypeRows] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [colorFilter, setColorFilter] = useState<Set<string>>(new Set());
+  const [rarityFilter, setRarityFilter] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<'pool' | 'deck'>('pool');
 
   // Fetch basic land card images from DB — prefer selected set, fallback to any
   const [landCardImages, setLandCardImages] = useState<Record<string, string>>({});
@@ -136,7 +141,9 @@ export function DeckBuilderScreen() {
       const tl = (c.type_line || '').toLowerCase();
       const isLand = tl.includes('land');
       // slot 8 = dedicated Land column; all lands default there
-      const baseCmc = isLand ? 8 : Math.min(computeCardCmc(c), 7);
+      // CMC 0 cards go into slot 1 (first column shows "0-1" CMC together)
+      const rawCmc = isLand ? 8 : Math.min(computeCardCmc(c), 7);
+      const baseCmc = rawCmc === 0 ? 1 : rawCmc;
       const slot = columnOverrides[mainIdx] !== undefined ? columnOverrides[mainIdx] : baseCmc;
       (groups[slot] ??= []).push({ card: c, mainIdx });
     });
@@ -223,6 +230,53 @@ export function DeckBuilderScreen() {
 
   function adjustLand(color: string, delta: number) {
     setLands(prev => ({ ...prev, [color]: Math.max(0, (prev[color] ?? 0) + delta) }));
+  }
+
+  function moveAllToMain() {
+    setMainboard(prev => [...prev, ...sideboard]);
+    setSideboard([]);
+  }
+
+  function moveAllToSide() {
+    setSideboard([...draftPool]);
+    setMainboard([]);
+    setColumnOverrides({});
+    setTypeOverrides({});
+  }
+
+  function toggleColorFilter(color: string) {
+    setColorFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(color)) next.delete(color); else next.add(color);
+      return next;
+    });
+  }
+
+  function toggleRarityFilter(rarity: string) {
+    setRarityFilter(prev => {
+      const next = new Set(prev);
+      if (next.has(rarity)) next.delete(rarity); else next.add(rarity);
+      return next;
+    });
+  }
+
+  function getCardColors(card: Card): string[] {
+    // Try card.colors first, then color_identity
+    for (const field of ['colors', 'color_identity'] as const) {
+      let val = (card as any)[field];
+      // Handle JSON string from DB
+      if (typeof val === 'string') {
+        try { val = JSON.parse(val); } catch { val = null; }
+      }
+      if (Array.isArray(val) && val.length > 0) return val;
+    }
+    // Fallback: parse from mana_cost (handles {W}, {2}{U}{B}, {W/U} etc)
+    const cost = card.mana_cost || '';
+    if (!cost) return [];
+    const found = new Set<string>();
+    const symbols = cost.match(/[WUBRG]/g);
+    if (symbols) symbols.forEach(c => found.add(c));
+    return [...found];
   }
 
   function handleStartGame() {
@@ -344,13 +398,53 @@ export function DeckBuilderScreen() {
     };
   }, []);
 
-  const listSource = (sideView === 'sideboard' ? sideboard : draftPool)
-    .slice()
-    .sort((a, b) => computeCardCmc(a) - computeCardCmc(b) || a.name.localeCompare(b.name));
-
   // Count how many copies of each card id are in mainboard
   const mainCountMap: Record<string, number> = {};
   for (const c of mainboard) mainCountMap[c.id] = (mainCountMap[c.id] || 0) + 1;
+
+  // Pool view: always show full draftPool, filtered, with inMain checkmarks
+  const poolFiltered = useMemo(() =>
+    draftPool.slice().filter(card => {
+      if (colorFilter.size > 0) {
+        const cc = getCardColors(card);
+        if (cc.length === 0) { if (!colorFilter.has('C')) return false; }
+        else if (!cc.some((c: string) => colorFilter.has(c))) return false;
+      }
+      if (rarityFilter.size > 0) {
+        const r = ((card as any).rarity || 'common').toLowerCase();
+        if (!rarityFilter.has(r)) return false;
+      }
+      return true;
+    }).sort((a, b) => computeCardCmc(a) - computeCardCmc(b) || a.name.localeCompare(b.name)),
+  [draftPool, colorFilter, rarityFilter]);
+
+  const poolListWithMain = useMemo(() => {
+    const seen: Record<string, number> = {};
+    return poolFiltered.map(card => {
+      const s = (seen[card.id] || 0) + 1;
+      seen[card.id] = s;
+      const inMain = s <= (mainCountMap[card.id] || 0);
+      return { card, inMain };
+    });
+  }, [poolFiltered, mainCountMap]);
+
+  const listSource = (sideView === 'sideboard' ? sideboard : draftPool)
+    .slice()
+    .filter(card => {
+      // Color filter
+      if (colorFilter.size > 0) {
+        const cc = getCardColors(card);
+        if (cc.length === 0) { if (!colorFilter.has('C')) return false; }
+        else if (!cc.some((c: string) => colorFilter.has(c))) return false;
+      }
+      // Rarity filter
+      if (rarityFilter.size > 0) {
+        const r = ((card as any).rarity || 'common').toLowerCase();
+        if (!rarityFilter.has(r)) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => computeCardCmc(a) - computeCardCmc(b) || a.name.localeCompare(b.name));
 
   // Build list with per-position inMain status.
   // Sideboard view: cards shown ARE in the sideboard → inMain is always false (clicking moves to main).
@@ -400,7 +494,10 @@ export function DeckBuilderScreen() {
       {/* ── Toolbar ─────────────────────────────────────────── */}
       <div className="db-toolbar glass">
         <div className="db-toolbar-left">
-          <button className="btn btn-muted" onClick={() => setScreen('draft')}>← Draft</button>
+          <div className="db-view-toggle">
+            <button className={`db-view-btn${viewMode === 'pool' ? ' active' : ''}`} onClick={() => setViewMode('pool')}>Pool</button>
+            <button className={`db-view-btn${viewMode === 'deck' ? ' active' : ''}`} onClick={() => setViewMode('deck')}>Deck</button>
+          </div>
           <span
             className="db-deck-size"
             style={{ color: totalCards === 40 ? 'var(--success)' : totalCards > 40 ? 'var(--danger)' : 'var(--gold)' }}
@@ -409,8 +506,34 @@ export function DeckBuilderScreen() {
           </span>
           <span className="db-deck-lands">{mainboard.length - nonBasicLandsInMain} spells · {totalLands} lands</span>
         </div>
-        <div className="db-toolbar-hint">Right-click to zoom · Click to move · Drag to reorder</div>
+        <div className="db-toolbar-filter">
+          {['W', 'U', 'B', 'R', 'G', 'C'].map(color => (
+            <button
+              key={color}
+              className={`db-mana-filter-btn${colorFilter.has(color) ? ' active' : ''}`}
+              onClick={() => toggleColorFilter(color)}
+              style={{ opacity: colorFilter.size === 0 || colorFilter.has(color) ? 1 : 0.35 }}
+              title={`Filter ${color === 'C' ? 'Colorless' : color}`}
+            >
+              <img src={MANA_SYMBOLS[color]} alt={color} />
+            </button>
+          ))}
+          <span className="db-filter-sep" />
+          {([['common', 'C'], ['uncommon', 'U'], ['rare', 'R'], ['mythic', 'M']] as const).map(([rarity, label]) => (
+            <button
+              key={rarity}
+              className={`db-rarity-filter-btn${rarityFilter.has(rarity) ? ' active' : ''} rarity-${rarity}`}
+              onClick={() => toggleRarityFilter(rarity)}
+              style={{ opacity: rarityFilter.size === 0 || rarityFilter.has(rarity) ? 1 : 0.35 }}
+              title={rarity.charAt(0).toUpperCase() + rarity.slice(1)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="db-toolbar-right">
+          <button className="btn btn-muted btn-sm" onClick={moveAllToMain} title="Add all cards to deck">+ All</button>
+          <button className="btn btn-muted btn-sm" onClick={moveAllToSide} title="Move all cards back to sideboard">- All</button>
           <button className={`btn btn-muted${typeRows ? ' btn-active' : ''}`} onClick={() => setTypeRows(t => !t)} title="Group cards by type within each CMC column">≡ Types</button>
           <button className="btn btn-muted" onClick={handleAutoBuild}>⚡ Auto-Build</button>
           <button className="btn btn-muted" onClick={handleSave}>💾 Save</button>
@@ -419,257 +542,18 @@ export function DeckBuilderScreen() {
       </div>
 
       <div className="db-body">
-        {/* ── Left: CMC Visual ──────────────────────────────── */}
-        <div className="db-visual-area" data-zone="main">
-
-          {typeRows ? (
-            /* ── 2D Grid: rows = type, columns = CMC ─────────── */
-            <div className="db-type-grid">
-              {/* CMC header */}
-              <div className="db-type-header-row">
-                <div className="db-type-row-spacer" />
-                {cmcSlots.filter(c => c !== 8).map(cmc => (
-                  <div key={cmc} className="db-type-col-header">{cmc === 7 ? '7+' : cmc}</div>
-                ))}
-                <div className="db-type-col-header db-land-col-header">Land</div>
-              </div>
-
-              {/* Creature / Spell / Other rows */}
-              {(['creature', 'spell', 'other'] as const).map(tg => (
-                <div key={tg} className="db-type-grid-row">
-                  <div className="db-type-row-label">{TYPE_LABELS[tg]}</div>
-                  {cmcSlots.filter(c => c !== 8).map(cmc => {
-                    const cellEntries = (cmcGroups[cmc] ?? []).filter(({ card, mainIdx }) =>
-                      (typeOverrides[mainIdx] || getTypeGroup(card)) === tg
-                    );
-                    const isOver = dragOverCol === cmc && dragOverType === tg;
-                    return (
-                      <div
-                        key={cmc}
-                        className={`db-type-cell${isOver ? ' type-drag-over' : ''}`}
-                        data-cmc={cmc}
-                        data-type={tg}
-                      >
-                        <div className="db-card-stack" data-cmc={cmc} data-type={tg}>
-                          {cellEntries.map(({ card, mainIdx }, idx) => (
-                            <div
-                              key={card.id + '-' + mainIdx}
-                              className={`db-stack-card${columnOverrides[mainIdx] !== undefined || typeOverrides[mainIdx] ? ' col-overridden' : ''}${ghost?.card === card ? ' dragging' : ''}`}
-                              style={{ zIndex: idx }}
-                              data-cmc={cmc}
-                              data-type={tg}
-                              onMouseDown={e => startCardDrag(e, card, false, mainIdx)}
-                              onContextMenu={e => handleContextMenu(e, card)}
-                              onClick={() => { if (customDragRef.current?.started) return; moveToSide(card, mainIdx); }}
-                              title={card.name + ' — click to sideboard · drag to move'}
-                            >
-                              <img src={card.image_normal || card.image_small} alt={card.name} loading="lazy" onError={imgError} draggable={false} />
-                              <div className="db-stack-label">{card.name}</div>
-                            </div>
-                          ))}
-                          {cellEntries.length === 0 && <div className="db-type-drop-target" data-cmc={cmc} data-type={tg} />}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {/* Land column is empty for non-land rows */}
-                  <div className="db-type-cell db-type-cell-land" data-cmc={8} data-type={tg} />
-                </div>
-              ))}
-
-              {/* Land row */}
-              <div className="db-type-grid-row db-type-land-row">
-                <div className="db-type-row-label">Land</div>
-                {cmcSlots.filter(c => c !== 8).map(cmc => (
-                  <div key={cmc} className="db-type-cell" data-cmc={cmc} data-type="land" />
-                ))}
-                {/* Land column with all lands */}
-                <div
-                  className={`db-type-cell db-type-cell-land${dragOverCol === 8 ? ' col-drag-over' : ''}`}
-                  data-cmc={8}
-                  data-type="land"
-                >
-                  <div className="db-card-stack" data-cmc={8} data-type="land">
-                    {basicLandEntries.map((bl, idx) => (
-                      <div
-                        key={bl.color}
-                        className="db-stack-card db-basic-land"
-                        style={{ zIndex: idx }}
-                        data-cmc={8}
-                        data-type="land"
-                        onClick={() => adjustLand(bl.color, -1)}
-                        title={bl.name + ' ×' + bl.count + ' — click to remove one'}
-                      >
-                        <img src={bl.art} alt={bl.name} loading="lazy" onError={imgError} draggable={false} />
-                        <div className="db-basic-badge">×{bl.count}</div>
-                      </div>
-                    ))}
-                    {(cmcGroups[8] ?? []).map(({ card, mainIdx }, idx) => (
-                      <div
-                        key={card.id + '-' + mainIdx}
-                        className={`db-stack-card${columnOverrides[mainIdx] !== undefined ? ' col-overridden' : ''}${ghost?.card === card ? ' dragging' : ''}`}
-                        style={{ zIndex: basicLandEntries.length + idx }}
-                        data-cmc={8}
-                        data-type="land"
-                        onMouseDown={e => startCardDrag(e, card, false, mainIdx)}
-                        onContextMenu={e => handleContextMenu(e, card)}
-                        onClick={() => { if (customDragRef.current?.started) return; moveToSide(card, mainIdx); }}
-                        title={card.name + ' — click to sideboard'}
-                      >
-                        <img src={card.image_normal || card.image_small} alt={card.name} loading="lazy" onError={imgError} draggable={false} />
-                        <div className="db-stack-label">{card.name}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          ) : (
-            /* ── Normal CMC columns ───────────────────────────── */
-            <div className="db-cmc-columns">
-              {cmcSlots.map(cmc => {
-                const entries = cmcGroups[cmc] ?? [];
-                const landTotal = entries.length + (cmc === 8 ? basicLandsTotal : 0);
-                return (
-                  <div
-                    key={cmc}
-                    className={`db-cmc-col${dragOverCol === cmc ? ' col-drag-over' : ''}`}
-                    data-cmc={cmc}
-                  >
-                    <div className="db-cmc-header" data-cmc={cmc}>
-                      <span className="db-cmc-num">{cmc === 8 ? 'Land' : cmc === 7 ? '7+' : cmc}</span>
-                      {(cmc === 8 ? landTotal : entries.length) > 0 && (
-                        <span className="db-cmc-count">{cmc === 8 ? landTotal : entries.length}</span>
-                      )}
-                    </div>
-                    <div className="db-card-stack" data-cmc={cmc}>
-                      {/* Basic lands: render first (lower z-index so they're behind) */}
-                      {cmc === 8 && basicLandEntries.map((bl, idx) => (
-                        <div
-                          key={bl.color}
-                          className="db-stack-card db-basic-land"
-                          style={{ zIndex: idx }}
-                          data-cmc={8}
-                          onClick={() => adjustLand(bl.color, -1)}
-                          onContextMenu={e => { e.preventDefault(); setZoomCard({ name: bl.name, image_normal: bl.art, image_small: bl.art } as unknown as Card); }}
-                          title={bl.name + ' ×' + bl.count + ' — click to remove one · right-click to zoom'}
-                        >
-                          <img
-                            src={bl.art}
-                            alt={bl.name}
-                            loading="lazy"
-                            onError={(e) => {
-                              e.currentTarget.src = MANA_SYMBOLS[bl.color];
-                            }}
-                            draggable={false}
-                          />
-                          <div className="db-basic-badge">×{bl.count}</div>
-                        </div>
-                      ))}
-                      {/* Non-basic lands + spells: render second (higher z-index so duals appear in front) */}
-                      {entries.map(({ card, mainIdx }, idx) => (
-                        <div
-                          key={card.id + '-' + mainIdx}
-                          className={`db-stack-card${columnOverrides[mainIdx] !== undefined ? ' col-overridden' : ''}${ghost?.card === card ? ' dragging' : ''}`}
-                          style={{ zIndex: basicLandEntries.length + idx }}
-                          data-cmc={cmc}
-                          onMouseDown={e => startCardDrag(e, card, false, mainIdx)}
-                          onContextMenu={e => handleContextMenu(e, card)}
-                          onClick={() => { if (customDragRef.current?.started) return; moveToSide(card, mainIdx); }}
-                          title={card.name + ' — click to sideboard · right-click to zoom · drag to reorder'}
-                        >
-                          <img src={card.image_normal || card.image_small} alt={card.name} loading="lazy" onError={imgError} draggable={false} />
-                          <div className="db-stack-label">{card.name}</div>
-                        </div>
-                      ))}
-                      {entries.length === 0 && cmc !== 8 && <div className="db-cmc-empty" data-cmc={cmc} />}
-                      {cmc === 8 && entries.length === 0 && basicLandEntries.length === 0 && <div className="db-cmc-empty" data-cmc={8} />}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* ── Right panel ───────────────────────────────────── */}
-        <div className="db-right-panel">
-
-          {/* Mana curve */}
-          <div className="db-mini-curve glass">
-            <div className="db-mini-curve-bars">
-              {[1,2,3,4,5,6,7].map(cmc => {
-                const count = stats.curve[cmc] ?? 0;
-                const max = Math.max(...Object.values(stats.curve), 1);
-                return (
-                  <div key={cmc} className="db-mini-col">
-                    <span className="db-mini-count">{count || ''}</span>
-                    <div className="db-mini-bar-wrap">
-                      <div className="db-mini-bar" style={{ height: (count / max * 48) + 'px' }} />
-                    </div>
-                    <span className="db-mini-cmc">{cmc}{cmc >= 7 ? '+' : ''}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="db-color-row">
-              {COLOR_ORDER.filter(c => stats.pips[c] > 0).map(c => (
-                <div key={c} className="db-color-pip">
-                  <div className="db-pip-dot" style={{ background: MANA_COLORS[c] }} />
-                  <span>{stats.pips[c]}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Lands */}
-          <div className="db-lands-mini glass">
-            <div className="db-lands-title">Lands ({totalLands})</div>
-            {COLOR_ORDER.map(color => (
-              <div key={color} className="db-land-row">
-                <img src={MANA_SYMBOLS[color]} alt={LAND_NAMES[color]} className="db-mana-symbol" />
-                <span className="db-land-name">{LAND_NAMES[color]}</span>
-                <div className="db-land-controls">
-                  <button className="db-land-btn" onClick={() => adjustLand(color, -1)}>−</button>
-                  <span className="db-land-count">{lands[color] ?? 0}</span>
-                  <button className="db-land-btn" onClick={() => adjustLand(color, +1)}>+</button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Sideboard / Pool */}
-          <div
-            className={`db-side-panel glass${ghost?.overSide ? ' drag-over' : ''}`}
-            data-zone="side"
-          >
-            <div className="db-view-tabs">
-              <button
-                className={sideView === 'sideboard' ? 'db-tab active' : 'db-tab'}
-                onClick={() => setSideView('sideboard')}
-              >
-                Side ({sideboard.length})
-              </button>
-              <button
-                className={sideView === 'all' ? 'db-tab active' : 'db-tab'}
-                onClick={() => setSideView('all')}
-              >
-                Pool ({draftPool.length})
-              </button>
-            </div>
-            {ghost?.overSide && (
-              <div className="db-drop-hint-side">Drop here to sideboard</div>
-            )}
-            <div className="db-side-grid" data-zone="side">
-              {listWithMain.map(({ card, inMain }, idx) => (
+        {viewMode === 'pool' ? (
+          /* ── Pool View: full-width card grid ─────────────── */
+          <div className="db-pool-view">
+            <div className="db-pool-grid">
+              {poolListWithMain.map(({ card, inMain }, idx) => (
                 <div
                   key={card.id + '-' + idx}
-                  className={`db-side-thumb ${inMain ? 'in-main' : ''}`}
+                  className={`db-pool-thumb${inMain ? ' in-main' : ''}`}
                   onMouseDown={e => { if (!inMain) startCardDrag(e, card, true); }}
                   onContextMenu={e => handleContextMenu(e, card)}
-                  onClick={() => { if (customDragRef.current?.started) return; !inMain ? moveToMain(card) : moveToSide(card); }}
-                  title={card.name + (inMain ? ' — click to remove from deck' : ' — click to add · right-click to zoom · drag to column')}
+                  onClick={() => { if (customDragRef.current?.started) return; inMain ? moveToSide(card) : moveToMain(card); }}
+                  title={card.name + (inMain ? ' — click to remove from deck' : ' — click to add to deck')}
                 >
                   <img
                     src={card.image_normal || card.image_small}
@@ -678,13 +562,213 @@ export function DeckBuilderScreen() {
                     onError={imgError}
                     draggable={false}
                   />
-                  {inMain && <div className="db-side-check">✓</div>}
-                  <div className="db-side-name">{card.name}</div>
+                  {inMain && <div className="db-pool-check">✓</div>}
+                  <div className="db-pool-name">{card.name}</div>
                 </div>
               ))}
             </div>
           </div>
-        </div>
+        ) : (
+          /* ── Deck View: original split layout ───────────────── */
+          <>
+            {/* Left: CMC Visual */}
+            <div className="db-visual-area" data-zone="main">
+              {typeRows ? (
+                <div className="db-type-grid">
+                  <div className="db-type-header-row">
+                    <div className="db-type-row-spacer" />
+                    {cmcSlots.filter(c => c !== 8).map(cmc => (
+                      <div key={cmc} className="db-type-col-header">{cmc === 7 ? '7+' : cmc === 1 ? '0-1' : cmc}</div>
+                    ))}
+                    <div className="db-type-col-header db-land-col-header">Land</div>
+                  </div>
+
+                  {(['creature', 'spell', 'other'] as const).map(tg => (
+                    <div key={tg} className="db-type-grid-row">
+                      <div className="db-type-row-label">{TYPE_LABELS[tg]}</div>
+                      {cmcSlots.filter(c => c !== 8).map(cmc => {
+                        const cellEntries = (cmcGroups[cmc] ?? []).filter(({ card, mainIdx }) =>
+                          (typeOverrides[mainIdx] || getTypeGroup(card)) === tg
+                        );
+                        const isOver = dragOverCol === cmc && dragOverType === tg;
+                        return (
+                          <div key={cmc} className={`db-type-cell${isOver ? ' type-drag-over' : ''}`} data-cmc={cmc} data-type={tg}>
+                            <div className="db-card-stack" data-cmc={cmc} data-type={tg}>
+                              {cellEntries.map(({ card, mainIdx }, idx) => (
+                                <div
+                                  key={card.id + '-' + mainIdx}
+                                  className={`db-stack-card${columnOverrides[mainIdx] !== undefined || typeOverrides[mainIdx] ? ' col-overridden' : ''}${ghost?.card === card ? ' dragging' : ''}`}
+                                  style={{ zIndex: idx }}
+                                  data-cmc={cmc} data-type={tg}
+                                  onMouseDown={e => startCardDrag(e, card, false, mainIdx)}
+                                  onContextMenu={e => handleContextMenu(e, card)}
+                                  onClick={() => { if (customDragRef.current?.started) return; moveToSide(card, mainIdx); }}
+                                  title={card.name + ' — click to sideboard · drag to move'}
+                                >
+                                  <img src={card.image_normal || card.image_small} alt={card.name} loading="lazy" onError={imgError} draggable={false} />
+                                  <div className="db-stack-label">{card.name}</div>
+                                </div>
+                              ))}
+                              {cellEntries.length === 0 && <div className="db-type-drop-target" data-cmc={cmc} data-type={tg} />}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div className="db-type-cell db-type-cell-land" data-cmc={8} data-type={tg} />
+                    </div>
+                  ))}
+
+                  <div className="db-type-grid-row db-type-land-row">
+                    <div className="db-type-row-label">Land</div>
+                    {cmcSlots.filter(c => c !== 8).map(cmc => (
+                      <div key={cmc} className="db-type-cell" data-cmc={cmc} data-type="land" />
+                    ))}
+                    <div className={`db-type-cell db-type-cell-land${dragOverCol === 8 ? ' col-drag-over' : ''}`} data-cmc={8} data-type="land">
+                      <div className="db-card-stack" data-cmc={8} data-type="land">
+                        {basicLandEntries.map((bl, idx) => (
+                          <div key={bl.color} className="db-stack-card db-basic-land" style={{ zIndex: idx }} data-cmc={8} data-type="land"
+                            onClick={() => adjustLand(bl.color, -1)} title={bl.name + ' ×' + bl.count + ' — click to remove one'}>
+                            <img src={bl.art} alt={bl.name} loading="lazy" onError={imgError} draggable={false} />
+                            <div className="db-basic-badge">×{bl.count}</div>
+                          </div>
+                        ))}
+                        {(cmcGroups[8] ?? []).map(({ card, mainIdx }, idx) => (
+                          <div key={card.id + '-' + mainIdx}
+                            className={`db-stack-card${columnOverrides[mainIdx] !== undefined ? ' col-overridden' : ''}${ghost?.card === card ? ' dragging' : ''}`}
+                            style={{ zIndex: basicLandEntries.length + idx }} data-cmc={8} data-type="land"
+                            onMouseDown={e => startCardDrag(e, card, false, mainIdx)}
+                            onContextMenu={e => handleContextMenu(e, card)}
+                            onClick={() => { if (customDragRef.current?.started) return; moveToSide(card, mainIdx); }}
+                            title={card.name + ' — click to sideboard'}>
+                            <img src={card.image_normal || card.image_small} alt={card.name} loading="lazy" onError={imgError} draggable={false} />
+                            <div className="db-stack-label">{card.name}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="db-cmc-columns">
+                  {cmcSlots.map(cmc => {
+                    const entries = cmcGroups[cmc] ?? [];
+                    const landTotal = entries.length + (cmc === 8 ? basicLandsTotal : 0);
+                    return (
+                      <div key={cmc} className={`db-cmc-col${dragOverCol === cmc ? ' col-drag-over' : ''}`} data-cmc={cmc}>
+                        <div className="db-cmc-header" data-cmc={cmc}>
+                          <span className="db-cmc-num">{cmc === 8 ? 'Land' : cmc === 7 ? '7+' : cmc === 1 ? '0-1' : cmc}</span>
+                          {(cmc === 8 ? landTotal : entries.length) > 0 && (
+                            <span className="db-cmc-count">{cmc === 8 ? landTotal : entries.length}</span>
+                          )}
+                        </div>
+                        <div className="db-card-stack" data-cmc={cmc}>
+                          {cmc === 8 && basicLandEntries.map((bl, idx) => (
+                            <div key={bl.color} className="db-stack-card db-basic-land" style={{ zIndex: idx }} data-cmc={8}
+                              onClick={() => adjustLand(bl.color, -1)}
+                              onContextMenu={e => { e.preventDefault(); setZoomCard({ name: bl.name, image_normal: bl.art, image_small: bl.art } as unknown as Card); }}
+                              title={bl.name + ' ×' + bl.count + ' — click to remove one · right-click to zoom'}>
+                              <img src={bl.art} alt={bl.name} loading="lazy" onError={(e) => { e.currentTarget.src = MANA_SYMBOLS[bl.color]; }} draggable={false} />
+                              <div className="db-basic-badge">×{bl.count}</div>
+                            </div>
+                          ))}
+                          {entries.map(({ card, mainIdx }, idx) => (
+                            <div key={card.id + '-' + mainIdx}
+                              className={`db-stack-card${columnOverrides[mainIdx] !== undefined ? ' col-overridden' : ''}${ghost?.card === card ? ' dragging' : ''}`}
+                              style={{ zIndex: basicLandEntries.length + idx }} data-cmc={cmc}
+                              onMouseDown={e => startCardDrag(e, card, false, mainIdx)}
+                              onContextMenu={e => handleContextMenu(e, card)}
+                              onClick={() => { if (customDragRef.current?.started) return; moveToSide(card, mainIdx); }}
+                              title={card.name + ' — click to sideboard · right-click to zoom · drag to reorder'}>
+                              <img src={card.image_normal || card.image_small} alt={card.name} loading="lazy" onError={imgError} draggable={false} />
+                              <div className="db-stack-label">{card.name}</div>
+                            </div>
+                          ))}
+                          {entries.length === 0 && cmc !== 8 && <div className="db-cmc-empty" data-cmc={cmc} />}
+                          {cmc === 8 && entries.length === 0 && basicLandEntries.length === 0 && <div className="db-cmc-empty" data-cmc={8} />}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Right panel */}
+            <div className="db-right-panel">
+              <div className="db-mini-curve glass">
+                <div className="db-mini-curve-bars">
+                  {[1,2,3,4,5,6,7].map(cmc => {
+                    const count = stats.curve[cmc] ?? 0;
+                    const max = Math.max(...Object.values(stats.curve), 1);
+                    return (
+                      <div key={cmc} className="db-mini-col">
+                        <span className="db-mini-count">{count || ''}</span>
+                        <div className="db-mini-bar-wrap">
+                          <div className="db-mini-bar" style={{ height: (count / max * 48) + 'px' }} />
+                        </div>
+                        <span className="db-mini-cmc">{cmc}{cmc >= 7 ? '+' : ''}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="db-color-row">
+                  {COLOR_ORDER.filter(c => stats.pips[c] > 0).map(c => (
+                    <div key={c} className="db-color-pip">
+                      <div className="db-pip-dot" style={{ background: MANA_COLORS[c] }} />
+                      <span>{stats.pips[c]}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="db-lands-mini glass">
+                <div className="db-lands-title">Lands ({totalLands})</div>
+                {COLOR_ORDER.map(color => (
+                  <div key={color} className="db-land-row">
+                    <img src={MANA_SYMBOLS[color]} alt={LAND_NAMES[color]} className="db-mana-symbol" />
+                    <span className="db-land-name">{LAND_NAMES[color]}</span>
+                    <div className="db-land-controls">
+                      <button className="db-land-btn" onClick={() => adjustLand(color, -1)}>−</button>
+                      <span className="db-land-count">{lands[color] ?? 0}</span>
+                      <button className="db-land-btn" onClick={() => adjustLand(color, +1)}>+</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                className={`db-side-panel glass${ghost?.overSide ? ' drag-over' : ''}`}
+                data-zone="side"
+              >
+                <div className="db-view-tabs">
+                  <button className={sideView === 'sideboard' ? 'db-tab active' : 'db-tab'} onClick={() => setSideView('sideboard')}>
+                    Side ({sideboard.length})
+                  </button>
+                  <button className={sideView === 'all' ? 'db-tab active' : 'db-tab'} onClick={() => setSideView('all')}>
+                    Pool ({draftPool.length})
+                  </button>
+                </div>
+                {ghost?.overSide && <div className="db-drop-hint-side">Drop here to sideboard</div>}
+                <div className="db-side-grid" data-zone="side">
+                  {listWithMain.map(({ card, inMain }, idx) => (
+                    <div
+                      key={card.id + '-' + idx}
+                      className={`db-side-thumb ${inMain ? 'in-main' : ''}`}
+                      onMouseDown={e => { if (!inMain) startCardDrag(e, card, true); }}
+                      onContextMenu={e => handleContextMenu(e, card)}
+                      onClick={() => { if (customDragRef.current?.started) return; !inMain ? moveToMain(card) : moveToSide(card); }}
+                      title={card.name + (inMain ? ' — click to remove from deck' : ' — click to add · right-click to zoom · drag to column')}
+                    >
+                      <img src={card.image_normal || card.image_small} alt={card.name} loading="lazy" onError={imgError} draggable={false} />
+                      {inMain && <div className="db-side-check">✓</div>}
+                      <div className="db-side-name">{card.name}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

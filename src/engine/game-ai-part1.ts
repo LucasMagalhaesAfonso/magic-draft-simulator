@@ -548,7 +548,20 @@ export function playMainPhase(state: any, playerId: number): void {
 
       // === AURAS ===
       if (CardEngine.isAura(card)) {
-        if (myCreatures.length > 0) {
+        const db = CardEngine.getPreprocessedEffects(card);
+        const isDebuffAura = db?.static?.some((s: any) =>
+          s.type === 'aura_debuff' || s.type === 'aura_prevent_untap' || s.type === 'loses_abilities'
+        ) || (card.oracle_text || '').toLowerCase().match(/enchanted creature (can't|doesn't|gets -|loses)/);
+
+        if (isDebuffAura) {
+          // Debuff aura: need opponent creatures to target
+          if (opponentCreatures.length > 0) {
+            score += 6;
+            if (opponentCreatures.some((c: any) => CardEngine.getPower(c) >= 4)) score += 3;
+          } else {
+            score -= 20; // No valid targets
+          }
+        } else if (myCreatures.length > 0) {
           score += 5;
           if (myCreatures.some((c: any) => CardEngine.hasKeyword(c, 'Flying') || CardEngine.hasKeyword(c, 'Menace'))) {
             score += 3;
@@ -914,8 +927,17 @@ export function playMainPhase(state: any, playerId: number): void {
       }
 
       if (CardEngine.isAura(card)) {
-        const myCreaturesNow = bf.cards.filter((c: any) => CardEngine.isCreature(c));
-        if (myCreaturesNow.length === 0) break;
+        const db = CardEngine.getPreprocessedEffects(card);
+        const isDebuff = db?.static?.some((s: any) =>
+          s.type === 'aura_debuff' || s.type === 'aura_prevent_untap' || s.type === 'loses_abilities'
+        );
+        if (isDebuff) {
+          const oppCreaturesNow = state.players[opponentId].zones.battlefield.cards.filter((c: any) => CardEngine.isCreature(c));
+          if (oppCreaturesNow.length === 0) break;
+        } else {
+          const myCreaturesNow = bf.cards.filter((c: any) => CardEngine.isCreature(c));
+          if (myCreaturesNow.length === 0) break;
+        }
       }
 
       const { cmc: reducedCmc } = GameState.getEffectiveCmcWithReduction(state, playerId, card);
@@ -1063,6 +1085,9 @@ export function playMainPhase(state: any, playerId: number): void {
       }
     }
   }
+
+  // If a spell is pending on the stack (waiting for human response), don't do anything else
+  if (state.waitingForInput) return;
 
   // 3. Try to equip unattached equipment
   _tryEquipment(state, playerId);
@@ -1355,6 +1380,9 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
           state.players[playerId].zones.graveyard.remove(victim._uid);
           state.players[playerId].zones.exile.add(victim);
           state.log.push(`Exila ${victim.name} do cemiterio como custo.`);
+          // Fire card_leaves_graveyard trigger (e.g. Attuned Hunter)
+          const gyLeaveLogs = GameState.fireTrigger(state, 'card_leaves_graveyard', { playerId, card: victim });
+          state.log.push(...gyLeaveLogs);
         }
       }
       if (ability.cost.discard_hand) {
@@ -1513,6 +1541,7 @@ function _tryLoyaltyAbilities(state: any, playerId: number): void {
         if (eff.type === 'discard') score += 3;
         if (eff.type === 'grant_all') score += 2;
         if (eff.type === 'untap') score += 2;
+        if (eff.type === 'optional_pay_counters') score += 5;
         if (eff.type === 'add_mana') score += 1;
         if (eff.type === 'exile') score += 4;
       }
@@ -1542,12 +1571,13 @@ function _tryGraveyardAbilities(state: any, playerId: number): void {
         continue;
       }
       if (ability.cost.mana) {
-        const parsed = ManaSystem.parseCost(ManaSystem.formatManaCost(ability.cost.mana));
-        const fakeCard = { mana_cost: ManaSystem.formatManaCost(ability.cost.mana), cmc: parsed.total || 0 };
-        if (!ManaSystem.canAfford(state, playerId, fakeCard)) continue;
+        const costStr = ManaSystem.formatManaCost(ability.cost.mana);
+        const parsed = ManaSystem.parseCost(costStr);
+        const fakeCard = { mana_cost: costStr, cmc: parsed.total || 0 } as any;
+        if (!ManaSystem.canAfford(state, playerId, fakeCard, costStr, parsed.total || 0)) continue;
 
-        GameState.autoTapForSpell(state, playerId, ManaSystem.formatManaCost(ability.cost.mana), fakeCard.cmc);
-        state.manaPool[playerId] = ManaSystem.payMana(state.manaPool[playerId], ManaSystem.formatManaCost(ability.cost.mana), fakeCard.cmc);
+        GameState.autoTapForSpell(state, playerId, costStr, fakeCard.cmc);
+        state.manaPool[playerId] = ManaSystem.payMana(state.manaPool[playerId], costStr, fakeCard.cmc);
       }
 
       state.log.push(`${card.name}: habilidade do cemiterio ativada!`);

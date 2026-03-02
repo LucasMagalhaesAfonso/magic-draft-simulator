@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { getSetList, getCardCount, getCardsBySet } from '../lib/database';
 import { syncSingleSet, syncAllCards, type SyncProgress } from '../lib/scryfall';
-import { generateSealedPool } from '../draft/draft-engine';
+import { generateSealedPacks } from '../draft/draft-engine';
 import { buildDeck } from '../draft/bot-ai';
 import './HomeScreen.css';
 
@@ -10,12 +10,13 @@ export function HomeScreen() {
   const {
     setScreen, selectedSet, setSelectedSet,
     setTotalCards, syncing, syncMessage, setSyncing,
-    setDraftPool, setDeck,
+    setDraftPool, setDeck, setSealedPacks,
   } = useAppStore();
 
   const [sets, setSets] = useState<{ set_code: string; set_name: string; card_count: number }[]>([]);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [newSetCode, setNewSetCode] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     loadSets();
@@ -84,14 +85,13 @@ export function HomeScreen() {
     try {
       const cards = await getCardsBySet(selectedSet);
       if (cards.length < 14) {
-        alert(`Set "${selectedSet.toUpperCase()}" has only ${cards.length} cards. Need at least 14.`);
+        setErrorMsg(`Set "${selectedSet.toUpperCase()}" has only ${cards.length} cards. Need at least 14.`);
+        setTimeout(() => setErrorMsg(''), 5000);
         return;
       }
-      const pool = generateSealedPool(cards);
-      const result = buildDeck(pool);
-      setDraftPool(pool);
-      setDeck({ mainboard: result.deck, sideboard: result.sideboard, lands: result.lands });
-      setScreen('deckbuilder');
+      const packs = generateSealedPacks(cards);
+      setSealedPacks(packs);
+      setScreen('sealed');
     } catch (e) {
       console.error('Sealed failed:', e);
     } finally {
@@ -126,6 +126,11 @@ export function HomeScreen() {
                 ))}
               </select>
 
+              {errorMsg && (
+                <div style={{ background: 'rgba(231,76,60,0.15)', border: '1px solid rgba(231,76,60,0.4)', borderRadius: 8, padding: '8px 14px', marginBottom: 10, color: '#e74c3c', fontSize: 13 }}>
+                  {errorMsg}
+                </div>
+              )}
               <div className="home-mode-buttons">
                 <div className="home-mode-card" onClick={handleStartDraft}>
                   <div className="home-mode-icon">🃏</div>

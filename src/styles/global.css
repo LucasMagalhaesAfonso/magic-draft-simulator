@@ -130,14 +130,19 @@ body {
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
   pointer-events: none;
+  background: var(--bg-secondary);
+  border-color: var(--glass-border);
+  color: var(--text-muted);
+  box-shadow: none;
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -148,6 +153,10 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
 }
 
 /* Animations */

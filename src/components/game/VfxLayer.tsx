@@ -43,25 +43,25 @@ export interface VfxEvent {
 
 const SPRITE_MAP: Record<VfxEventType, string[]> = {
   damage:        ['blood_splat_1.png', 'blood_splat_2.png', 'blood_splat_3.png'],
-  playerDamage:  ['blood_splat_4.png', 'blood_splat_5.png', 'blood_splat_6.png'],
-  heal:          ['heal_1.png', 'heal_2.png'],
+  playerDamage:  ['blood_splat_4.png', 'blood_splat_5.png', 'blood_splat_8.png'],
+  heal:          ['water_splash.png', 'teal_impact.png'],
   death:         ['death_1.png', 'death_2.png', 'death_3.png'],
-  spellCast:     ['spell_cast_1.png', 'spell_cast_2.png'],
-  buff:          ['buff_1.png', 'buff_2.png'],
-  exile:         ['exile_1.png', 'exile_2.png'],
-  bounce:        ['bounce_1.png', 'bounce_2.png'],
-  destroy:       ['destroy_1.png', 'destroy_2.png'],
-  mill:          ['mill_1.png', 'mill_2.png'],
-  ramp:          ['ramp_1.png'],
-  boardWipe:     ['board_wipe_1.png', 'board_wipe_2.png'],
-  counterSpell:  ['counter_1.png', 'counter_2.png'],
+  spellCast:     ['fx_1.png', 'fx_2.png', 'fx_3.png'],
+  buff:          ['purple_wisp.png', 'purple_alt_1.png'],
+  exile:         ['dark_vortex.png', 'dark_swirl.png'],
+  bounce:        ['water_arc.png', 'water_burst.png'],
+  destroy:       ['dark_explosion.png', 'dark_burst.png'],
+  mill:          ['dark_ghost.png', 'dark_8.png'],
+  ramp:          ['fire_spirit.png'],
+  boardWipe:     ['dark_explosion.png', 'flame_10.png'],
+  counterSpell:  ['blue_lightning_big.png', 'blue_bolt_sm.png'],
   attackFire:    ['attack_fire_bolt.png', 'attack_fire_swoosh.png'],
   attackWater:   ['attack_water_jet.png', 'attack_water_splash.png', 'attack_water_wave.png'],
   attackIce:     ['attack_crystal.png'],
   attackDark:    ['attack_pink_flame.png'],
   attackGreen:   ['attack_green_slash.png'],
   attackLightning: ['attack_lightning_bolt.png'],
-  attackGold:    ['attack_gold_ring.png'],
+  attackGold:    ['purple_alt_2.png', 'fx_4.png'],
   attackBlood:   ['attack_red_claw.png'],
 };
 
@@ -97,33 +97,8 @@ export const VfxManager = {
     return () => _listeners.delete(fn);
   },
 
-  play(type: VfxEventType, targetUid?: string, fallbackX?: number, fallbackY?: number) {
-    // Resolve position
-    let x = fallbackX ?? window.innerWidth / 2;
-    let y = fallbackY ?? window.innerHeight / 2;
-
-    if (targetUid) {
-      const el = document.querySelector(`[data-uid="${targetUid}"]`) ||
-                 document.querySelector(`[data-player-id="${targetUid}"]`);
-      if (el) {
-        const r = el.getBoundingClientRect();
-        x = r.left + r.width / 2;
-        y = r.top + r.height / 2;
-      }
-    }
-
-    const sprite = pickSprite(type);
-    const size = type === 'boardWipe' ? 300 : type === 'playerDamage' ? 120 : 96;
-    const duration = type === 'boardWipe' ? 1200 : 700;
-
-    const entry: VfxEntry = { id: _nextId++, sprite, x, y, size, duration };
-    _entries = [..._entries, entry];
-    _notify();
-
-    setTimeout(() => {
-      _entries = _entries.filter(e => e.id !== entry.id);
-      _notify();
-    }, duration + 100);
+  play(_type: VfxEventType, _targetUid?: string, _fallbackX?: number, _fallbackY?: number) {
+    // VFX disabled
   },
 };
 
@@ -157,6 +132,7 @@ export function VfxLayer() {
         img.className = 'vfx-sprite';
         img.dataset.vfxId = String(entry.id);
         img.src = `/img/sprites/${entry.sprite}`;
+        img.onerror = () => { img.style.display = 'none'; };
         img.style.cssText = `
           position: absolute;
           left: ${entry.x - entry.size / 2}px;

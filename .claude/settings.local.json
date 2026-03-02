@@ -146,7 +146,22 @@
       "Bash(npx tauri build)",
       "Bash(pgrep:*)",
       "Bash(head -10 grep -n \"Underfoot\\\\|underfoot\" /c/Users/lucas/OneDrive/Área de Trabalho/magic_draft/js/data/card-effects.js)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(rustup:*)",
+      "Bash(xargs:*)",
+      "Bash(1 -p \"/c/Users/lucas/OneDrive/Área de Trabalho/magic_draft/tsconfig.json\")",
+      "Bash(cmd /c \"dir C:\\\\Users\\\\lucas\\\\OneDrive\")",
+      "Bash(cmd /c \"dir C:\\\\Users\\\\lucas\\\\OneDrive\\\\Área de Trabalho\\\\magic_draft\\\\legacy-pure-js\\\\js\\\\game\")",
+      "Bash(cmd /c:*)",
+      "Bash(npx tsx:*)",
+      "Bash(wc:*)",
+      "Bash(kill:*)",
+      "Bash(cd \"C:\\\\Users\\\\lucas\\\\OneDrive\\\\Área de Trabalho\\\\magic_draft\" && sed -i 's/size=\"normal\"/size=\"large\"/g' src/components/GameScreen.tsx && npx tsc --noEmit 2>&1)",
+      "Bash(echo try tsx approach:*)",
+      "WebFetch(domain:starcitygames.com)",
+      "Bash(head:*)",
+      "WebFetch(domain:svgs.scryfall.io)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

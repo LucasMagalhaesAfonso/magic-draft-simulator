@@ -24,11 +24,13 @@ function shuffle<T>(arr: T[]): T[] {
  * Standard distribution: 1 rare/mythic, 3 uncommons, 10 commons.
  */
 export function generate(cardPool: Card[]): Card[] {
+  // Filter out Alchemy rebalanced cards (A- prefix) — digital-only variants
+  const pool = cardPool.filter(c => !c.name?.startsWith('A-'));
   const byRarity = {
-    common: cardPool.filter(c => c.rarity === 'common' && !isBasicLand(c)),
-    uncommon: cardPool.filter(c => c.rarity === 'uncommon'),
-    rare: cardPool.filter(c => c.rarity === 'rare'),
-    mythic: cardPool.filter(c => c.rarity === 'mythic'),
+    common: pool.filter(c => c.rarity === 'common' && !isBasicLand(c)),
+    uncommon: pool.filter(c => c.rarity === 'uncommon'),
+    rare: pool.filter(c => c.rarity === 'rare'),
+    mythic: pool.filter(c => c.rarity === 'mythic'),
   };
 
   const pack: Card[] = [];

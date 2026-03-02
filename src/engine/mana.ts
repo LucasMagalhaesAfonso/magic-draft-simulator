@@ -434,16 +434,22 @@ export function canAfford(
   state: EngineGameState,
   playerId: number,
   card: GameCard,
-  manaCost: string,
-  cmc: number,
+  manaCost?: string,
+  cmc?: number,
   overrideCmc?: number
 ): boolean {
+  // Fall back to card properties when manaCost/cmc not explicitly provided
+  const effectiveManaCost = manaCost ?? card?.mana_cost ?? '';
+  const effectiveCmc = cmc ?? card?.cmc ?? 0;
+
   const bf = state.players[playerId].zones.battlefield;
   const availableLands = bf.cards.filter(c => isLand(c) && !c._tapped);
   const available = createPool();
+  let manaProducingLandCount = 0;
 
   availableLands.forEach(l => {
     const colors = getLandManaColors(l);
+    if (colors.length > 0) manaProducingLandCount++;
     colors.forEach(color => {
       available[color] = (available[color] || 0) + 1;
     });
@@ -454,12 +460,12 @@ export function canAfford(
   });
 
   const pTotal = poolTotal(state.manaPool[playerId]);
-  const actualTotal = availableLands.length + pTotal;
-  const requiredTotal = (overrideCmc !== undefined) ? overrideCmc : (cmc || 0);
+  const actualTotal = manaProducingLandCount + pTotal;
+  const requiredTotal = (overrideCmc !== undefined) ? overrideCmc : (effectiveCmc || 0);
 
   if (actualTotal < requiredTotal) return false;
 
-  return canPay(available, manaCost, requiredTotal);
+  return canPay(available, effectiveManaCost, requiredTotal);
 }
 
 // ============================================

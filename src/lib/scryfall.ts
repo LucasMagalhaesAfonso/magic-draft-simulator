@@ -62,9 +62,18 @@ export type SyncProgress = {
 };
 
 function scryfallToRow(card: ScryfallCard): CardRow | null {
-  // Skip non-paper, non-English cards
+  // Skip non-paper, non-English cards, and reversible_card duplicates
   if (card.lang !== 'en') return null;
   if (card.games && !card.games.includes('paper')) return null;
+  // Skip reversible_card UNLESS it's an adventure variant (back face is Instant/Sorcery)
+  if (card.layout === 'reversible_card') {
+    const backType = card.card_faces?.[1]?.type_line || '';
+    if (!/sorcery|instant/i.test(backType)) return null;
+    // Treat adventure reversible_card as adventure layout for import
+    card.layout = 'adventure';
+  }
+  // Skip Alchemy rebalanced cards (A- prefix) — they're digital-only variants
+  if (card.name && /^A-/i.test(card.name)) return null;
 
   // Handle DFC / split cards
   const frontFace = card.card_faces?.[0];
@@ -94,7 +103,7 @@ function scryfallToRow(card: ScryfallCard): CardRow | null {
     image_small: imageUris?.small || null,
     image_normal: imageUris?.normal || null,
     image_art_crop: imageUris?.art_crop || null,
-    layout: card.layout || 'normal',
+    layout: card.layout || (hasMultipleFaces && (backFace?.type_line || '').match(/sorcery|instant/i) ? 'adventure' : 'normal'),
     produced_mana: card.produced_mana ? JSON.stringify(card.produced_mana) : null,
     back_face_name: hasMultipleFaces ? (backFace?.name || null) : null,
     back_face_mana_cost: hasMultipleFaces ? (backFace?.mana_cost || null) : null,
@@ -172,9 +181,9 @@ export async function syncSingleSet(
     let url: string | null = `https://api.scryfall.com/cards/search?q=set:${setCode}&unique=prints`;
 
     while (url) {
-      const res = await fetch(url);
+      const res: Response = await fetch(url);
       if (!res.ok) throw new Error(`Scryfall API error: ${res.status}`);
-      const data = await res.json();
+      const data: any = await res.json();
       allCards = allCards.concat(data.data);
       url = data.has_more ? data.next_page : null;
 

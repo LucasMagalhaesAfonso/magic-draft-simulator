@@ -58,8 +58,11 @@ function dbCardToGameCard(card: Card, uid: string): any {
   // The game engine uses card.adventure for adventure/omen face data,
   // but the DB stores it as card.back_face. Normalize here.
   // Detect adventure/omen: explicit layout OR back_face with instant/sorcery type OR reversible_card
-  const isAdventureLayout = card.layout === 'adventure' || card.layout === 'reversible_card' ||
-    ((card as any).back_face?.type_line && /sorcery|instant/i.test((card as any).back_face.type_line));
+  const backFaceType = (card as any).back_face?.type_line || '';
+  const backFaceIsSpell = /sorcery|instant/i.test(backFaceType);
+  const isAdventureLayout = card.layout === 'adventure' ||
+    (card.layout === 'reversible_card' && backFaceIsSpell) ||
+    ((card as any).back_face?.name && backFaceIsSpell);
   if (isAdventureLayout && (card as any).back_face?.name) {
     gc.adventure = (card as any).back_face;
     gc.layout = 'adventure';
@@ -85,11 +88,14 @@ function dbCardToGameCard(card: Card, uid: string): any {
 }
 
 function deckToGameCards(deck: Card[]): any[] {
-  return deck.map((card, i) => dbCardToGameCard(card, `p0-${i}-${card.id}`));
+  // Filter out Alchemy rebalanced cards (A- prefix)
+  const filtered = deck.filter(c => !c.name?.startsWith('A-'));
+  return filtered.map((card, i) => dbCardToGameCard(card, `p0-${i}-${card.id}`));
 }
 
 function botDeckToGameCards(deck: Card[]): any[] {
-  return deck.map((card, i) => dbCardToGameCard(card, `p1-${i}-${card.id}`));
+  const filtered = deck.filter(c => !c.name?.startsWith('A-'));
+  return filtered.map((card, i) => dbCardToGameCard(card, `p1-${i}-${card.id}`));
 }
 
 // ── Snapshot: extract render-safe data from game state ─────────────────────
@@ -100,8 +106,12 @@ function snapshot(gs: any) {
   const p0 = gs.players[0];
   const p1 = gs.players[1];
 
-  function zoneCards(zone: any) {
-    try { return zone.getAll ? zone.getAll() : []; } catch { return []; }
+  function zoneCards(zone: any, shallowCopy = false) {
+    try {
+      const cards = zone.getAll ? zone.getAll() : [];
+      // Shallow copy so React memo can detect mutations (e.g. _isCopy, name changes)
+      return shallowCopy ? cards.map((c: any) => ({ ...c })) : cards;
+    } catch { return []; }
   }
 
   // Augment graveyard cards with _graveyardAbilities and harmonize metadata
@@ -121,13 +131,21 @@ function snapshot(gs: any) {
         let canCast = false;
         try {
           if (_Mana) {
-            const hCmc = _Cards!.getHarmonizeCMC(card);
             const bfCards: any[] = gs.players[pid]?.zones?.battlefield?.cards || [];
             const bestCreaturePower = bfCards
               .filter((c: any) => _Cards!.isCreature(c) && !c._tapped)
               .reduce((best: number, c: any) => Math.max(best, _Cards!.getPower(c) || 0), 0);
-            const effectiveCmc = Math.max(0, hCmc - bestCreaturePower);
-            canCast = _Mana!.canAfford(gs, pid, { mana_cost: harmonizeCost, cmc: effectiveCmc } as any, harmonizeCost, effectiveCmc);
+            if (harmonizeCost.includes('{X}')) {
+              // X cost: just check if player can afford the fixed portion
+              const fixedStr = harmonizeCost.replace(/\{X\}/g, '');
+              const fixedCmc = _Mana!.parseCost(fixedStr).total || 0;
+              const effectiveCmc = Math.max(0, fixedCmc - bestCreaturePower);
+              canCast = _Mana!.canAfford(gs, pid, { mana_cost: fixedStr || '{0}', cmc: effectiveCmc } as any, fixedStr || '{0}', effectiveCmc);
+            } else {
+              const hCmc = _Cards!.getHarmonizeCMC(card);
+              const effectiveCmc = Math.max(0, hCmc - bestCreaturePower);
+              canCast = _Mana!.canAfford(gs, pid, { mana_cost: harmonizeCost, cmc: effectiveCmc } as any, harmonizeCost, effectiveCmc);
+            }
           }
         } catch { canCast = true; }
         result = { ...result, _harmonizeCost: harmonizeCost, _harmonizeCanCast: canCast };
@@ -174,7 +192,7 @@ function snapshot(gs: any) {
         life: p0.life,
         isHuman: true,
         hand: zoneCards(p0.zones.hand),
-        battlefield: zoneCards(p0.zones.battlefield),
+        battlefield: zoneCards(p0.zones.battlefield, true),
         graveyard: graveyardCards(p0.zones.graveyard, 0),
         exile: zoneCards(p0.zones.exile),
         libraryCount: p0.zones.library?.count ? p0.zones.library.count() : 0,
@@ -185,7 +203,7 @@ function snapshot(gs: any) {
         life: p1.life,
         isHuman: false,
         hand: zoneCards(p1.zones.hand),
-        battlefield: zoneCards(p1.zones.battlefield),
+        battlefield: zoneCards(p1.zones.battlefield, true),
         graveyard: graveyardCards(p1.zones.graveyard, 1),
         exile: zoneCards(p1.zones.exile),
         libraryCount: p1.zones.library?.count ? p1.zones.library.count() : 0,
@@ -214,6 +232,8 @@ function snapshot(gs: any) {
 
     mulliganDone: gs.mulliganDone || [false, false],
     mulliganCount: gs.mulliganCount || [0, 0],
+    startingPlayer: gs.startingPlayer ?? 0,
+    landPlayedThisTurn: !!gs._landPlayedThisTurn,
 
     // Trigger toast notifications
     triggerToastQueue: gs._triggerToastQueue || [],
@@ -255,10 +275,13 @@ export interface GameSnapshot {
   combat: { attackers: string[]; blockers: Record<string, string> };
   mulliganDone: boolean[];
   mulliganCount: number[];
+  startingPlayer: number;
   triggerToastQueue: TriggerToastItem[];
   _aiActions?: any[];
   exiledPlayable: Record<number, any[]>;
   pendingCastCard: any | null;
+  landPlayedThisTurn?: boolean;
+  stackItems?: any[];
 }
 
 export interface GameActions {
@@ -276,7 +299,9 @@ export interface GameActions {
   resolveScry(choices: ('top' | 'bottom' | 'graveyard')[], topOrder?: number[]): void;
   resolveModal(modeIndices: number[]): void;
   resolveChooseTarget(targets: any[]): void;
+  resolveSpiritDragonsChoice(dragonUid: string): void;
   resolvePostModalTarget(target: any): void;
+  cancelModal(): void;
   activateGraveyardAbility(cardUid: string, abilityIdx: number): void;
   activateBattlefieldAbility(cardUid: string, abilityIdx: number, xValue?: number): void;
   activateFetchLand(cardUid: string): void;
@@ -302,6 +327,7 @@ export interface GameActions {
   resolveMillLand(choice: string, landUid?: string): void;
   resolveBlight(creatureUid: string): void;
   resolveBuffChoiceAction(creatureUid: string): void;
+  resolveWardChoice(choice: 'pay' | 'decline' | 'repick'): void;
   resolveGrantTargetChoice(creatureUid: string): void;
   resolveDistributeCountersAction(distribution: Record<string, number>): void;
   resolveHandExile(cardUid: string): void;
@@ -332,12 +358,26 @@ export interface GameActions {
 
   // Search library
   resolveSearchLibrary(cardUid: string | null): void;
+  resolveSearchToGY(cardUid: string | null): void;
+
+  // X cost choice
+  resolveXChoice(xValue: number): void;
 
   // ETB bounce target choice
   resolveETBBounceTarget(targetUids: string[]): void;
 
   // ETB destroy target choice
   resolveETBDestroyTarget(targetUids: string | string[] | null): void;
+
+  // Move counters target choice (Host of the Hereafter)
+  resolveMoveCountersTarget(targetUid: string | null): void;
+
+  // Exile GY creature cost (Great Arashin City etc.)
+  resolveExileGYCreatureCost(cardUid: string | null): void;
+
+  // Graveyard trigger pay choice (e.g. Furious Forebear)
+  resolveGraveyardTrigger(accepted: boolean): void;
+
 
   // ETB tap target choice
   resolveETBTapTarget(targetUids: string[]): void;
@@ -355,7 +395,7 @@ export interface GameActions {
   resolveETBRemoveCountersTarget(targetUid: string | null): void;
 
   // ETB "any target" damage choice (Sonic Shrieker etc.)
-  resolveETBDamageTarget(target: { type: 'creature' | 'player'; uid?: string; player?: number }): void;
+  resolveETBDamageTarget(target: { type: 'creature' | 'player' | 'permanent'; uid?: string; player?: number }): void;
 
   // ETB clone target choice (Naga Fleshcrafter)
   resolveETBCloneTarget(targetUid: string | null): void;
@@ -375,11 +415,17 @@ export interface GameActions {
   // Look-top choice
   resolveLookTop(choices: string[]): void;
 
+  // Reveal pick (Dragonologist etc.)
+  resolveRevealPick(cardUid: string | null): void;
+
   // Trigger ordering (simultaneous triggers)
   resolveTriggerOrder(orderedIndices: number[]): void;
 
   // Confirm optional
   resolveConfirmOptional(confirmed: boolean): void;
+
+  // Optional mill (Rainveil Rejuvenator etc.)
+  resolveOptionalMill(doMill: boolean): void;
 
   // Ward payment confirm (human targeting a ward creature)
   resolveWardConfirm(pay: boolean): void;
@@ -398,6 +444,8 @@ export interface GameActions {
 
   // GY return choice
   resolveGYReturn(cardUids: string[]): void;
+
+  resolveGYBottomLibrary(cardUid: string | null): void;
 
   // Graveyard choice (which player's GY to exile from)
   resolveGraveyardChoice(pid: number): void;
@@ -423,6 +471,71 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const gsRef = useRef<any>(null);
+  // Expose game state for console debug scripts
+  (window as any).__gsRef = gsRef;
+  // testCard("Card Name", copies?, alsoOpponent?) — inject card + mana into hand
+  if (!(window as any).testCard) {
+    (window as any).testCard = async (name: string, copies = 1, alsoOpponent: boolean | string = false) => {
+      // alsoOpponent can be true (give opp copy) or "back"/"omen" to use back face cost
+      const useFace = typeof alsoOpponent === 'string' ? alsoOpponent : null;
+      const giveOpp = alsoOpponent === true;
+      const gs = (window as any).__gsRef?.current;
+      const ref = (window as any).__gsRefresh;
+      if (!gs || !ref) { console.error('Game not ready'); return; }
+      const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
+      if (!res.ok) { console.error('Card not found!'); return; }
+      const data = await res.json();
+      // For DFCs (modal/adventure/omen): mana_cost may be empty at top level; use the most expensive face
+      let manaCost = data.mana_cost || '';
+      if (data.card_faces) {
+        if (useFace === 'back' || useFace === 'omen') {
+          // Use back face cost specifically
+          manaCost = data.card_faces[1]?.mana_cost || data.card_faces[0]?.mana_cost || manaCost;
+        } else if (!manaCost) {
+          const faceCosts = data.card_faces.map((f: any) => f.mana_cost || '').filter((c: string) => c);
+          manaCost = faceCosts.sort((a: string, b: string) => {
+            const cmc = (s: string) => { let t = 0; s.replace(/\{(\d+)\}/g, (_: any, n: string) => { t += parseInt(n); return ''; }); s.replace(/\{[WUBRG]\}/gi, () => { t++; return ''; }); return t; };
+            return cmc(b) - cmc(a);
+          })[0] || '';
+        }
+      }
+      const landNames: Record<string, string> = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
+      for (let i = 0; i < copies; i++) {
+        const card = { ...data, _uid: `inject-${Date.now()}-${i}` };
+        // Mark card to cast as back face (omen/adventure)
+        if (useFace === 'back' || useFace === 'omen') card._castBackFace = true;
+        gs.players[0].zones.hand.add(card);
+        if (giveOpp) { const oc = { ...data, _uid: `inject-opp-${Date.now()}-${i}` }; gs.players[1].zones.hand.add(oc); }
+      }
+      // Add tapped lands + float mana
+      const colorCounts: Record<string, number> = {};
+      let m: RegExpExecArray | null;
+      const cr = /\{([WUBRG])\}/gi;
+      while ((m = cr.exec(manaCost))) colorCounts[m[1].toUpperCase()] = (colorCounts[m[1].toUpperCase()] || 0) + 1;
+      const gm = manaCost.match(/\{(\d+)\}/);
+      const generic = gm ? parseInt(gm[1]) : 0;
+      let n = 0;
+      for (const [color, count] of Object.entries(colorCounts)) {
+        for (let i = 0; i < count; i++) {
+          const ln = landNames[color] || 'Mountain';
+          const land: any = { name: ln, type_line: `Basic Land — ${ln}`, mana_cost: '', cmc: 0, colors: [color], oracle_text: `{T}: Add {${color}}.`, _uid: `inj-land-${Date.now()}-${n++}`, _tapped: true };
+          gs.players[0].zones.battlefield.add(land);
+          gs.manaPool[0][color] = (gs.manaPool[0][color] || 0) + 1;
+        }
+      }
+      const gc = Object.keys(colorCounts)[0] || 'R';
+      for (let i = 0; i < generic; i++) {
+        const ln = landNames[gc] || 'Mountain';
+        const land: any = { name: ln, type_line: `Basic Land — ${ln}`, mana_cost: '', cmc: 0, colors: [gc], oracle_text: `{T}: Add {${gc}}.`, _uid: `inj-land-${Date.now()}-${n++}`, _tapped: true };
+        gs.players[0].zones.battlefield.add(land);
+        gs.manaPool[0][gc] = (gs.manaPool[0][gc] || 0) + 1;
+      }
+      ref();
+      const faceNote = useFace ? ` [${useFace} face]` : '';
+      console.log(`✅ ${data.name}${faceNote} x${copies} + ${n} lands + mana ready. Click to cast!`);
+    };
+    console.log('🎮 testCard("Card Name") or testCard("Card", 1, "omen") for back face. Ready!');
+  }
   const aiRunningRef = useRef(false);
   const mountedRef = useRef(true);
   const trainedForGameRef = useRef(false);
@@ -455,6 +568,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       setSnap(snapshot(gsRef.current));
     }
   }, []);
+  (window as any).__gsRefresh = refresh;
 
   // AI turn visual delay — actual AI logic runs inside advancePhase (engine-driven)
   // This function only provides a short visual pause so "AI thinking..." shows briefly
@@ -502,6 +616,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         // Human's turn — continue immediately (restores main_phase WFI, etc.)
         console.log(`[LOOP] Human reprocess, phase=${gs.phase}, waitingForInput=${gs.waitingForInput?.type}`);
         _GS.reprocessCurrentPhase(gs);
+        refresh();
       }
     }
   }, [refresh]);
@@ -672,6 +787,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             const triggerLogs = _Combat.fireAttackTriggers(gs.combat, gs, 0);
             gs.log.push(...triggerLogs);
           }
+          // If a trigger set up a cost/choice overlay, stop here — don't advance phase
+          if (gs.waitingForInput) {
+            refresh();
+            return;
+          }
         }
 
         // For instant_priority windows that are INSIDE a phase (not the phase boundary),
@@ -687,6 +807,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else if (prevWaiting?.type === 'stack_priority') {
           // Human passed stack priority — resolve or counter the pending spell
           const pending = (gs as any)._pendingCastOnStack;
+          console.log(`[STACK_PRIORITY] Human passed. pending=${pending?.card?.name || 'NONE'}, stack=${(gs as any).stack?.items?.length}, countered=${pending?.card?._countered}`);
           if (pending) {
             // Pop the temporary stack item (pushed during priority gate check)
             if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
@@ -702,8 +823,13 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
               (gs as any)._resumingFromStackPriority = true;
               // Temporarily put card back in hand so castSpell can find and remove it
               gs.players[pending.playerId].zones.hand.add(pending.card);
+              console.log(`[STACK_PRIORITY] Resuming castSpell for ${pending.card.name}`);
               _GS.castSpell(gs, pending.playerId, pending.card._uid, pending.targets || [], pending.isAdventure || false, pending.isEvoke || false);
+              console.log(`[STACK_PRIORITY] After castSpell: waitingForInput=${gs.waitingForInput?.type}, stack=${(gs as any).stack?.items?.length}`);
             }
+          } else {
+            console.warn('[STACK_PRIORITY] No _pendingCastOnStack! Clearing stale stack.');
+            if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.length = 0;
           }
           // Reprocess current phase so AI can continue (or human stays in main)
           if (!gs.waitingForInput) {
@@ -711,6 +837,12 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
         } else {
           _GS.advancePhase(gs);
+        }
+        // Safety: clear stale stack items when no _pendingCastOnStack exists
+        // This prevents orphaned stack items from blocking instant_priority forever
+        if ((gs as any).stack?.items?.length > 0 && !(gs as any)._pendingCastOnStack) {
+          console.warn('[STACK CLEANUP] Clearing', (gs as any).stack.items.length, 'orphaned stack item(s)');
+          (gs as any).stack.items.length = 0;
         }
         // AI untap visual pause: render untapped state, then continue AI turn
         if (gs.waitingForInput?.type === 'ai_untap_visual') {
@@ -757,8 +889,24 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const pid = 0; // human is always player 0
       try {
         const hand = gs.players[pid].zones.hand.getAll();
-        const card = hand.find((c: any) => c._uid === cardUid);
-        if (!card) return;
+        let card = hand.find((c: any) => c._uid === cardUid);
+        // Also check exiled playable cards (Breaching Dragonstorm, Kotis, etc.)
+        let isFreeCastFromExile = false;
+        if (!card && gs._exiledPlayable && gs._exiledPlayable[cardUid]) {
+          card = gs._exiledPlayable[cardUid].card;
+          isFreeCastFromExile = !!gs._exiledPlayable[cardUid].freeCast;
+        }
+        if (!card) { console.warn(`[castSpell] Card ${cardUid} not found in hand or exile`); return; }
+
+        // Free cast from exile: skip all mana handling, go straight to engine
+        if (isFreeCastFromExile) {
+          const result = _GS.castSpell(gs, pid, cardUid, targets);
+          if (result?.success || result?.waitForInput || result?.pendingStack) {
+            afterResolve(gs);
+          }
+          refresh();
+          return;
+        }
 
         // Compute effective mana cost (conditional cost like Dragon's Prey +{2} for dragons)
         let tapCost = card.mana_cost;
@@ -767,9 +915,10 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (tapCost && tapCost.includes('//')) {
           tapCost = tapCost.split('//')[0].trim();
         }
-        // For hybrid costs, use the minimum viable CMC (parseCost.total) rather than Scryfall CMC.
-        // e.g. {2/W}{2/B}{2/G}: Scryfall cmc=6 but minimum payment is 3 (one colored per hybrid).
-        let tapCmc = card.cmc;
+        // For adventure/omen cards, card.cmc is the combined CMC of both faces (e.g. 10 for 6+4),
+        // but tapCost is already stripped to the front face only. Always derive CMC from parsed tapCost
+        // so hybrid minimums and adventure face splits are handled correctly.
+        let tapCmc = (_Mana && tapCost) ? (_Mana.parseCost(tapCost).total || card.cmc) : card.cmc;
         if (_Mana && tapCost) {
           const _parsedForHybrid = _Mana.parseCost(tapCost);
           if (_parsedForHybrid.hybrids && _parsedForHybrid.hybrids.length > 0) {
@@ -780,7 +929,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (card._costReduced && card._effectiveCmc !== undefined && card._effectiveCmc < tapCmc) {
           tapCmc = card._effectiveCmc;
         }
-        // X spells: tap ALL available mana so X is maximized (not just fixed cost portion)
+        // X spells: human gets to choose X value; AI taps all available mana
         if (tapCost && tapCost.includes('{X}') && _Mana) {
           const bf = gs.players[pid].zones.battlefield;
           const availPool: Record<string, number> = { ...(gs.manaPool[pid] || {}) };
@@ -791,7 +940,27 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
               colors.forEach((color: string) => { availPool[color] = (availPool[color] || 0) + 1; });
             });
           const totalAvailable = (Object.values(availPool) as number[]).reduce((s: number, v) => s + (v as number), 0);
-          tapCmc = Math.max(tapCmc, totalAvailable);
+          // Calculate fixed (non-X) cost
+          const fixedCostStr = tapCost.replace(/\{X\}/g, '');
+          const fixedParsed = _Mana.parseCost(fixedCostStr);
+          const fixedTotal = fixedParsed.total || 0;
+          const maxX = Math.max(0, totalAvailable - fixedTotal);
+
+          // Human: prompt for X value if not already chosen
+          if (pid === 0 && gs._pendingXChoice === undefined) {
+            gs._pendingXCast = { cardUid, card, targets, tapCost, fixedTotal, maxX };
+            gs.waitingForInput = { type: 'choose_x_cost', playerId: 0 };
+            refresh();
+            return;
+          }
+          // Resume with chosen X
+          if (gs._pendingXChoice !== undefined) {
+            const chosenX = gs._pendingXChoice as number;
+            delete gs._pendingXChoice;
+            tapCmc = fixedTotal + chosenX;
+          } else {
+            tapCmc = Math.max(tapCmc, totalAvailable);
+          }
         }
 
         // Delve interactive: if human has a delve granter and GY non-lands, pause for choice
@@ -834,7 +1003,9 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         }
         // Ward pre-check: if human targets a ward creature, show "Pay ward N?" prompt
         // Skip if this cast is resuming after the human confirmed ward payment (_skipWardCheck).
-        if (!gs._skipWardCheck && targets && targets.length > 0 && _Cards) {
+        // Skip if the spell can't be countered (Ward's counter effect doesn't apply).
+        const _spellCantBeCountered = _Cards && ((_Cards as any).getPreprocessedEffects(card) as any)?.cantBeCountered;
+        if (!gs._skipWardCheck && !_spellCantBeCountered && targets && targets.length > 0 && _Cards) {
           for (const t of targets) {
             if (t.type !== 'creature') continue;
             const wCreature = gs.players[t.player]?.zones?.battlefield?.get(t.uid);
@@ -864,7 +1035,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
         }
 
-        // Pre-tap color check: build the available pool from untapped lands + current pool,
+        // Pre-tap color check: build the available pool from untapped lands + mana sources + current pool,
         // then verify colors can be met BEFORE tapping anything. This prevents lands from
         // being tapped uselessly when the color requirement can't be met.
         if (tapCost && tapCmc > 0 && _Mana) {
@@ -876,6 +1047,70 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
               const colors = _Mana.getLandManaColors(land);
               colors.forEach((color: string) => { availPool[color] = (availPool[color] || 0) + 1; });
             });
+          // Also count mana from non-land sources (artifacts/creatures with mana abilities)
+          if (_Cards) {
+            const isCreature = _Cards.isCreature(card);
+            bf.cards
+              .filter((c: any) => !c._tapped && !(c.type_line || '').toLowerCase().includes('land'))
+              .filter((c: any) => {
+                // Skip creatures with summoning sickness (can't tap for mana)
+                if (_Cards.isCreature(c) && c._summoningSick && !_Cards.hasKeyword(c, 'Haste')) return false;
+                return true;
+              })
+              .forEach((perm: any) => {
+                const manaAbilities = _Cards.getManaAbilities(perm);
+                for (const ability of manaAbilities) {
+                  // Skip creature-only mana for non-creature spells
+                  const restricted = ability.effects?.some((e: any) => e.restriction === 'creature_only');
+                  if (restricted && !isCreature) continue;
+                  // Count producible colors
+                  for (const eff of (ability.effects || [])) {
+                    if (eff.type !== 'add_mana') continue;
+                    if (eff.color === 'any') {
+                      // "any" mana can pay colored or generic — add to each needed color from spell cost
+                      const spellCost = _Mana.parseCost(tapCost);
+                      const neededColors = Object.entries(spellCost.colored).filter(([,v]) => v > 0).map(([c]) => c);
+                      if (neededColors.length > 0) {
+                        // Add to the first needed color that pool can't already cover
+                        const uncovered = neededColors.find(c => (availPool[c] || 0) < (spellCost.colored[c] || 0));
+                        const pickColor = uncovered || neededColors[0];
+                        availPool[pickColor] = (availPool[pickColor] || 0) + 1;
+                      } else {
+                        availPool['C'] = (availPool['C'] || 0) + 1;
+                      }
+                    }
+                    else if (eff.color) {
+                      // Resolve dynamic amounts like "power" to actual numbers
+                      let amt = eff.amount || 1;
+                      if (typeof amt === 'string') {
+                        if (amt === 'power') amt = _Cards.getPower(perm) || 0;
+                        else if (amt === 'toughness') amt = _Cards.getToughness(perm) || 0;
+                        else amt = parseInt(amt, 10) || 1;
+                      }
+                      availPool[eff.color] = (availPool[eff.color] || 0) + amt;
+                    }
+                    else if (eff.colors) { for (const ec of eff.colors) availPool[ec] = (availPool[ec] || 0) + 1; }
+                  }
+                }
+                // Also count filter/devotee mana abilities ({1}: add {color})
+                // These don't add net mana but provide COLOR FIXING — they convert a generic land tap into needed color
+                const filterAbilities = _Cards.getFilterManaAbilities(perm);
+                for (const fAbility of filterAbilities) {
+                  const usedKey = perm._uid + '_' + JSON.stringify(fAbility.effects.map((e: any) => e.type));
+                  if (gs._abilityUsedThisTurn?.[usedKey]) continue;
+                  for (const eff of (fAbility.effects || [])) {
+                    if (eff.type !== 'add_mana') continue;
+                    if (eff.colors && Array.isArray(eff.colors)) {
+                      for (const ec of eff.colors) availPool[ec] = (availPool[ec] || 0) + 1;
+                    } else if (eff.color && eff.color.length > 1 && eff.choose) {
+                      for (const ec of eff.color.split('')) availPool[ec] = (availPool[ec] || 0) + 1;
+                    } else if (eff.color) {
+                      availPool[eff.color] = (availPool[eff.color] || 0) + 1;
+                    }
+                  }
+                }
+              });
+          }
           if (!_Mana.canPay(availPool, tapCost, tapCmc)) {
             // Can't afford — abort without tapping anything
             refresh();
@@ -886,9 +1121,17 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         // Use the real auto-tap system (handles colored mana, convoke, etc.)
         // Save pool snapshot so we can roll back if castSpell fails (e.g. hybrid mana edge cases)
         const poolSnapshot = (tapCost && tapCmc > 0) ? { ...gs.manaPool[pid] } : null;
+        // Save full pre-cast snapshot (before auto-tap) for modal cancel undo
+        const tappedBefore = gs.players[pid].zones.battlefield.cards
+          .filter((c: any) => c._tapped).map((c: any) => c._uid);
+        gs._preCastManaSnapshot = {
+          pool: { ...gs.manaPool[pid] },
+          tapped: tappedBefore,
+          playerId: pid,
+        };
         let tappedByAutoTap: string[] = [];
         if (tapCost && tapCmc > 0) {
-          tappedByAutoTap = _GS.autoTapForSpell(gs, pid, tapCost, tapCmc) || [];
+          tappedByAutoTap = _GS.autoTapForSpell(gs, pid, tapCost, tapCmc, card) || [];
         }
 
         const result = _GS.castSpell(gs, pid, cardUid, targets);
@@ -901,6 +1144,12 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             if (land) land._tapped = false;
           }
           gs.manaPool[pid] = poolSnapshot;
+          // Show toast for restricted mana (Herd Heirloom creature-only)
+          if (result.msg === 'restricted_mana') {
+            if (typeof (window as any).__gameToast === 'function') {
+              (window as any).__gameToast(`⚠️ Mana restrita! Essa mana só pode ser usada para conjurar tipos específicos (Dragões, Omens, Criaturas).`, 'warning');
+            }
+          }
           refresh();
           return;
         }
@@ -1000,6 +1249,16 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           gs.waitingForInput = { type: 'main_phase', playerId: pid };
         }
 
+        // Re-give instant priority during combat if human still has playable instants
+        // (MTG: after a spell resolves, active player gets priority again)
+        if (result?.success !== false && !gs.waitingForInput && gs.players[pid]?.isHuman &&
+            gs.phase !== 'main1' && gs.phase !== 'main2' && _GS) {
+          const playable = _GS.getPlayableCards(gs, pid);
+          if (playable.length > 0) {
+            gs.waitingForInput = { type: 'instant_priority', playerId: pid, phase: gs.phase };
+          }
+        }
+
         refresh();
       } catch (e) {
         console.warn('[castSpell] error:', e);
@@ -1043,8 +1302,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       const pid = 0;
       try {
         const hand = gs.players[pid].zones.hand.getAll();
-        const card = hand.find((c: any) => c._uid === cardUid);
+        let card = hand.find((c: any) => c._uid === cardUid);
+        // Also check exiled playable cards
+        let isFreeCastFromExile = false;
+        if (!card && gs._exiledPlayable && gs._exiledPlayable[cardUid]) {
+          card = gs._exiledPlayable[cardUid].card;
+          isFreeCastFromExile = !!gs._exiledPlayable[cardUid].freeCast;
+        }
         if (!card) return;
+
+        // Free cast from exile: skip mana, go straight to engine
+        if (isFreeCastFromExile) {
+          _GS.castSpell(gs, pid, cardUid, targets, true);
+          afterResolve(gs);
+          refresh();
+          return;
+        }
 
         // Tap mana for the adventure cost (not the creature cost)
         // Pass cmc=undefined so autoTapForSpell uses parseCost(manaCost) directly
@@ -1063,7 +1336,9 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             });
           const advCmc = _Mana.parseCost(advCost).total || 0;
           if (!_Mana.canPay(advPool, advCost, advCmc)) { refresh(); return; }
-          _GS.autoTapForSpell(gs, pid, advCost, undefined);
+          // Pass null as card: adventure/omen side is a sorcery, NOT a creature
+          // so creature-only mana (Herd Heirloom) should NOT be used
+          _GS.autoTapForSpell(gs, pid, advCost, undefined, null);
         }
 
         // castSpell(state, pid, uid, targets, castingAdventure, castingEvoke)
@@ -1232,7 +1507,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         } else if (type === 'handExile') {
           _GS.resolveHandExileChoice(gs, value);
         }
-        gs.waitingForInput = null;
+        // Only clear waitingForInput if no new pending input was set by the resolution
+        if (!gs.waitingForInput) gs.waitingForInput = null;
         afterResolve(gs);
         refresh();
       } catch (e) {
@@ -1280,14 +1556,42 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveChooseTarget] error:', e); }
     },
 
+    resolveSpiritDragonsChoice(dragonUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveSpiritDragonsChoice(gs, dragonUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveSpiritDragonsChoice] error:', e); }
+    },
+
     resolvePostModalTarget(target: any) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
+        console.log(`[resolvePostModalTarget] target=${target}, _pendingModalResolution=${!!gs._pendingModalResolution}, waitingForInput=${gs.waitingForInput?.type}`);
         _GS.resolvePostModalTarget(gs, target);
+        console.log(`[resolvePostModalTarget] AFTER: waitingForInput=${gs.waitingForInput?.type}`);
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolvePostModalTarget] error:', e); }
+    },
+
+    cancelModal() {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.cancelModal === 'function') {
+          _GS.cancelModal(gs);
+        } else {
+          // Fallback: clear modal state and restore card to hand
+          gs._pendingModal = null;
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[cancelModal] error:', e); }
     },
 
     activateGraveyardAbility(cardUid: string, abilityIdx: number) {
@@ -1465,8 +1769,44 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
     castHarmonize(cardUid: string, targets: any[] = [], tappedCreatureUid?: string) {
       const gs = gsRef.current;
-      if (!gs || !_GS) return;
+      if (!gs || !_GS || !_Mana) return;
       try {
+        // X-cost harmonize: prompt human for X value before casting
+        const card = gs.players[0].zones.graveyard.get(cardUid);
+        if (card) {
+          const hCost = _Cards?.getHarmonizeCost(card);
+          if (hCost && hCost.includes('{X}') && gs._pendingXChoice === undefined) {
+            // Calculate max X available
+            const bf = gs.players[0].zones.battlefield;
+            const availPool: Record<string, number> = { ...(gs.manaPool[0] || {}) };
+            bf.cards
+              .filter((c: any) => (c.type_line || '').toLowerCase().includes('land') && !c._tapped)
+              .forEach((land: any) => {
+                const colors = _Mana!.getLandManaColors(land);
+                colors.forEach((color: string) => { availPool[color] = (availPool[color] || 0) + 1; });
+              });
+            const totalAvail = (Object.values(availPool) as number[]).reduce((s: number, v) => s + (v as number), 0);
+            const fixedStr = hCost.replace(/\{X\}/g, '');
+            const fixedTotal = _Mana!.parseCost(fixedStr).total || 0;
+            // Factor in creature tap discount
+            let discount = 0;
+            if (tappedCreatureUid) {
+              const cr = bf.get(tappedCreatureUid);
+              if (cr && _Cards?.isCreature(cr) && !cr._tapped) discount = _Cards.getPower(cr);
+            }
+            const maxX = Math.max(0, totalAvail - Math.max(0, fixedTotal - discount));
+            gs._pendingXCast = { cardUid, card, targets, tapCost: hCost, fixedTotal, maxX, isHarmonize: true, tappedCreatureUid };
+            gs.waitingForInput = { type: 'choose_x_cost', playerId: 0 };
+            refresh();
+            return;
+          }
+          // Resume with chosen X
+          if (gs._pendingXChoice !== undefined) {
+            const chosenX = gs._pendingXChoice as number;
+            delete gs._pendingXChoice;
+            gs._humanChosenX = chosenX;
+          }
+        }
         _GS.castHarmonize(gs, 0, cardUid, targets, tappedCreatureUid || null);
         afterResolve(gs);
         refresh();
@@ -1520,10 +1860,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         _GS.resolveManaChoice(gs, color);
         gs.waitingForInput = null;
 
-        // Track undo entry for dual land taps
-        if (isTapLand && tapCardUid) {
+        // Track undo entry for land taps and mana abilities (Dragonstorm Globe etc.)
+        if (tapCardUid) {
           tapUndoRef.current.push({ uid: tapCardUid, color });
           setCanUndoMana(true);
+          setUndoManaCount(tapUndoRef.current.length);
         }
 
         afterResolve(gs);
@@ -1577,11 +1918,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveBuffChoiceAction] error:', e); }
     },
 
+    resolveWardChoice(choice: 'pay' | 'decline' | 'repick') {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveWardChoice(gs, choice);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveWardChoice] error:', e); }
+    },
+
     resolveGrantTargetChoice(creatureUid: string) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
         _GS.resolveGrantTarget(gs, creatureUid);
+        afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveGrantTargetChoice] error:', e); }
     },
@@ -1601,7 +1953,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveHandExileChoice(gs, cardUid);
-        gs.waitingForInput = null;
+        // Only clear waitingForInput if no new pending input was set (e.g. counter target choice)
+        if (!gs.waitingForInput) gs.waitingForInput = null;
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveHandExile] error:', e); }
@@ -1915,11 +2268,14 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
         }
         gs._pendingOptionalDiscard = null;
+        // Clear the discard waitingForInput BEFORE checking bonus effects
+        // (resolveOnNonlandDiscard may set a NEW waitingForInput like etb_any_damage_target)
+        gs.waitingForInput = null;
         // Glacial Dragonhunt: after discarding a nonland, resolve bonus effects
         const onNonlandDiscard = pending?.onNonlandDiscard;
         if (discarded && onNonlandDiscard?.length > 0) {
-          const gy = gs.players[0].zones.graveyard;
-          const justDiscarded = cardUids.map((uid: string) => gy.getAll().find((c: any) => c._uid === uid)).filter(Boolean);
+          const gy2 = gs.players[0].zones.graveyard;
+          const justDiscarded = cardUids.map((uid: string) => gy2.getAll().find((c: any) => c._uid === uid)).filter(Boolean);
           const anyNonland = justDiscarded.some((c: any) => !(c.type_line || '').includes('Land'));
           if (anyNonland && typeof _GS?.resolveOnNonlandDiscard === 'function') {
             _GS.resolveOnNonlandDiscard(gs, onNonlandDiscard, 0);
@@ -1941,10 +2297,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             return; // Wait for GY pick overlay
           }
         }
-        gs.waitingForInput = null;
-        // Re-run cleanup phase to call _endOfTurnCleanup + advance
-        if (typeof _GS?.reprocessCurrentPhase === 'function') {
-          _GS.reprocessCurrentPhase(gs);
+        // Only reprocess if no new waitingForInput was set (e.g. damage target from Glacial Dragonhunt)
+        if (!gs.waitingForInput) {
+          if (typeof _GS?.reprocessCurrentPhase === 'function') {
+            _GS.reprocessCurrentPhase(gs);
+          }
         }
         refresh();
       } catch (e) { console.warn('[resolveDiscard] error:', e); }
@@ -2039,6 +2396,50 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveETBDestroyTarget]', e); }
     },
 
+    // ── Graveyard trigger pay choice (e.g. Furious Forebear) ──────────────────
+
+    resolveMoveCountersTarget(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveMoveCountersTarget === 'function') {
+          _GS.resolveMoveCountersTarget(gs, targetUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveMoveCountersTarget]', e); }
+    },
+
+    resolveExileGYCreatureCost(cardUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveExileGYCreatureCost === 'function') {
+          _GS.resolveExileGYCreatureCost(gs, cardUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveExileGYCreatureCost]', e); }
+    },
+
+    resolveGraveyardTrigger(accepted: boolean) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveGraveyardTrigger === 'function') {
+          _GS.resolveGraveyardTrigger(gs, accepted);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGraveyardTrigger]', e); }
+    },
+
     // ── ETB bounce target (human chose which permanent to bounce) ────────────
 
     resolveETBBounceTarget(targetUids: string[]) {
@@ -2088,7 +2489,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
     // ── ETB exile target (human chose which permanent(s) to exile) ───────────
 
-    resolveETBDamageTarget(target: { type: 'creature' | 'player'; uid?: string; player?: number }) {
+    resolveETBDamageTarget(target: { type: 'creature' | 'player' | 'permanent'; uid?: string; player?: number }) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
@@ -2178,6 +2579,31 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveETBCloneTarget]', e); }
     },
 
+    // ── Legend rule sacrifice (human chose which legendary to sacrifice) ─────
+    resolveLegendRuleSacrifice(sacrificeUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveLegendRuleSacrifice === 'function') {
+          _GS.resolveLegendRuleSacrifice(gs, sacrificeUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveLegendRuleSacrifice]', e); }
+    },
+
+    activateGrantedAbility(creatureUid: string, abilityIdx: number) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.activateGrantedAbility(gs, 0, creatureUid, abilityIdx);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[activateGrantedAbility]', e); }
+    },
+
     // ── Distribute damage (human chose how to split damage_divided) ──────────
     resolveDistributeDamage(distribution: Record<string, number>) {
       const gs = gsRef.current;
@@ -2223,6 +2649,40 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveSearchLibrary]', e); }
+    },
+
+    resolveSearchToGY(cardUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveSearchToGY === 'function') {
+          _GS.resolveSearchToGY(gs, cardUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveSearchToGY]', e); }
+    },
+
+    // ── X cost choice (human chose how much X to pay) ───────────────────────
+    resolveXChoice(xValue: number) {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const pending = gs._pendingXCast;
+        if (!pending) return;
+        gs._pendingXChoice = xValue;
+        gs._humanChosenX = xValue;
+        gs.waitingForInput = null;
+        delete gs._pendingXCast;
+        // Re-trigger the cast: harmonize or normal spell
+        if (pending.isHarmonize) {
+          actions.castHarmonize(pending.cardUid, pending.targets || [], pending.tappedCreatureUid);
+        } else {
+          actions.castSpell(pending.cardUid, pending.targets || []);
+        }
+      } catch (e) { console.warn('[resolveXChoice]', e); }
     },
 
     // ── Ramp choice ─────────────────────────────────────────────────────────
@@ -2273,6 +2733,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveLookTop]', e); }
     },
 
+    // ── Reveal pick (Dragonologist etc.) ────────────────────────────────
+
+    resolveRevealPick(cardUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveRevealPick === 'function') {
+          _GS.resolveRevealPick(gs, cardUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveRevealPick]', e); }
+    },
+
     // ── Trigger ordering ──────────────────────────────────────────────────
 
     resolveTriggerOrder(orderedIndices: number[]) {
@@ -2299,6 +2775,26 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveConfirmOptional]', e); }
+    },
+
+    // ── Optional mill ───────────────────────────────────────────────────────
+
+    resolveOptionalMill(doMill: boolean) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveOptionalMill(gs, doMill);
+        afterResolve(gs);
+        // Safety: ensure human gets priority back after ETB mill resolves
+        const ph = gs.phase;
+        if ((ph === 'main1' || ph === 'main2') && gs.players[gs.activePlayer]?.isHuman) {
+          if (!gs.waitingForInput || gs.waitingForInput.type !== 'main_phase') {
+            console.log(`[resolveOptionalMill] SAFETY: restoring main_phase for human (was wfi=${gs.waitingForInput?.type})`);
+            gs.waitingForInput = { type: 'main_phase', playerId: gs.activePlayer };
+          }
+        }
+        refresh();
+      } catch (e) { console.warn('[resolveOptionalMill]', e); }
     },
 
     // ── Ward payment confirm ─────────────────────────────────────────────────
@@ -2371,7 +2867,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
     resolveGrantCounterTarget(cardUid: string) {
       const gs = gsRef.current;
-      if (!gs) return;
+      if (!gs || !_GS) return;
       try {
         const pending = (gs as any)._pendingGrantCounter;
         if (!pending) { gs.waitingForInput = null; afterResolve(gs); refresh(); return; }
@@ -2380,15 +2876,59 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const creature = gs.players[pending.controllerId].zones.battlefield.get(cardUid);
         if (creature) {
           if (!creature._counters) creature._counters = {};
-          const ctr = pending.counter || '+1/+1';
-          const amt = pending.amount || 1;
-          creature._counters[ctr] = (creature._counters[ctr] || 0) + amt;
-          if (ctr !== '+1/+1' && ctr !== '-1/-1') {
+          // Array of keyword counters (e.g. Qarsi Revenant: ["flying","deathtouch","lifelink"])
+          if (pending.counters && Array.isArray(pending.counters)) {
             if (!creature.keywords) creature.keywords = [];
-            const kwCap = ctr.charAt(0).toUpperCase() + ctr.slice(1);
-            if (!creature.keywords.includes(kwCap)) creature.keywords.push(kwCap);
+            for (const kw of pending.counters) {
+              const kwCap = kw.charAt(0).toUpperCase() + kw.slice(1);
+              creature._counters[kwCap] = (creature._counters[kwCap] || 0) + 1;
+              if (!creature.keywords.includes(kwCap)) creature.keywords.push(kwCap);
+              if (kwCap === 'Haste') creature._summoningSick = false;
+            }
+            gs.log.push(`${creature.name} recebe contadores: ${pending.counters.join(', ')}.`);
+          } else {
+            const ctr = pending.counter || '+1/+1';
+            const amt = pending.amount || 1;
+            creature._counters[ctr] = (creature._counters[ctr] || 0) + amt;
+            if (ctr !== '+1/+1' && ctr !== '-1/-1') {
+              if (!creature.keywords) creature.keywords = [];
+              const kwCap = ctr.charAt(0).toUpperCase() + ctr.slice(1);
+              if (!creature.keywords.includes(kwCap)) creature.keywords.push(kwCap);
+            }
+            gs.log.push(`${creature.name} recebe ${amt} contador ${ctr}.`);
           }
-          gs.log.push(`${creature.name} recebe ${amt} contador ${ctr}.`);
+          // Resume pending graveyard ability effects (e.g. Naga Fleshcrafter: counter + mass_clone)
+          if ((gs as any)._pendingGYAbilityEffects) {
+            const gyPending = (gs as any)._pendingGYAbilityEffects;
+            (gs as any)._pendingGYAbilityEffects = null;
+            for (const eff of gyPending.effects) {
+              // mass_clone: auto-use the same creature that got the counter as template (no second overlay)
+              if (eff.type === 'mass_clone' && creature) {
+                const myCreatures = gs.players[pending.controllerId].zones.battlefield.cards.filter(
+                  (c: any) => _Cards && _Cards.isCreature(c) && c._uid !== creature._uid
+                );
+                myCreatures.forEach((c: any) => {
+                  if (!c._originalCard) {
+                    c._originalCard = { name: c.name, power: c.power, toughness: c.toughness, type_line: c.type_line, keywords: c.keywords ? [...c.keywords] : [], oracle_text: c.oracle_text, mana_cost: c.mana_cost, cmc: c.cmc, image_normal: c.image_normal, image_small: c.image_small };
+                  }
+                  c._copyingUntilEOT = true;
+                  c.name = creature.name; c.power = creature.power; c.toughness = creature.toughness;
+                  c.type_line = creature.type_line; c.keywords = creature.keywords ? [...creature.keywords] : [];
+                  c.oracle_text = creature.oracle_text; c.mana_cost = creature.mana_cost; c.cmc = creature.cmc;
+                  c.image_normal = creature.image_normal; c.image_small = creature.image_small;
+                });
+                gs.log.push(`All creatures become copies of ${creature.name} until end of turn.`);
+                continue;
+              }
+              const targets: any[] = [];
+              if (eff.target === 'same') targets.push({ uid: creature._uid, player: pending.controllerId });
+              const result = _GS._resolveSimpleEffect(gs, gyPending.pid, eff, {
+                cardUid: gyPending.card?._uid, card: gyPending.card, fromZone: 'graveyard', targets
+              });
+              if (result) gs.log.push(result);
+              if (gs.waitingForInput) break;
+            }
+          }
         }
         afterResolve(gs);
         refresh();
@@ -2440,6 +2980,16 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveGYReturn]', e); }
+    },
+
+    resolveGYBottomLibrary(cardUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveGYBottomLibrary(gs, cardUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGYBottomLibrary]', e); }
     },
 
     // ── Graveyard choice (which GY to exile from) ───────────────────────────

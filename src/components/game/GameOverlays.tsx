@@ -15,9 +15,10 @@ import './GameOverlays.css';
 interface ScryOverlayProps {
   pendingScry: any; // { type: 'scry'|'surveil', cards: [], choices: [] }
   onConfirm: GameActions['resolveScry'];
+  onViewBattlefield?: () => void;
 }
 
-export function ScryOverlay({ pendingScry, onConfirm }: ScryOverlayProps) {
+export function ScryOverlay({ pendingScry, onConfirm, onViewBattlefield }: ScryOverlayProps) {
   const isSurveil = pendingScry.type === 'surveil';
   const [choices, setChoices] = useState<string[]>(pendingScry.cards.map(() => 'top'));
   const [topOrder, setTopOrder] = useState<number[]>(pendingScry.cards.map((_: any, i: number) => i));
@@ -101,9 +102,17 @@ export function ScryOverlay({ pendingScry, onConfirm }: ScryOverlayProps) {
         </div>
       </div>
 
-      <button className="btn btn-gold scry-arena-confirm" onClick={() => onConfirm(choices as any[], topCardOrder)}>
-        Confirm (Enter)
-      </button>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        {onViewBattlefield && (
+          <button className="btn" style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.3)', color: '#a0a8c0', fontWeight: 700, fontSize: 13, padding: '8px 18px', borderRadius: 8, cursor: 'pointer' }}
+            onClick={onViewBattlefield}>
+            👁 Ver Campo
+          </button>
+        )}
+        <button className="btn btn-gold scry-arena-confirm" onClick={() => onConfirm(choices as any[], topCardOrder)}>
+          Confirm (Enter)
+        </button>
+      </div>
     </div>
   );
 }
@@ -121,12 +130,13 @@ function describeMode(mode: any): string {
     if (mode[0]?.description) return mode[0].description;
     return mode.map((m: any) => describeMode(m)).filter(Boolean).join('. ');
   }
+  // Mode object with explicit description — use it directly
+  if (mode.description) return mode.description;
   // Mode object { label, effects } — describe its effects
   if (mode.label && Array.isArray(mode.effects)) {
     const desc = mode.effects.map((e: any) => describeMode(e)).filter(Boolean).join('. ');
     return desc || mode.label;
   }
-  if (mode.description) return mode.description;
   const t = mode.type;
   // Siege mode wrapper: { label, effects: [...] } — describe sub-effects
   if (!t && Array.isArray(mode.effects)) {
@@ -186,7 +196,9 @@ function describeMode(mode: any): string {
   }
   if (t === 'buff') {
     const dur = mode.duration === 'end_of_turn' ? ' until end of turn' : '';
-    return `${tgtLabel(tgt) || 'Creature'} gets +${mode.power || 0}/+${mode.toughness || 0}${dur}`;
+    const pLabel = typeof mode.power === 'string' ? amtLabel(mode.power) : `${mode.power || 0}`;
+    const tLabel = typeof mode.toughness === 'string' ? amtLabel(mode.toughness) : `${mode.toughness || 0}`;
+    return `${tgtLabel(tgt) || 'Creature'} gets +${pLabel}/+${tLabel}${dur}`;
   }
   if (t === 'buff_all') {
     const dur = mode.duration === 'end_of_turn' ? ' until end of turn' : '';
@@ -248,8 +260,10 @@ function describeMode(mode: any): string {
   return `${String(t).replace(/_/g, ' ')}${rawAmt ? ` ${amtLabel(rawAmt)}` : ''}${tgt ? ` — ${tgtLabel(tgt)}` : ''}`;
 }
 
-export function ModalOverlay({ pendingModal, onConfirm }: ModalOverlayProps) {
+export function ModalOverlay({ pendingModal, onConfirm, onCancel, onViewBattlefield }: ModalOverlayProps & { onCancel?: () => void; onViewBattlefield?: () => void }) {
   const chooseCount = pendingModal.chooseCount || 1;
+  const minChoices = pendingModal.minChoices || chooseCount;
+  const isUpTo = pendingModal.isUpTo || false;
   const [selected, setSelected] = useState<number[]>([]);
 
   function toggle(i: number) {
@@ -263,7 +277,7 @@ export function ModalOverlay({ pendingModal, onConfirm }: ModalOverlayProps) {
     });
   }
 
-  const ready = selected.length === chooseCount;
+  const ready = isUpTo ? (selected.length >= minChoices && selected.length <= chooseCount) : selected.length === chooseCount;
 
   return (
     <div className="overlay-backdrop">
@@ -272,7 +286,8 @@ export function ModalOverlay({ pendingModal, onConfirm }: ModalOverlayProps) {
           {pendingModal.cardName}
         </h3>
         <p className="overlay-hint">
-          Choose {chooseCount === 1 ? 'a mode' : `${chooseCount} modes`}:
+          {isUpTo ? `Choose ${minChoices} to ${chooseCount} modes:` : (chooseCount === 1 ? 'Choose a mode:' : `Choose ${chooseCount} modes:`)}
+
           <span className="overlay-keys">Press 1–{pendingModal.modes?.length || 4} to select · Enter = Confirm</span>
         </p>
         <div className="modal-modes">
@@ -295,6 +310,26 @@ export function ModalOverlay({ pendingModal, onConfirm }: ModalOverlayProps) {
         >
           Confirm {selected.length}/{chooseCount} (Enter)
         </button>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', marginTop: '8px' }}>
+          {onViewBattlefield && (
+            <button
+              className="btn btn-muted btn-sm"
+              onClick={onViewBattlefield}
+              style={{ fontSize: '11px', opacity: 0.8 }}
+            >
+              👁 Ver campo
+            </button>
+          )}
+          {onCancel && (
+            <button
+              className="btn btn-muted btn-sm"
+              onClick={onCancel}
+              style={{ fontSize: '11px', opacity: 0.8 }}
+            >
+              ✕ Cancelar (Esc)
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -332,10 +367,13 @@ interface GraveyardOverlayProps {
   cards: any[];
   playerId: number;
   onActivate?: (cardUid: string, abilityIdx: number) => void;
+  onPlayLand?: (cardUid: string) => void;
+  canPlayLand?: boolean;
+  getLandArt?: (card: any) => string | undefined;
   onClose: () => void;
 }
 
-export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: GraveyardOverlayProps) {
+export function GraveyardOverlay({ cards, playerId, onActivate, onPlayLand, canPlayLand, getLandArt, onClose }: GraveyardOverlayProps) {
   const [zoomed, setZoomed] = useState<any>(null);
 
   return (
@@ -363,12 +401,20 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
                 onMouseLeave={() => setZoomed(null)}
               >
                 <img
-                  src={card.image_normal || card.image_small}
+                  src={(getLandArt && getLandArt(card)) || card.image_normal || card.image_small}
                   alt={card.name}
                   style={{ width: '100%', borderRadius: 6, display: 'block' }}
                   onError={e => { (e.currentTarget as HTMLImageElement).src = card.image_small || ''; }}
                 />
                 <div className="gy-card-name">{card.name}</div>
+                {playerId === 0 && canPlayLand && onPlayLand && CardEngine.isLand(card) && (
+                  <button
+                    className="btn btn-gold btn-sm gy-activate-btn"
+                    onClick={() => { onPlayLand(card._uid); onClose(); }}
+                  >
+                    Play Land
+                  </button>
+                )}
                 {playerId === 0 && graveyardAbilities.length > 0 && onActivate && (
                   graveyardAbilities.map((ab: any, idx: number) => {
                     // Format the activation cost for display
@@ -403,7 +449,7 @@ export function GraveyardOverlay({ cards, playerId, onActivate, onClose }: Grave
 
         {zoomed && (
           <div className="gy-zoom">
-            <img src={zoomed.image_normal || zoomed.image_small} alt={zoomed.name} className="gy-zoom-img"
+            <img src={(getLandArt && getLandArt(zoomed)) || zoomed.image_normal || zoomed.image_small} alt={zoomed.name} className="gy-zoom-img"
               onError={e => { e.currentTarget.src = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-451e2a1b5940.jpg'; }} />
           </div>
         )}
@@ -691,7 +737,7 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
       <div className="overlay-panel glass">
         <h3 className="overlay-title">⬆ Distribute {counterType} Counters</h3>
         <p className="overlay-hint">
-          Click to add · Right-click to remove · Budget: <strong>{remaining}/{totalAmount}</strong> remaining
+          Remaining: <strong>{remaining}/{totalAmount}</strong>
         </p>
         <div className="scry-cards">
           {creatures.map((c: any, i: number) => {
@@ -700,12 +746,28 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
               <div
                 key={c._uid || i}
                 className={`scry-card-slot${count > 0 ? ' scry-card-selected' : ''}`}
-                onClick={() => addOne(c._uid)}
-                onContextMenu={e => { e.preventDefault(); remove(c._uid); }}
+                style={{ position: 'relative' }}
               >
-                <CardImage card={c} size="medium" />
-                <div className="scry-card-label">{c.name} {c.power}/{c.toughness}</div>
+                <div onClick={() => addOne(c._uid)} style={{ cursor: remaining > 0 ? 'pointer' : 'default' }}>
+                  <CardImage card={c} size="medium" />
+                  <div className="scry-card-label">{c.name} {c.power}/{c.toughness}</div>
+                </div>
                 {count > 0 && <div className="bounce-selected-badge">+{count}</div>}
+                <div style={{ display: 'flex', gap: 4, justifyContent: 'center', marginTop: 4 }}>
+                  <button
+                    className="btn btn-muted"
+                    style={{ padding: '2px 10px', fontSize: 14, minWidth: 30 }}
+                    onClick={() => remove(c._uid)}
+                    disabled={count <= 0}
+                  >−</button>
+                  <span style={{ minWidth: 20, textAlign: 'center', lineHeight: '28px', fontWeight: 'bold' }}>{count}</span>
+                  <button
+                    className="btn btn-primary"
+                    style={{ padding: '2px 10px', fontSize: 14, minWidth: 30 }}
+                    onClick={() => addOne(c._uid)}
+                    disabled={remaining <= 0}
+                  >+</button>
+                </div>
               </div>
             );
           })}
@@ -714,6 +776,9 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
           <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(dist)} disabled={spent === 0}>
             {spent === totalAmount ? `Confirm (${spent})` : `Use (${spent}/${totalAmount})`}
           </button>
+          {spent > 0 && (
+            <button className="btn btn-muted" onClick={() => setDist({})}>Reset</button>
+          )}
           {spent === 0 && (
             <button className="btn btn-muted" onClick={() => onConfirm({})}>Skip</button>
           )}
@@ -759,7 +824,66 @@ export function LookTopOverlay({ cards, pickCount, title, hint, keepLabel, disca
             </div>
           ))}
         </div>
-        <button className="btn btn-gold overlay-confirm" onClick={() => onConfirm(choices)}>Confirm (Enter)</button>
+        <button className="btn btn-gold overlay-confirm" disabled={keptCount < maxKeep} onClick={() => onConfirm(choices)}>
+          {keptCount < maxKeep ? `Selecione ${maxKeep - keptCount} carta(s)` : 'Confirm (Enter)'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Reveal Pick Overlay (e.g. Dragonologist: pick 1 matching card from revealed) ──
+interface RevealPickOverlayProps {
+  cards: any[];
+  validUids: string[];
+  title?: string;
+  hint?: string;
+  onConfirm: (cardUid: string | null) => void;
+}
+export function RevealPickOverlay({ cards, validUids, title, hint, onConfirm }: RevealPickOverlayProps) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const validSet = new Set(validUids);
+  return (
+    <div className="overlay-backdrop">
+      <div className="overlay-panel glass">
+        <h3 className="overlay-title">{title || '👁 Reveal — Choose a Card'}</h3>
+        <p className="overlay-hint">{hint || 'Click a highlighted card to pick it, or skip.'}</p>
+        <div className="scry-cards">
+          {cards.map((card: any) => {
+            const isValid = validSet.has(card._uid);
+            const isSel = selected === card._uid;
+            return (
+              <div
+                key={card._uid}
+                className={`scry-card-slot ${!isValid ? 'scry-away' : ''} ${isSel ? 'scry-selected' : ''}`}
+                style={{
+                  opacity: isValid ? 1 : 0.4,
+                  cursor: isValid ? 'pointer' : 'not-allowed',
+                  outline: isSel ? '3px solid gold' : undefined,
+                  borderRadius: 8,
+                }}
+                onClick={() => { if (isValid) setSelected(prev => prev === card._uid ? null : card._uid); }}
+              >
+                <CardImage card={card} size="medium" />
+                {isValid && <div className="scry-card-label" style={{ color: '#4f4' }}>✓ Válida</div>}
+                {!isValid && <div className="scry-card-label" style={{ color: '#999' }}>✗</div>}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+          <button
+            className="btn btn-gold overlay-confirm"
+            disabled={!selected}
+            style={{ flex: 1, opacity: selected ? 1 : 0.5 }}
+            onClick={() => onConfirm(selected)}
+          >
+            Escolher
+          </button>
+          <button className="btn btn-muted" style={{ flex: 1 }} onClick={() => onConfirm(null)}>
+            Pular (Esc)
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1491,63 +1615,129 @@ export function OrderBlockersOverlay({ attackerUids, blockers, snap, onConfirm }
 
 // ─── Trigger Order Overlay ──────────────────────────────────────────────────
 interface TriggerOrderProps {
-  triggers: Array<{ index: number; cardName: string; effectDesc: string }>;
+  triggers: Array<{ index: number; cardName: string; effectDesc: string; imageUrl?: string | null }>;
   onConfirm: (orderedIndices: number[]) => void;
 }
 export function TriggerOrderOverlay({ triggers, onConfirm }: TriggerOrderProps) {
-  const [order, setOrder] = useState<number[]>([]);
+  // Unordered pool (bottom) and ordered stack (top)
+  const [orderedStack, setOrderedStack] = useState<number[]>([]);
 
-  const toggleTrigger = (idx: number) => {
-    setOrder(prev => {
-      if (prev.includes(idx)) return prev.filter(i => i !== idx);
-      return [...prev, idx];
-    });
+  const unordered = triggers.filter(t => !orderedStack.includes(t.index));
+  const allSelected = orderedStack.length === triggers.length;
+
+  const addToStack = (idx: number) => {
+    setOrderedStack(prev => [...prev, idx]);
+  };
+  const removeFromStack = (idx: number) => {
+    setOrderedStack(prev => prev.filter(i => i !== idx));
   };
 
-  const allSelected = order.length === triggers.length;
+  const getTrigger = (idx: number) => triggers.find(t => t.index === idx)!;
+
+  const renderCard = (t: typeof triggers[0], pos: number | null, onClick: () => void, isOrdered: boolean) => (
+    <div
+      key={`${isOrdered ? 'ord' : 'pool'}-${t.index}`}
+      onClick={onClick}
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        width: 110, cursor: 'pointer',
+        animation: isOrdered ? 'triggerToastIn 0.3s ease-out' : undefined,
+        transition: 'transform 0.15s, box-shadow 0.15s',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = 'scale(1)'; }}
+    >
+      <div style={{ position: 'relative' }}>
+        {t.imageUrl ? (
+          <img src={t.imageUrl} alt={t.cardName}
+            style={{
+              width: 100, height: 140, borderRadius: 8, objectFit: 'cover',
+              border: isOrdered ? '2px solid rgba(255,200,60,0.8)' : '2px solid rgba(100,100,140,0.4)',
+              boxShadow: isOrdered
+                ? '0 4px 16px rgba(255,200,60,0.3), 0 0 20px rgba(255,200,60,0.1)'
+                : '0 4px 16px rgba(0,0,0,0.5)',
+            }} />
+        ) : (
+          <div style={{
+            width: 100, height: 140, borderRadius: 8,
+            background: 'linear-gradient(135deg, #1a1030, #2a2050)',
+            border: isOrdered ? '2px solid rgba(255,200,60,0.8)' : '2px solid rgba(100,100,140,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 12, color: '#aaa', textAlign: 'center', padding: 8,
+          }}>{t.cardName}</div>
+        )}
+        {pos !== null && (
+          <div style={{
+            position: 'absolute', top: -6, right: -6,
+            background: 'linear-gradient(135deg, #f0c040, #d4a020)', color: '#1a1025',
+            borderRadius: '50%', width: 24, height: 24,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 900, fontSize: 13, boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+          }}>{pos}</div>
+        )}
+      </div>
+      <div style={{
+        marginTop: 6, fontSize: 11, fontWeight: 700, color: isOrdered ? '#f0c040' : '#c0b8d0',
+        textAlign: 'center', lineHeight: 1.2, maxWidth: 110,
+      }}>{t.cardName}</div>
+      <div style={{
+        fontSize: 10, color: isOrdered ? 'rgba(255,200,60,0.7)' : 'rgba(180,170,200,0.6)',
+        textAlign: 'center', lineHeight: 1.2, maxWidth: 110,
+      }}>{t.effectDesc}</div>
+    </div>
+  );
 
   return (
-    <div className="overlay-backdrop">
-      <div className="overlay-panel glass" style={{ maxWidth: 480 }}>
-        <h3 className="overlay-title">⚡ Order Simultaneous Triggers</h3>
-        <p className="overlay-hint" style={{ fontSize: 13, marginBottom: 12 }}>
-          Click triggers in the order you want them to resolve (first click = resolves first).
-        </p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {triggers.map((t) => {
-            const pos = order.indexOf(t.index);
-            const isSelected = pos >= 0;
-            return (
-              <button
-                key={t.index}
-                className={isSelected ? 'btn btn-gold' : 'btn btn-muted'}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', textAlign: 'left', position: 'relative' }}
-                onClick={() => toggleTrigger(t.index)}
-              >
-                {isSelected && (
-                  <span style={{
-                    background: '#c8a84e', color: '#000', borderRadius: '50%',
-                    width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontWeight: 'bold', fontSize: 14, flexShrink: 0,
-                  }}>{pos + 1}</span>
-                )}
-                <span style={{ flex: 1 }}>
-                  <strong>{t.cardName}</strong>
-                  <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 8 }}>{t.effectDesc}</span>
-                </span>
-              </button>
-            );
-          })}
+    <div className="overlay-backdrop" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
+      {/* Ordered stack (top) */}
+      {orderedStack.length > 0 && (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+        }}>
+          <div style={{
+            fontSize: 12, fontWeight: 700, color: '#f0c040', letterSpacing: 1, textTransform: 'uppercase',
+          }}>Ordem de resolucao (clique para remover)</div>
+          <div style={{
+            display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center',
+            padding: '12px 20px', borderRadius: 12,
+            background: 'rgba(255,200,60,0.06)', border: '1px solid rgba(255,200,60,0.2)',
+            minHeight: 60,
+          }}>
+            {orderedStack.map((idx, i) => renderCard(getTrigger(idx), i + 1, () => removeFromStack(idx), true))}
+          </div>
         </div>
-        <button
-          className="btn btn-gold"
-          style={{ width: '100%', marginTop: 12 }}
-          disabled={!allSelected}
-          onClick={() => onConfirm(order)}
-        >
-          {allSelected ? 'Confirm Order' : `Select all ${triggers.length} triggers`}
-        </button>
-      </div>
+      )}
+
+      {/* Unordered pool (bottom) */}
+      {unordered.length > 0 && (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+        }}>
+          <div style={{
+            fontSize: 12, fontWeight: 700, color: '#8880a0', letterSpacing: 1, textTransform: 'uppercase',
+          }}>Triggers pendentes (clique para adicionar)</div>
+          <div style={{
+            display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center',
+            padding: '12px 20px', borderRadius: 12,
+            background: 'rgba(20,15,40,0.6)', border: '1px dashed rgba(100,100,140,0.3)',
+            minHeight: 60,
+          }}>
+            {unordered.map(t => renderCard(t, null, () => addToStack(t.index), false))}
+          </div>
+        </div>
+      )}
+
+      {/* Confirm button */}
+      <button
+        className="btn btn-gold"
+        style={{
+          padding: '12px 40px', fontSize: 14, fontWeight: 800,
+          opacity: allSelected ? 1 : 0.4, pointerEvents: allSelected ? 'auto' : 'none',
+        }}
+        onClick={() => onConfirm(orderedStack)}
+      >
+        {allSelected ? 'Confirmar Ordem (Enter)' : `Selecione todos os ${triggers.length} triggers`}
+      </button>
     </div>
   );
 }

@@ -20,10 +20,18 @@ export function Header() {
   const { screen, setScreen, totalCards, theme } = useAppStore();
   const [showTheme, setShowTheme] = useState(false);
 
+  function navigate(target: Screen) {
+    // Warn if leaving an in-progress game or draft
+    if (target !== screen && (screen === 'game' || screen === 'draft')) {
+      if (!window.confirm('Leave current game? Progress will be lost.')) return;
+    }
+    setScreen(target);
+  }
+
   return (
     <>
       <header className="header glass">
-        <div className="header-brand" onClick={() => setScreen('home')}>
+        <div className="header-brand" onClick={() => navigate('home')}>
           <span className="header-logo">&#9876;</span>
           <span className="header-title">Magic Draft</span>
         </div>
@@ -33,7 +41,7 @@ export function Header() {
             <button
               key={item.screen}
               className={`header-nav-btn ${screen === item.screen ? 'active' : ''}`}
-              onClick={() => setScreen(item.screen)}
+              onClick={() => navigate(item.screen)}
             >
               {item.label}
             </button>

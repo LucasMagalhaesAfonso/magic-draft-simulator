@@ -162,18 +162,29 @@ export function _resolveItem(item, state) {
       case 'modal': {
         const modes = effect.modes || [];
         if (modes.length === 0) break;
-        const chooseCount = effect.chooseTwo ? 2 : (effect.chooseCount || 1);
+        const chooseCount = effect.chooseUpTo || (effect.chooseTwo ? 2 : (effect.chooseCount || 1));
+        const minChoices = effect.minChoices || (effect.chooseUpTo ? 1 : chooseCount);
+        const isUpTo = !!effect.chooseUpTo;
 
         if (controller === 0 && gameState.players[0].isHuman) {
           // Human player: show interactive modal choice overlay
+          // Use pre-cast mana snapshot if available (captures state BEFORE payment)
+          const preCast = gameState._preCastManaSnapshot;
+          const _savedPool = preCast?.pool || { ...(gameState.manaPool?.[controller] || {}) };
+          const _savedTapped = preCast?.tapped || gameState.players[controller].zones.battlefield.cards
+            .filter((c: any) => c._tapped).map((c: any) => c._uid);
           gameState._pendingModal = {
             cardName: card.name,
             modes: modes,
             chooseCount: chooseCount,
+            minChoices: minChoices,
+            isUpTo: isUpTo,
             controller: controller,
             card: card,
             targets: targets,
-            remainingEffects: effects.slice(ei + 1)
+            remainingEffects: effects.slice(ei + 1),
+            savedPool: _savedPool,
+            savedTapped: _savedTapped,
           };
           gameState.waitingForInput = { type: 'modal_choice', playerId: controller };
           log.push(`${card.name}: choose ${chooseCount === 1 ? 'a mode' : chooseCount + ' modes'}.`);
@@ -181,9 +192,14 @@ export function _resolveItem(item, state) {
         } else {
           // AI picks best mode(s)
           const chosen = _aiChooseModes(modes, chooseCount, gameState, controller, opponent, targets);
-          const modeEffects = chosen.flatMap(m => Array.isArray(m) ? m : [m]);
+          // Support both flat effect arrays and ModalMode objects { label, effects[] }
+          const modeEffects = chosen.flatMap(m => {
+            if (Array.isArray(m)) return m;
+            if (m && m.effects && Array.isArray(m.effects)) return m.effects;
+            return [m];
+          });
           effects.splice(ei + 1, 0, ...modeEffects);
-          log.push(`Mode(s) chosen: ${modeEffects.map(e => e.type).join(', ')}.`);
+          log.push(`Mode(s) chosen: ${chosen.map((m: any) => m?.label || (Array.isArray(m) ? m.map((e: any) => e.type).join('+') : m.type)).join(', ')}.`);
         }
         break;
       }
@@ -249,7 +265,14 @@ export function _resolveItem(item, state) {
                 log.push(`${creature.name} can't be targeted (hexproof/shroud).`);
                 break;
               }
-              if (!_payWardCost(creature, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) break;
+              if (!_payWardCost(creature, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) {
+                // If ward set up a human prompt, save pending damage for after payment
+                if (gameState.waitingForInput?.type === 'ward_choice') {
+                  gameState._pendingWardDamage = { target, amount: dmgAmt, controllerId: controller, sourceUid: card?._uid };
+                  if (gameState._pendingWardChoice) gameState._pendingWardChoice.damageMode = true;
+                }
+                break;
+              }
               vfxPlay('damage', creature._uid);
               creature._damage += dmgAmt;
               // Mark creature as damaged this turn (for Unsparing Boltcaster, etc.)
@@ -267,6 +290,15 @@ export function _resolveItem(item, state) {
             gameState.players[target.player].life -= dmgAmt;
             gameState._lastDamagedPlayer = target.player; // Track for "damaged_player" discard effects
             log.push(`${dmgAmt} damage to player. (Life: ${gameState.players[target.player].life})`);
+          } else if (target.type === 'permanent') {
+            // Planeswalker damage
+            for (let pid = 0; pid < gameState.players.length; pid++) {
+              const pw = gameState.players[pid].zones.battlefield.get(target.uid);
+              if (pw && Cards.isPlaneswalker(pw)) {
+                GameState.damagePlaneswalker(gameState, pw, dmgAmt, pid);
+                break;
+              }
+            }
           }
         } else if (effect.target === 'any' || effect.target === 'any_target') {
           // "Any target" damage — human picks creature or player; AI auto-damages opponent
@@ -291,10 +323,18 @@ export function _resolveItem(item, state) {
           log.push(`${dmgAmt} damage to opponent. (Life: ${gameState.players[opponent].life})`);
           vfxPlay('playerDamage', 'p' + opponent);
         } else if (effect.target === 'opponent_creature' || effect.target === 'creature') {
-          // Auto-target: ETB damage with no pre-selected targets (e.g. Unsparing Boltcaster)
-          const targetPid = effect.target === 'opponent_creature' ? opponent : controller;
+          // Auto-target: damage with no pre-selected targets (modal spells, ETB damage, etc.)
+          // For 'creature': prefer opponent creatures (damage spells target opponents);
+          // fall back to own creatures only if no opponent targets exist.
+          let targetPid = effect.target === 'opponent_creature' ? opponent : opponent;
           let candidates = gameState.players[targetPid].zones.battlefield.cards
             .filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller));
+          // Fallback: if no opponent creatures, check own side (for 'creature' target only)
+          if (candidates.length === 0 && effect.target === 'creature') {
+            targetPid = controller;
+            candidates = gameState.players[targetPid].zones.battlefield.cards
+              .filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller));
+          }
           // Respect dealt_damage_this_turn condition — only damaged creatures are valid targets
           if (effect.condition === 'dealt_damage_this_turn') {
             candidates = candidates.filter((c: any) => c._damagedThisTurn);
@@ -462,6 +502,7 @@ export function _resolveItem(item, state) {
           else if (tgt === 'creature_with_flying') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.hasKeyword(c, 'Flying') && Cards.canBeTargeted(c, controller));
           else if (tgt === 'noncreature_artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
           else if (tgt === 'creature_power4+') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.isCreature(c) && Cards.getPower(c) >= 4 && Cards.canBeTargeted(c, controller));
+          else if (tgt === 'nonland_permanent') validChoices = allBFCards.filter(({ c }) => !Cards.isLand(c) && Cards.canBeTargeted(c, controller));
 
           if (validChoices.length === 0) {
             log.push(`No valid target to destroy.`);
@@ -520,9 +561,15 @@ export function _resolveItem(item, state) {
               break;
             }
             // Check ward cost
-            if (!_payWardCost(permanent, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) break;
+            if (!_payWardCost(permanent, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) {
+              if (gameState.waitingForInput?.type === 'ward_choice') {
+                gameState._pendingWardDestroy = { target, controller };
+                if (gameState._pendingWardChoice) gameState._pendingWardChoice.destroyMode = true;
+              }
+              break;
+            }
             // Check indestructible
-            if (Cards.hasIndestructible(permanent)) {
+            if (Cards.hasIndestructible(permanent, gameState)) {
               log.push(`${permanent.name} is indestructible!`);
               break;
             }
@@ -533,6 +580,23 @@ export function _resolveItem(item, state) {
               // Non-creature permanent (enchantment, artifact, planeswalker)
               bf.remove(permanent._uid);
               GameState._unregisterCardTriggers(gameState, permanent._uid);
+              // Fire leaves_battlefield trigger
+              const leaveLogs = GameState.fireTrigger(gameState, 'leaves_battlefield', { cardUid: permanent._uid, ownerId: target.player, card: permanent });
+              log.push(...leaveLogs);
+              // Return temporarily exiled cards (e.g. Stormplain Detainment)
+              const returned = GameState.returnTemporaryExiles(gameState, permanent._uid);
+              returned.forEach(name => log.push(`${name} retorna ao campo de batalha.`));
+              // Legacy fallback
+              if (permanent._exiledUntilLeaves && permanent._exiledUntilLeaves.length > 0) {
+                for (const exiled of permanent._exiledUntilLeaves) {
+                  if (exiled) {
+                    gameState.players[exiled._owner || target.player].zones.exile.remove(exiled._uid);
+                    gameState.players[exiled._owner || target.player].zones.battlefield.add(exiled);
+                    log.push(`${exiled.name} retorna ao campo de batalha.`);
+                  }
+                }
+                permanent._exiledUntilLeaves = [];
+              }
               gameState.players[target.player].zones.graveyard.add(permanent);
               log.push(`${permanent.name} is destroyed.`);
               vfxPlay('destroy', permanent._uid);
@@ -554,13 +618,26 @@ export function _resolveItem(item, state) {
             if (effect.target === 'nonland') return !Cards.isLand(c);
             return false;
           });
-          const dying = toDestroy.filter(c => !Cards.hasIndestructible(c));
-          const surviving = toDestroy.filter(c => Cards.hasIndestructible(c));
+          const dying = toDestroy.filter(c => !Cards.hasIndestructible(c, gameState));
+          const surviving = toDestroy.filter(c => Cards.hasIndestructible(c, gameState));
           surviving.forEach(c => log.push(`${c.name} is indestructible!`));
           dying.forEach(c => {
-            GameState.creatureDies(gameState, c, pid);
+            if (Cards.isCreature(c)) {
+              GameState.creatureDies(gameState, c, pid);
+            } else {
+              // Non-creature permanent (enchantment, artifact)
+              bf.remove(c._uid);
+              GameState._unregisterCardTriggers(gameState, c._uid);
+              const leaveLogs = GameState.fireTrigger(gameState, 'leaves_battlefield', { cardUid: c._uid, ownerId: pid, card: c });
+              log.push(...leaveLogs);
+              const returned = GameState.returnTemporaryExiles(gameState, c._uid);
+              returned.forEach(name => log.push(`${name} retorna ao campo de batalha.`));
+              if (!c._isToken) {
+                gameState.players[pid].zones.graveyard.add(c);
+              }
+            }
             log.push(`${c.name} is destroyed.`);
-            totalDestroyed++; // Count each destroyed permanent
+            totalDestroyed++;
           });
         }
 
@@ -592,6 +669,9 @@ export function _resolveItem(item, state) {
             };
             gameState.waitingForInput = { type: 'opponent_hand_exile', playerId: controller };
             log.push(`Choose a nonland card from opponent's hand to exile.`);
+            if (ei < effects.length - 1) {
+              gameState._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+            }
             return log;
           } else {
             // AI player: pick best card to exile
@@ -647,7 +727,13 @@ export function _resolveItem(item, state) {
               break;
             }
             // Check ward cost
-            if (!_payWardCost(permanent, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) break;
+            if (!_payWardCost(permanent, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) {
+              if (gameState.waitingForInput?.type === 'ward_choice') {
+                gameState._pendingWardExile = { target, controller };
+                if (gameState._pendingWardChoice) gameState._pendingWardChoice.exileMode = true;
+              }
+              break;
+            }
             // Exile bypasses indestructible
             vfxPlay('exile', permanent._uid);
             bf.remove(permanent._uid);
@@ -665,6 +751,12 @@ export function _resolveItem(item, state) {
               if (!card._exiledUntilLeaves) card._exiledUntilLeaves = [];
               permanent._owner = target.player; // Store original owner for later return
               card._exiledUntilLeaves.push(permanent);
+              // Track on source for UI display (exiled card shown under enchantment)
+              if (!card._exiledCards) card._exiledCards = [];
+              card._exiledCards.push({ name: permanent.name, image_uris: permanent.image_uris, image_small: permanent.image_small, image_normal: permanent.image_normal, _uid: permanent._uid });
+              // Track in _temporaryExiles for returnTemporaryExiles
+              if (!gameState._temporaryExiles) gameState._temporaryExiles = {};
+              gameState._temporaryExiles[permanent._uid] = { exilerUid: card._uid, originalOwner: target.player, originalZone: 'battlefield' };
             }
 
             log.push(`${permanent.name} is exiled.`);
@@ -699,6 +791,7 @@ export function _resolveItem(item, state) {
               playerId: controller,
               choices: candidates,
               maxExile,
+              optional: !!effect.up_to,
             };
             break;
           }
@@ -720,6 +813,12 @@ export function _resolveItem(item, state) {
               perm._owner = targetPid;
               perm._exiledByUid = card._uid; // tag for reliable lookup
               card._exiledUntilLeaves.push(perm);
+              // Track on source for UI display
+              if (!card._exiledCards) card._exiledCards = [];
+              card._exiledCards.push({ name: perm.name, image_uris: perm.image_uris, image_small: perm.image_small, image_normal: perm.image_normal, _uid: perm._uid });
+              // Track in _temporaryExiles for returnTemporaryExiles
+              if (!gameState._temporaryExiles) gameState._temporaryExiles = {};
+              gameState._temporaryExiles[perm._uid] = { exilerUid: card._uid, originalOwner: targetPid, originalZone: 'battlefield' };
             }
             log.push(`${perm.name} is exiled.`);
           }
@@ -762,10 +861,10 @@ export function _resolveItem(item, state) {
           let filterFn: (c: any) => boolean;
           if (effect.target === 'opponent_creature' || effect.target === 'creature') {
             autoTargetPlayer = opponentId;
-            filterFn = (c: any) => Cards.isCreature(c) && !c._isToken;
+            filterFn = (c: any) => Cards.isCreature(c);
           } else if (effect.target === 'nonland_permanent' || effect.target === 'spell_or_permanent') {
-            // spell_or_permanent: ideally targets spells on stack too, but fall back to nonland permanent
-            autoTargetPlayer = opponentId;
+            // nonland_permanent: can target ANY player's nonland permanents
+            autoTargetPlayer = -1; // special: both players
             filterFn = (c: any) => !Cards.isLand(c);
           } else if (effect.target === 'own_nonland') {
             // Sunpearl Kirin: bounce own non-land (optional, not source card itself)
@@ -775,9 +874,24 @@ export function _resolveItem(item, state) {
             autoTargetPlayer = opponentId;
             filterFn = (c: any) => !Cards.isLand(c);
           }
-          const candidates = gameState.players[autoTargetPlayer].zones.battlefield.cards
-            .filter(filterFn)
-            .filter((c: any) => Cards.canBeTargeted(c, controller));
+          // Collect candidates from target player(s)
+          let candidates: any[];
+          if (autoTargetPlayer === -1) {
+            // Both players' permanents (nonland_permanent)
+            candidates = [
+              ...gameState.players[0].zones.battlefield.cards.filter(filterFn)
+                .filter((c: any) => Cards.canBeTargeted(c, controller) && c._uid !== card._uid)
+                .map((c: any) => ({ ...c, _ownerPid: 0 })),
+              ...gameState.players[1].zones.battlefield.cards.filter(filterFn)
+                .filter((c: any) => Cards.canBeTargeted(c, controller))
+                .map((c: any) => ({ ...c, _ownerPid: 1 })),
+            ];
+          } else {
+            candidates = gameState.players[autoTargetPlayer].zones.battlefield.cards
+              .filter(filterFn)
+              .filter((c: any) => Cards.canBeTargeted(c, controller))
+              .map((c: any) => ({ ...c, _ownerPid: autoTargetPlayer }));
+          }
 
           if (candidates.length === 0) break; // nothing to bounce
 
@@ -805,7 +919,7 @@ export function _resolveItem(item, state) {
           // Respect up_to: N for multi-bounce effects (e.g. Marang River Regent ETB up_to: 2)
           const maxBounce = effect.up_to || 1;
           resolvedBounceTargets = candidates.slice(0, maxBounce).map((c: any) =>
-            ({ type: 'creature', uid: c._uid, player: autoTargetPlayer })
+            ({ type: 'creature', uid: c._uid, player: c._ownerPid ?? autoTargetPlayer })
           );
         }
         // Process all bounce targets (handles up_to: N)
@@ -843,6 +957,14 @@ export function _resolveItem(item, state) {
             // Tokens disappear, non-tokens return to hand
             if (permanent._isToken) {
               log.push(`${permanent.name} token vanishes.`);
+              // Conditional draw if bounced token (Sunpearl Kirin)
+              if (effect.draw_if_token) {
+                const drawn = gameState.players[controller].zones.library.drawFromTop();
+                if (drawn) {
+                  gameState.players[controller].zones.hand.add(drawn);
+                  log.push(`Drew a card (bounced token).`);
+                }
+              }
             } else {
               gameState.players[target.player].zones.hand.add(permanent);
               log.push(`${permanent.name} returns to hand.`);
@@ -1098,12 +1220,32 @@ export function _resolveItem(item, state) {
               }
             }
             if (!buffTarget) {
-              // For ETB buffs: prefer other creatures (exclude self from first pass)
-              const nonSelf = bf2.cards.filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller) && c._uid !== card?._uid)
+              const allCandidates = bf2.cards.filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
                 .sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a));
-              const allOwn = bf2.cards.filter((c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller))
-                .sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a));
-              const best = (nonSelf.length > 0 ? nonSelf : allOwn)[0];
+              // Human interactive: show overlay if >1 candidate and effect targets own/opponent creature
+              if (allCandidates.length > 1 && controller === 0 && gameState.players[0]?.isHuman &&
+                  (effect.target === 'own_creature' || effect.target === 'opponent_creature' || effect.target === 'creature')) {
+                const rp = typeof effect.power === 'number' ? effect.power : 0;
+                const rt = typeof effect.toughness === 'number' ? effect.toughness : 0;
+                gameState._pendingBuffChoice = {
+                  playerId: controller,
+                  effect,
+                  resolvedPower: rp,
+                  resolvedToughness: rt,
+                  candidates: allCandidates.map((c: any) => c._uid),
+                  sourceUid: card?._uid,
+                  targetPlayerId: targetPid
+                };
+                gameState.waitingForInput = { type: 'buff_choice', playerId: controller };
+                log.push(`Choose a creature to get +${rp}/+${rt}.`);
+                if (ei < effects.length - 1) {
+                  gameState._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+                }
+                return log;
+              }
+              // AI or single creature: auto-pick
+              const nonSelf = allCandidates.filter((c: any) => c._uid !== card?._uid);
+              const best = (nonSelf.length > 0 ? nonSelf : allCandidates)[0];
               if (best) buffTarget = { type: 'creature', uid: best._uid, player: targetPid };
             }
           }
@@ -1224,6 +1366,30 @@ export function _resolveItem(item, state) {
 
       case 'mill': {
         const millAmt = resolveAmount(effect.amount);
+        // Optional mill: ask human, AI skips if library is small
+        if (effect.optional) {
+          if (gameState.players[controller].isHuman && controller === 0) {
+            gameState._pendingOptionalMill = {
+              amount: millAmt,
+              target: effect.target || 'self',
+              controller,
+              card,
+              remainingEffects: effects.slice(ei + 1),
+              targets
+            };
+            gameState.waitingForInput = { type: 'optional_mill', playerId: controller };
+            log.push(`You may mill ${millAmt} cards.`);
+            return log;
+          } else {
+            // AI: mill if library has enough cards and graveyard synergy is useful
+            const aiLib = gameState.players[controller].zones.library;
+            if (aiLib.count() <= millAmt + 5) {
+              log.push('AI chooses not to mill.');
+              break;
+            }
+            // Otherwise fall through to mill normally
+          }
+        }
         let targetPlayer;
         if (effect.target === 'any_player') {
           if (gameState.players[controller].isHuman) {
@@ -1306,8 +1472,13 @@ export function _resolveItem(item, state) {
         const allowedLandTypes: string[] | null = effect.colors && effect.colors.length > 0
           ? (effect.colors as string[]).map((c: string) => COLOR_TO_LAND[c]).filter(Boolean)
           : null;
+        // Also support explicit landTypes array (e.g. Abzan Monument: ["Plains", "Swamp", "Forest"])
+        const specificTypes: string[] | null = (effect as any).landTypes || null;
         const availableLands = lib.cards.filter(c => {
           if (isBasicOnly ? !Cards.isBasicLand(c) : !Cards.isLand(c)) return false;
+          if (specificTypes) {
+            return specificTypes.some((lt: string) => (c.type_line || '').includes(lt));
+          }
           if (allowedLandTypes) {
             const name = (c.name || '').toLowerCase();
             return allowedLandTypes.some(t => name.includes(t));
@@ -1361,6 +1532,9 @@ export function _resolveItem(item, state) {
           for (let rampI = 0; rampI < totalRamps; rampI++) {
             const currentLands = lib.cards.filter(c => {
               if (isBasicOnly ? !Cards.isBasicLand(c) : !Cards.isLand(c)) return false;
+              if (specificTypes) {
+                return specificTypes.some((lt: string) => (c.type_line || '').includes(lt));
+              }
               if (allowedLandTypes) {
                 const name = (c.name || '').toLowerCase();
                 return allowedLandTypes.some(t => name.includes(t));
@@ -1462,7 +1636,7 @@ export function _resolveItem(item, state) {
       }
 
       case 'severance_priest_token': {
-        // Create Spirit token equal to CMC of exiled card (from Severance Priest)
+        // Create Spirit token for the OPPONENT equal to CMC of exiled card
         if (!card._exiledByPriest || card._exiledByPriest.length === 0) {
           log.push('No card was exiled by Severance Priest.');
           break;
@@ -1471,17 +1645,24 @@ export function _resolveItem(item, state) {
         const exiledData = card._exiledByPriest[card._exiledByPriest.length - 1];
         const cmc = exiledData.cmc || 0;
 
-        // Create the Spirit token
-        const token = Cards.createToken(controller, cmc, cmc, 'Spirit');
-        token.type_line = 'Spirit';
+        // Token goes to the OPPONENT (the player whose card was exiled)
+        const opponentForToken = controller === 0 ? 1 : 0;
+        const token = Cards.createToken(opponentForToken, cmc, cmc, 'Spirit');
+        token.type_line = 'Creature — Spirit';
         token.colors = ['W'];
         token.color_identity = ['W'];
 
-        const bf = gameState.players[controller].zones.battlefield;
+        const bf = gameState.players[opponentForToken].zones.battlefield;
         bf.add(token);
-        GameState._registerCardTriggers(gameState, token, controller);
+        GameState._registerCardTriggers(gameState, token, opponentForToken);
 
-        log.push(`${controller === 0 ? 'You create' : 'Opponent creates'} a ${cmc}/${cmc} white Spirit token.`);
+        // Return the exiled card to opponent's hand
+        if (exiledData.card) {
+          gameState.players[opponentForToken].zones.hand.add(exiledData.card);
+          log.push(`${exiledData.card.name} returns to its owner's hand.`);
+        }
+
+        log.push(`${opponentForToken === 0 ? 'You get' : 'Opponent gets'} a ${cmc}/${cmc} white Spirit token.`);
         break;
       }
 
@@ -1506,11 +1687,16 @@ export function _resolveItem(item, state) {
             token.type_line = effect.type_line;
           }
           if (effect.keywords) {
-            effect.keywords.forEach(kw => {
+            effect.keywords.forEach((kw: string) => {
               if (!token.keywords) token.keywords = [];
-              token.keywords.push(kw);
+              const cap = kw.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+              token.keywords.push(cap);
               token.oracle_text = (token.oracle_text || '') + (token.oracle_text ? ', ' : '') + kw;
             });
+            // Clear summoning sickness if token has haste (keywords applied after createToken)
+            if (effect.keywords.some((kw: string) => kw.toLowerCase() === 'haste')) {
+              token._summoningSick = false;
+            }
           }
           // etb_damage is processed after adding to battlefield (below)
           if (effect.sacrificeAtEndStep || effect.sacrifice_eot) token._sacrificeAtEndStep = true;
@@ -1575,6 +1761,13 @@ export function _resolveItem(item, state) {
             break;
           }
 
+          // Check if the target spell can't be countered
+          const targetEffects = Cards.getPreprocessedEffects(targetSpell);
+          if (targetEffects?.cantBeCountered) {
+            log.push(`${targetSpell.name} can't be countered!`);
+            break;
+          }
+
           // Remove from stack and send to owner's graveyard
           const stackIdx = gameState.stack.items.findIndex((s: any) => s.card._uid === targetSpell._uid);
           if (stackIdx !== -1) {
@@ -1613,6 +1806,33 @@ export function _resolveItem(item, state) {
               log.push(`${retCreature.name} gets ${counterAmt} ${counterType} counter(s).`);
               GameState.fireTrigger(gameState, 'counter_placed', { cardUid: retCreature._uid, playerId: ref.player });
             }
+          }
+          break;
+        }
+
+        // Distribute counters among creatures (Armament Dragon ETB)
+        if (effect.target === 'distribute_creatures' && (!targets || targets.length === 0)) {
+          const creatures = gameState.players[controller].zones.battlefield.cards.filter((c: any) => Cards.isCreature(c));
+          if (creatures.length === 0) { log.push('No creatures to distribute counters.'); break; }
+          if (controller === 0 && gameState.players[0].isHuman) {
+            gameState._pendingDistribute = {
+              counter: effect.counter,
+              total: effect.amount || 1,
+              assigned: {},
+              controller
+            };
+            gameState.waitingForInput = { type: 'distribute_counters', playerId: controller };
+            log.push(`Distribute ${effect.amount || 1} ${effect.counter} counters among your creatures.`);
+            if (ei < effects.length - 1) {
+              gameState._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+            }
+            return log;
+          } else {
+            // AI: stack all on best creature
+            const best = creatures.slice().sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a))[0];
+            if (!best._counters) best._counters = { '+1/+1': 0, '-1/-1': 0 };
+            best._counters[effect.counter] = (best._counters[effect.counter] || 0) + (effect.amount || 1);
+            log.push(`${best.name} gets ${effect.amount || 1} ${effect.counter} counters.`);
           }
           break;
         }
@@ -1730,11 +1950,28 @@ export function _resolveItem(item, state) {
         if (effect.colors && Array.isArray(effect.colors)) {
           for (const c of effect.colors) {
             gameState.manaPool[controller][c] = (gameState.manaPool[controller][c] || 0) + 1;
+            // Track restricted mana by type
+            if (effect.restriction) {
+              if (!gameState._restrictedMana) gameState._restrictedMana = [{}, {}];
+              if (!gameState._restrictedMana[controller]) gameState._restrictedMana[controller] = {};
+              const rType = effect.restriction as string;
+              if (!gameState._restrictedMana[controller][rType]) gameState._restrictedMana[controller][rType] = {};
+              gameState._restrictedMana[controller][rType][c] = (gameState._restrictedMana[controller][rType][c] || 0) + 1;
+            }
           }
           log.push(`+{${effect.colors.join('}{')}} mana.`);
         } else if (effect.color) {
           const c = effect.color;
-          gameState.manaPool[controller][c] = (gameState.manaPool[controller][c] || 0) + (effect.amount || 1);
+          const amt = effect.amount || 1;
+          gameState.manaPool[controller][c] = (gameState.manaPool[controller][c] || 0) + amt;
+          // Track restricted mana by type
+          if (effect.restriction) {
+            if (!gameState._restrictedMana) gameState._restrictedMana = [{}, {}];
+            if (!gameState._restrictedMana[controller]) gameState._restrictedMana[controller] = {};
+            const rType = effect.restriction as string;
+            if (!gameState._restrictedMana[controller][rType]) gameState._restrictedMana[controller][rType] = {};
+            gameState._restrictedMana[controller][rType][c] = (gameState._restrictedMana[controller][rType][c] || 0) + amt;
+          }
           log.push(`+{${c}} mana.`);
         }
         break;
@@ -1786,12 +2023,17 @@ export function _resolveItem(item, state) {
             up_to: !!effect.up_to,
             optional: !!effect.optional,
             controller,
-            effectIndex: gameState._effectStack ? gameState._effectStack.length : 0
+            effectIndex: gameState._effectStack ? gameState._effectStack.length : 0,
+            unless_creature: !!effect.unless_creature,
           };
           gameState.waitingForInput = { type: 'mandatory_discard', playerId: targetPlayer };
-          log.push(isOptional
-            ? `You may discard up to ${effect.amount || 1} card(s).`
-            : `You must discard ${effect.amount || 1} card(s).`);
+          if (effect.unless_creature) {
+            log.push(`Discard ${effect.amount || 2} cards unless you discard a creature card.`);
+          } else {
+            log.push(isOptional
+              ? `You may discard up to ${effect.amount || 1} card(s).`
+              : `You must discard ${effect.amount || 1} card(s).`);
+          }
           // Save remaining effects so they resume after human chooses (e.g., draw 2 after discard)
           if (ei < effects.length - 1) {
             gameState._pendingStackEffects = {
@@ -1804,6 +2046,21 @@ export function _resolveItem(item, state) {
         }
 
         // AI or opponent: auto-discard
+        // unless_creature: discard 1 creature instead of N non-creatures if possible
+        if (effect.unless_creature) {
+          const handCards = hand.getAll();
+          const creatures = handCards.filter(c => Cards.isCreature(c));
+          if (creatures.length > 0) {
+            // Discard weakest creature (only 1)
+            creatures.sort((a, b) => (a.cmc || 0) - (b.cmc || 0));
+            const c = creatures[0];
+            hand.remove(c._uid);
+            gy.add(c);
+            log.push(`${gameState.players[targetPlayer].isHuman ? 'You' : 'Opponent'} discards ${c.name} (creature).`);
+            break;
+          }
+          // No creature: fall through to discard N cards normally
+        }
         const sorted = hand.getAll().sort((a, b) => {
           if (Cards.isLand(a) && !Cards.isLand(b)) return -1;
           if (!Cards.isLand(a) && Cards.isLand(b)) return 1;
@@ -2021,7 +2278,58 @@ export function _resolveItem(item, state) {
         break;
       }
 
+      case 'remove_counters_all': {
+        // ETB: remove all counters from target creature (Purging Stormbrood)
+        if (targets && targets.length > 0) {
+          // Already has targets (pre-selected) — delegate to handler
+          break; // falls through to stack-part2
+        }
+        // No targets — gather all creatures from both sides for human/AI choice
+        const rcaCandidates: any[] = [];
+        for (let pid = 0; pid < gameState.players.length; pid++) {
+          for (const c of gameState.players[pid].zones.battlefield.cards) {
+            if (!Cards.isCreature(c)) continue;
+            rcaCandidates.push({ card: c, pid });
+          }
+        }
+        if (rcaCandidates.length === 0) break;
+        if (gameState.players[controller].isHuman) {
+          gameState._pendingRemoveCountersAll = { controllerId: controller, candidates: rcaCandidates, optional: !!effect.optional };
+          gameState.waitingForInput = { type: 'etb_remove_counters_target', playerId: controller, choices: rcaCandidates.map(x => x.card) };
+          break;
+        }
+        // AI: pick opponent's creature with the most counters
+        const rcaOpp = rcaCandidates.filter(x => x.pid !== controller && x.card._counters);
+        const rcaBest = rcaOpp.sort((a, b) => {
+          const sumA = Object.values(a.card._counters as Record<string,number>).reduce((s, v) => s + v, 0);
+          const sumB = Object.values(b.card._counters as Record<string,number>).reduce((s, v) => s + v, 0);
+          return sumB - sumA;
+        })[0];
+        if (rcaBest && rcaBest.card._counters) {
+          let tot = 0;
+          for (const ct in rcaBest.card._counters) { tot += rcaBest.card._counters[ct]; rcaBest.card._counters[ct] = 0; }
+          log.push(`Remove all ${tot} counter(s) from ${rcaBest.card.name}.`);
+          if (Cards.getToughness(rcaBest.card) <= 0) {
+            GameState.creatureDies(gameState, rcaBest.card, rcaBest.pid);
+          }
+        }
+        break;
+      }
+
       case 'tap': {
+        if (effect.target === 'enchanted') {
+          // Aura ETB: tap the enchanted creature
+          const auraCard = card;
+          if (auraCard && auraCard._attachedTo) {
+            const ownerPid = auraCard._attachedToOwner ?? opponent;
+            const enchanted = gameState.players[ownerPid].zones.battlefield.get(auraCard._attachedTo);
+            if (enchanted) {
+              enchanted._tapped = true;
+              log.push(`${enchanted.name} is tapped by ${auraCard.name}.`);
+            }
+          }
+          break;
+        }
         if (effect.target === 'all_opponent_creatures') {
           const tapCreatures = gameState.players[opponent].zones.battlefield.cards.filter(c => Cards.isCreature(c));
           tapCreatures.forEach(c => { c._tapped = true; });
@@ -2108,6 +2416,72 @@ export function _resolveItem(item, state) {
         break;
       }
 
+      case 'optional_pay_counters': {
+        // "If you control a Dragon, you may pay {N}. If you do, put N +1/+1 counters on target."
+        // Check condition (e.g. control_dragon)
+        if (effect.condition && typeof GameState._checkEffectCondition === 'function' &&
+            !GameState._checkEffectCondition(gameState, controller, effect)) {
+          log.push('Condition not met — skipping optional payment.');
+          break;
+        }
+        // Check if player has enough untapped lands to pay
+        const payAmount = effect.pay || 5;
+        const availPool = Mana.getAvailableMana(gameState, controller);
+        const totalAvail = Object.values(availPool).reduce((s: number, v: number) => s + v, 0);
+        if (totalAvail < payAmount) {
+          log.push(`Not enough mana to pay {${payAmount}} — skipping.`);
+          break;
+        }
+
+        // Determine the target creature (same = reuse first target from spell)
+        const counterTarget = (effect.target === 'same' && targets && targets.length > 0)
+          ? targets[0] : null;
+
+        if (controller === 0 && gameState.players[0].isHuman) {
+          // Human: prompt via confirm_optional overlay
+          gameState._pendingOptionalPayCounters = {
+            pay: payAmount,
+            counter: effect.counter || '+1/+1',
+            amount: effect.amount || payAmount,
+            target: counterTarget,
+            controller
+          };
+          // Store remaining effects for after resolution
+          if (ei < effects.length - 1) {
+            gameState._pendingStackEffects = {
+              card, controller, targets,
+              effects: effects.slice(ei + 1),
+              log
+            };
+          }
+          gameState.waitingForInput = {
+            type: 'confirm_optional',
+            playerId: controller,
+            message: `Pay {${payAmount}} to put ${effect.amount || payAmount} ${effect.counter || '+1/+1'} counters on ${counterTarget ? gameState.players[counterTarget.player].zones.battlefield.get(counterTarget.uid)?.name || 'creature' : 'creature'}?`
+          };
+          return log;
+        } else {
+          // AI: pay if target exists and has enough mana
+          if (counterTarget) {
+            const bf = gameState.players[counterTarget.player].zones.battlefield;
+            const creature = bf.get(counterTarget.uid);
+            if (creature) {
+              // Tap lands to pay
+              const genericCost = '{' + payAmount + '}';
+              GameState.autoTapForSpell(gameState, controller, genericCost, payAmount);
+              gameState.manaPool[controller] = Mana.payMana(gameState.manaPool[controller], genericCost, payAmount);
+              // Add counters
+              const counterType = effect.counter || '+1/+1';
+              const counterAmt = effect.amount || payAmount;
+              if (!creature._counters) creature._counters = {};
+              creature._counters[counterType] = (creature._counters[counterType] || 0) + counterAmt;
+              log.push(`Paid {${payAmount}}: ${creature.name} gets ${counterAmt} ${counterType} counters!`);
+            }
+          }
+        }
+        break;
+      }
+
       case 'prevent_damage': {
         // Store prevention shield on controller
         if (!gameState._damageShield) gameState._damageShield = {};
@@ -2116,10 +2490,32 @@ export function _resolveItem(item, state) {
         break;
       }
 
+      case 'prevent_damage_shield': {
+        // New Way Forward: prevent next damage from a chosen source this turn, redirect + draw
+        // The target is the chosen source (creature/permanent)
+        let sourceUid: string | null = null;
+        let sourceName = 'chosen source';
+        if (targets && targets.length > 0) {
+          const t = targets[0];
+          if (t.uid) {
+            sourceUid = t.uid;
+            // Find the source name for logging
+            for (let pid = 0; pid < gameState.players.length; pid++) {
+              const src = gameState.players[pid].zones.battlefield.get(t.uid);
+              if (src) { sourceName = src.name; break; }
+            }
+          }
+        }
+        gameState._preventDamageShield = { playerId: controller, turn: gameState.turn, sourceUid };
+        log.push(`New Way Forward: next damage from ${sourceName} to you this turn will be prevented, redirected, and you draw that many cards.`);
+        break;
+      }
+
       case 'return_from_graveyard': {
         const gy = gameState.players[controller].zones.graveyard;
-        const toHand = effect.to_hand !== false;
-        const toTopLibrary = effect.to_top_library === true;
+        const toBattlefield = effect.to_battlefield === true;
+        const toHand = !toBattlefield && effect.to_hand !== false;
+        const toTopLibrary = !toBattlefield && effect.to_top_library === true;
         const optional = effect.optional === true;
 
         // Pick best creature from graveyard (or target type)
@@ -2160,7 +2556,7 @@ export function _resolveItem(item, state) {
         // If human player, always show modal to choose (even if mandatory)
         if (controller === 0 && candidates.length > 0) {
           gameState._pendingGYReturn = {
-            effect, candidates, amount, toHand, toTopLibrary, controller
+            effect, candidates, amount, toHand, toTopLibrary, toBattlefield, controller
           };
           gameState.waitingForInput = { type: 'choose_gy_return', playerId: 0, optional: true };
           // Save remaining effects to resume after choice
@@ -2215,6 +2611,48 @@ export function _resolveItem(item, state) {
         }
         if (candidates.length === 0) {
           log.push('No valid card in graveyard.');
+        }
+        break;
+      }
+
+      case 'graveyard_to_bottom_library': {
+        // Jade-Cast Sentinel: put target card from a graveyard on the bottom of its owner's library
+        // Searches both graveyards when any_graveyard is set
+        const allGYCards: { card: any; pid: number }[] = [];
+        for (let pid = 0; pid < gameState.players.length; pid++) {
+          for (const c of gameState.players[pid].zones.graveyard.getAll()) {
+            allGYCards.push({ card: c, pid });
+          }
+        }
+        if (allGYCards.length === 0) {
+          log.push('No cards in any graveyard.');
+          break;
+        }
+        // Human: show graveyard choice overlay
+        if (controller === 0 && gameState.players[0]?.isHuman) {
+          gameState._pendingGYBottomLibrary = {
+            candidates: allGYCards,
+            controller,
+          };
+          gameState.waitingForInput = { type: 'choose_gy_bottom_library', playerId: 0 };
+          if (ei < effects.length - 1) {
+            gameState._pendingStackEffects = {
+              card, controller, targets,
+              effects: effects.slice(ei + 1),
+              log
+            };
+          }
+          return log;
+        }
+        // AI: pick highest CMC card from opponent's GY first, then own
+        const oppId = controller === 0 ? 1 : 0;
+        const oppCards = allGYCards.filter(c => c.pid === oppId);
+        const pick = (oppCards.length > 0 ? oppCards : allGYCards)
+          .sort((a, b) => (b.card.cmc || 0) - (a.card.cmc || 0))[0];
+        if (pick) {
+          gameState.players[pick.pid].zones.graveyard.remove(pick.card._uid);
+          gameState.players[pick.pid].zones.library.cards.push(pick.card); // bottom
+          log.push(`${pick.card.name} is put on the bottom of its owner's library.`);
         }
         break;
       }
@@ -2280,14 +2718,64 @@ export function _resolveItem(item, state) {
           const target = targets[0];
           const creature = gameState.players[target.player].zones.battlefield.get(target.uid);
           if (creature) {
-            creature._powerMod = (creature._powerMod || 0) + (effect.power || 0);
-            creature._toughnessMod = (creature._toughnessMod || 0) + (effect.toughness || 0);
-            creature._tempPowerMod = (creature._tempPowerMod || 0) + (effect.power || 0);
-            creature._tempToughnessMod = (creature._tempToughnessMod || 0) + (effect.toughness || 0);
-            log.push(`${creature.name} gets ${effect.power}/${effect.toughness} until end of turn.`);
-            if (Cards.getToughness(creature) <= 0) {
-              GameState.creatureDies(gameState, creature, target.player);
-              log.push(`${creature.name} dies.`);
+            // Check Ward before applying debuff (opponent's creature targeted)
+            if (target.player !== controller && !_payWardCost(creature, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) {
+              log.push(`${creature.name}'s ward countered the debuff!`);
+            } else {
+              creature._powerMod = (creature._powerMod || 0) + (effect.power || 0);
+              creature._toughnessMod = (creature._toughnessMod || 0) + (effect.toughness || 0);
+              creature._tempPowerMod = (creature._tempPowerMod || 0) + (effect.power || 0);
+              creature._tempToughnessMod = (creature._tempToughnessMod || 0) + (effect.toughness || 0);
+              log.push(`${creature.name} gets ${effect.power}/${effect.toughness} until end of turn.`);
+              if (Cards.getToughness(creature) <= 0) {
+                GameState.creatureDies(gameState, creature, target.player);
+                log.push(`${creature.name} dies.`);
+              }
+            }
+          }
+        } else if (effect.target === 'opponent_creature' || effect.target === 'creature') {
+          // ETB debuff without pre-selected targets (e.g. Gurmag Rakshasa)
+          const targetPid = effect.target === 'opponent_creature' ? opponent : controller;
+          const candidates = gameState.players[targetPid].zones.battlefield.cards.filter(
+            (c: any) => Cards.isCreature(c) && Cards.canBeTargeted(c, controller)
+          );
+          if (candidates.length > 1 && controller === 0 && gameState.players[0]?.isHuman) {
+            // Human: show interactive target choice overlay
+            const rp = effect.power || 0;
+            const rt = effect.toughness || 0;
+            gameState._pendingBuffChoice = {
+              playerId: controller,
+              effect,
+              resolvedPower: rp,
+              resolvedToughness: rt,
+              candidates: candidates.map((c: any) => c._uid),
+              sourceUid: card?._uid,
+              targetPlayerId: targetPid
+            };
+            gameState.waitingForInput = { type: 'buff_choice', playerId: controller };
+            log.push(`Choose a creature to get ${rp}/${rt}.`);
+            // Save remaining effects for later
+            if (ei < effects.length - 1) {
+              gameState._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+            }
+            return log;
+          } else if (candidates.length > 0) {
+            // AI or single creature: auto-pick strongest
+            candidates.sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a));
+            const creature = candidates[0];
+            // Check Ward before applying debuff (ward works on abilities too)
+            if (!_payWardCost(creature, controller, gameState, log, false)) {
+              log.push(`${creature.name}'s ward countered the debuff!`);
+            } else {
+              creature._powerMod = (creature._powerMod || 0) + (effect.power || 0);
+              creature._toughnessMod = (creature._toughnessMod || 0) + (effect.toughness || 0);
+              creature._tempPowerMod = (creature._tempPowerMod || 0) + (effect.power || 0);
+              creature._tempToughnessMod = (creature._tempToughnessMod || 0) + (effect.toughness || 0);
+              log.push(`${creature.name} gets ${effect.power}/${effect.toughness} until end of turn.`);
+              if (Cards.getToughness(creature) <= 0) {
+                GameState.creatureDies(gameState, creature, targetPid);
+                log.push(`${creature.name} dies.`);
+              }
             }
           }
         }
@@ -2295,6 +2783,19 @@ export function _resolveItem(item, state) {
       }
 
       // Route all remaining effect types to stack-part2 handlers
+      case 'conditional_discard_return': {
+        // "You may discard a card. When you do, return target creature or land card from your graveyard to your hand."
+        const cdrResult = GameState._resolveSimpleEffect(gameState, controller, effect, { cardUid: card._uid, card, cardName: card.name });
+        if (cdrResult) log.push(cdrResult);
+        if (gameState.waitingForInput) {
+          if (ei < effects.length - 1) {
+            gameState._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+          }
+          return log;
+        }
+        break;
+      }
+
       default: {
         const part2Result = StackPart2.dispatch(
           effect, state, card, controller, targets, effects, ei, log, resolveAmount
@@ -2344,6 +2845,41 @@ export function _payWardCost(creature, controller, state, log, castingCantBeCoun
   if (castingCantBeCountered) {
     log.push(`Ward: spell can't be countered — ward ignored.`);
     return true;
+  }
+
+  // Check for "Ward—Pay N life" first
+  const wardLifeMatch = (creature.oracle_text || '').match(/ward[\s—]+pay\s+(\d+)\s+life/i);
+  if (wardLifeMatch) {
+    const lifeCost = parseInt(wardLifeMatch[1]) || 0;
+    if (lifeCost === 0) return true;
+    // Human: show ward choice modal
+    if (gameState.players[controller]?.isHuman) {
+      // Find which player owns this creature
+      const wardCreaturePid = gameState.players.findIndex((p: any) =>
+        p.zones.battlefield.get(creature._uid)
+      );
+      gameState._pendingWardChoice = {
+        creatureUid: creature._uid,
+        creatureName: creature.name,
+        wardCost: lifeCost,
+        wardType: 'life',
+        searchPid: wardCreaturePid >= 0 ? wardCreaturePid : (controller === 0 ? 1 : 0),
+        damageMode: false,
+        stackPath: true,
+      };
+      gameState.waitingForInput = { type: 'ward_choice', playerId: controller };
+      log.push(`${creature.name} has Ward—Pay ${lifeCost} life.`);
+      return false; // pause — spell not yet resolved
+    }
+    // AI: auto-pay
+    const casterLife = gameState.players[controller].life;
+    if (casterLife > lifeCost) {
+      gameState.players[controller].life -= lifeCost;
+      log.push(`Ward: paid ${lifeCost} life.`);
+      return true;
+    }
+    log.push(`Ward—pay ${lifeCost} life: can't pay — spell is countered.`);
+    return false;
   }
 
   const wardCostMatch = (creature.oracle_text || '').match(/ward[\s—]+\{?(\d+)\}?/i);
@@ -2412,7 +2948,10 @@ export function _aiChooseModes(modes, chooseCount, state, controller, opponent, 
 
   const scored = modes.map((mode, idx) => {
     let score = 0;
-    const effects = Array.isArray(mode) ? mode : [mode];
+    // Support ModalMode { label, effects[] } and flat effect arrays
+    const effects = Array.isArray(mode) ? mode
+      : (mode && mode.effects && Array.isArray(mode.effects)) ? mode.effects
+      : [mode];
     for (const eff of effects) {
       switch (eff.type) {
         case 'damage': {

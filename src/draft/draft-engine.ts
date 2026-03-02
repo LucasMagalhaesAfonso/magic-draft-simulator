@@ -276,6 +276,19 @@ export function generateSealedPool(cardPool: Card[]): Card[] {
 }
 
 /**
+ * Generate 6 sealed booster packs separately (for reveal animation).
+ * Returns an array of 6 packs, each pack is an array of cards.
+ */
+export function generateSealedPacks(cardPool: Card[]): Card[][] {
+  const SEALED_PACKS = 6;
+  const packs: Card[][] = [];
+  for (let i = 0; i < SEALED_PACKS; i++) {
+    packs.push(generate(cardPool));
+  }
+  return packs;
+}
+
+/**
  * Generate a sealed pool for the AI opponent (also 6 packs).
  */
 export function generateSealedAIPool(cardPool: Card[]): Card[] {

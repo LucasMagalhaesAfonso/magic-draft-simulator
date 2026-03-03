@@ -2462,7 +2462,18 @@ export function GameScreen() {
               // Sort: regular permanents first, planeswalkers last (right side)
               const nonLands = p1.battlefield
                 .filter((c: any) => !c.type_line?.includes('Land') && !c._attachedTo)
-                .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
+                .sort((a: any, b: any) => {
+                  // Creatures → Planeswalkers → Artifacts → Enchantments → other
+                  const typeOrder = (c: any) => {
+                    const tl = (c.type_line || '').toLowerCase();
+                    if (tl.includes('creature')) return 0;
+                    if (tl.includes('planeswalker')) return 1;
+                    if (tl.includes('artifact')) return 2;
+                    if (tl.includes('enchantment')) return 3;
+                    return 4;
+                  };
+                  return typeOrder(a) - typeOrder(b);
+                });
               const lands = p1.battlefield.filter((c: any) => c.type_line?.includes('Land') && !c._attachedTo);
               // Build uid→card map for resolving attachment UIDs
               const p1BfMap = new Map(p1.battlefield.map((c: any) => [c._uid, c]));
@@ -2836,7 +2847,18 @@ export function GameScreen() {
           : (() => {
               const nonLands = p0.battlefield
                 .filter((c: any) => !c.type_line?.includes('Land') && !c._attachedTo)
-                .sort((a: any, b: any) => (a.type_line?.includes('Planeswalker') ? 1 : 0) - (b.type_line?.includes('Planeswalker') ? 1 : 0));
+                .sort((a: any, b: any) => {
+                  // Creatures → Planeswalkers → Artifacts → Enchantments → other
+                  const typeOrder = (c: any) => {
+                    const tl = (c.type_line || '').toLowerCase();
+                    if (tl.includes('creature')) return 0;
+                    if (tl.includes('planeswalker')) return 1;
+                    if (tl.includes('artifact')) return 2;
+                    if (tl.includes('enchantment')) return 3;
+                    return 4;
+                  };
+                  return typeOrder(a) - typeOrder(b);
+                });
               const lands = p0.battlefield.filter((c: any) => c.type_line?.includes('Land') && !c._attachedTo);
               // Build uid→card map for resolving attachment UIDs
               const p0BfMap = new Map(p0.battlefield.map((c: any) => [c._uid, c]));

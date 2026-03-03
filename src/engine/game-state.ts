@@ -56,6 +56,8 @@ export function create(deck1, deck2) {
       mulliganCount: [0, 0],       // how many times each player mulliganed
       mulliganDone: [false, false], // whether each player has kept
       _triggers: [],                // registered triggered abilities
+      _gameQueue: [],               // centralized trigger/ETB/SBA resolution queue
+      _processingQueue: false,      // guard against reentrant processGameQueue calls
       _spellsThisTurn: [0, 0],      // count spells cast this turn (for Flurry)
       _creatureSpellsThisTurn: [0, 0],    // creature spells cast this turn
       _noncreatureSpellsThisTurn: [0, 0], // noncreature spells cast this turn
@@ -541,101 +543,251 @@ export function flushBatchedTriggers(state: any, readyToFire: Array<{ trigger: a
     return logs;
   }
 
-  // Resolve all triggers inline
-  for (let ri = 0; ri < readyToFire.length; ri++) {
-    const { trigger, fireData } = readyToFire[ri];
-    logs.push(`Habilidade de ${trigger.cardName} dispara!`);
+  // Push all triggers into _gameQueue for centralized resolution
+  for (const entry of readyToFire) {
+    state._gameQueue.push({
+      type: 'trigger',
+      trigger: entry.trigger,
+      fireData: entry.fireData,
+      _doublefire: (entry as any)?._doublefire || false,
+    });
+  }
 
-    const isHumanPlayer = state.players[trigger.controllerId]?.isHuman;
+  // Process the queue immediately
+  if (!state._processingQueue) {
+    processGameQueue(state);
+  }
 
-    // Optional trigger for human → confirm_optional overlay
-    if (trigger.optional && isHumanPlayer) {
-      const remaining = readyToFire.slice(ri + 1);
-      if (remaining.length > 0) {
-        if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-        state._pendingTriggersToResolve.push(...remaining);
+  return logs;
+}
+
+// ─── GAME QUEUE: Centralized trigger/ETB/SBA resolution ───
+// Items are pushed into state._gameQueue and processed sequentially.
+// When an effect needs human input (waitingForInput), the queue pauses.
+// After human resolves, processGameQueue is called again to resume.
+
+/**
+ * Process the centralized game queue (FIFO).
+ * Resolves triggers, ETBs, and SBAs one at a time.
+ * Pauses when waitingForInput is set (human needs to act).
+ */
+export function processGameQueue(state: any): void {
+  if (state._processingQueue) return; // reentrant guard
+  state._processingQueue = true;
+  console.log(`[QUEUE] processGameQueue START — ${state._gameQueue.length} items, wfi=${state.waitingForInput?.type || 'none'}`);
+  for (const qi of state._gameQueue) {
+    const tName = qi.trigger?.cardName || qi.card?.name || '?';
+    console.log(`  [QUEUE] item: type=${qi.type}, card=${tName}, event=${qi.trigger?.event || qi.type}`);
+  }
+
+  try {
+    while (state._gameQueue.length > 0) {
+      // Don't pause for "normal" waiting states — these just mean the player can act, not that an overlay is blocking
+      const wfiType = state.waitingForInput?.type;
+      const isBlockingWfi = wfiType && wfiType !== 'main_phase' && wfiType !== 'instant_priority' && wfiType !== 'stack_priority' && wfiType !== 'trigger_priority';
+      if (isBlockingWfi) {
+        console.log(`[QUEUE] PAUSED — waitingForInput=${wfiType}, remaining=${state._gameQueue.length} items`);
+        break;
       }
-      state._pendingOptionalTrigger = { trigger, fireData };
-      const effectDesc = (trigger.effects || []).map((e: any) => {
-        if (e.type === 'search_library') return 'Search your library';
-        if (e.type === 'draw') return `Draw ${e.amount || 1}`;
-        if (e.type === 'damage') return `Deal ${e.amount} damage`;
-        if (e.type === 'gainLife') return `Gain ${e.amount} life`;
-        if (e.type === 'create_token') return `Create token`;
-        if (e.type === 'endure') return `Endure ${e.amount || 1}`;
-        return e.type;
-      }).join(', ');
-      state.waitingForInput = {
-        type: 'confirm_optional',
-        message: `${trigger.cardName}: ${effectDesc}?`,
-        playerId: trigger.controllerId,
-      };
-      return logs;
-    }
+      if (state.winner) break;
 
-    // Cost trigger for human → trigger_cost overlay
-    const effectsWithCosts = (trigger.effects || []).filter((e: any) => e.cost);
-    if (effectsWithCosts.length > 0 && isHumanPlayer) {
-      const remaining = readyToFire.slice(ri + 1);
-      if (remaining.length > 0) {
-        if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-        state._pendingTriggersToResolve.push(...remaining);
-      }
-      state.waitingForInput = { type: 'trigger_cost', playerId: trigger.controllerId, trigger, data: fireData };
-      return logs;
-    }
+      const item = state._gameQueue[0];
+      if (!item) { state._gameQueue.shift(); continue; }
+      const itemName = item.trigger?.cardName || item.card?.name || '?';
+      console.log(`[QUEUE] resolving: type=${item.type}, card=${itemName}, event=${item.trigger?.event || item.type}`);
 
-    // Doublefire (Windcrag Siege)
-    const fireCount = (readyToFire[ri] as any)?._doublefire ? 2 : 1;
-    const wiBefore = state.waitingForInput;
-    let pausedAt = -1;
-    for (let fc = 0; fc < fireCount; fc++) {
-      if (fc > 0) logs.push(`Habilidade de ${trigger.cardName} dispara novamente! (Windcrag Siege)`);
-      for (let ei = 0; ei < trigger.effects.length; ei++) {
-        const effect = trigger.effects[ei];
-        const wiBeforeEffect = state.waitingForInput;
-        const result = _resolveSimpleEffect(state, trigger.controllerId, effect, fireData);
-        if (result && result !== '__paused__') logs.push(result);
-        if (state.waitingForInput && state.waitingForInput !== wiBeforeEffect) {
-          pausedAt = ei;
+      switch (item.type) {
+        case 'trigger': {
+          // ── Trigger priority: pause for human to respond with instants ──
+          const trigCtrl = item.trigger?.controllerId;
+          const isHumanTrigger = state.players[trigCtrl]?.isHuman;
+          const autoPassOn = state._autoPassUntilEndStep && !state._fullControl;
+          // Only pause if: human-relevant trigger, not autopass, and priority not already given for this item
+          if (!autoPassOn && (isHumanTrigger || state.players[0]?.isHuman) && !item._priorityGiven) {
+            item._priorityGiven = true;
+            // Push toast now so it shows during the priority window
+            _pushTriggerToast(state, item.trigger);
+            item._toastPushed = true;
+            state.waitingForInput = {
+              type: 'trigger_priority',
+              playerId: 0,
+              triggerCardName: item.trigger?.cardName || '?',
+              triggerEffectDesc: (item.trigger?.effects || []).map((e: any) => _describeTriggerEffect(e)).join(', ') || 'Ability triggers',
+            };
+            console.log(`[QUEUE] PAUSED for trigger_priority — ${itemName}`);
+            break;
+          }
+          state._gameQueue.shift();
+          _resolveQueuedTrigger(state, item);
+          // Remove resolved trigger from toast queue immediately
+          _popTriggerToast(state, item.trigger);
           break;
         }
-      }
-      if (pausedAt >= 0) break;
-    }
-
-    // If paused (waitingForInput set), queue remaining triggers
-    if (state.waitingForInput && state.waitingForInput !== wiBefore) {
-      const remaining = readyToFire.slice(ri + 1);
-      if (remaining.length > 0) {
-        if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-        state._pendingTriggersToResolve.push(...remaining);
-      }
-      return logs;
-    }
-
-    // After each trigger resolves, give human priority to respond with instants
-    // (MTG rules: active player gets priority after each stack item resolves)
-    if (ri < readyToFire.length - 1) {
-      const humanPid = state.players.findIndex((p: any) => p.isHuman);
-      if (humanPid >= 0) {
-        const hasInstants = getPlayableCards(state, humanPid).length > 0;
-        if (hasInstants) {
-          const remaining = readyToFire.slice(ri + 1);
-          if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-          state._pendingTriggersToResolve.push(...remaining);
-          state.waitingForInput = {
-            type: 'instant_priority',
-            playerId: humanPid,
-            phase: 'post_trigger'
-          };
-          return logs;
+        case 'etb': {
+          state._gameQueue.shift();
+          // Resolve ETB effects via stack
+          if (item.effects && item.effects.length > 0) {
+            state.log.push(`${item.card.name}: enters the battlefield ability!`);
+            GameStack.push(state.stack, {
+              card: item.card,
+              controller: item.playerId,
+              targets: [],
+              effects: item.effects
+            });
+            const stackLog = GameStack.resolve(state.stack, state);
+            state.log.push(...stackLog);
+          }
+          break;
         }
+        case 'etb_triggers': {
+          state._gameQueue.shift();
+          // Fire enters-related triggers for a creature that just entered
+          const bfCard = item.card;
+          const pid = item.playerId;
+          if (CardEngine.isCreature(bfCard)) {
+            state.log.push(...fireTrigger(state, 'enters_or_attacks', { cardUid: bfCard._uid, entering: true, playerId: pid }));
+            if ((bfCard.type_line || '').toLowerCase().includes('dragon')) {
+              state.log.push(...fireTrigger(state, 'dragon_enters', { cardUid: bfCard._uid, playerId: pid }));
+            }
+            state.log.push(...fireTrigger(state, 'other_creature_enters', { cardUid: bfCard._uid, playerId: pid, entering: true }));
+            state.log.push(...fireTrigger(state, 'creature_etb', { cardUid: bfCard._uid, playerId: pid }));
+          }
+          state.log.push(...fireTrigger(state, 'permanent_enters', { cardUid: bfCard._uid, playerId: pid }));
+          break;
+        }
+        case 'cast_resume': {
+          state._gameQueue.shift();
+          if (item.castResumeData) {
+            _resumeCastPermanent(state, item.castResumeData);
+          }
+          break;
+        }
+        default:
+          state._gameQueue.shift();
+          break;
+      }
+    }
+  } finally {
+    state._processingQueue = false;
+  }
+}
+
+/**
+ * Resolve a single queued trigger item.
+ * Handles optional triggers, cost triggers, and immediate resolution.
+ * If human input is needed, sets waitingForInput and the queue pauses.
+ */
+function _resolveQueuedTrigger(state: any, item: any): void {
+  const { trigger, fireData } = item;
+  const isHumanPlayer = state.players[trigger.controllerId]?.isHuman;
+
+  state.log.push(`${trigger.cardName} ability triggers!`);
+
+  // Track trigger toast notification (skip if already pushed during trigger_priority)
+  if (!item._toastPushed) _pushTriggerToast(state, trigger);
+
+  // Optional trigger: human must confirm
+  if (trigger.optional && isHumanPlayer) {
+    state._pendingOptionalTrigger = { trigger, fireData };
+    const effectDesc = _buildEffectDescription(trigger.effects);
+    state.waitingForInput = {
+      type: 'confirm_optional',
+      message: `${trigger.cardName}: ${effectDesc}?`,
+      playerId: trigger.controllerId,
+    };
+    return;
+  }
+
+  // Cost trigger: human must pay
+  const effectsWithCosts = (trigger.effects || []).filter((e: any) => e.cost);
+  if (effectsWithCosts.length > 0 && isHumanPlayer) {
+    state.waitingForInput = {
+      type: 'trigger_cost',
+      playerId: trigger.controllerId,
+      trigger,
+      data: fireData,
+    };
+    return;
+  }
+
+  // No cost, no optional → resolve immediately
+  const fireCount = item._doublefire ? 2 : 1;
+  for (let fc = 0; fc < fireCount; fc++) {
+    if (fc > 0) state.log.push(`${trigger.cardName} ability triggers again! (Windcrag Siege)`);
+    for (let ei = 0; ei < trigger.effects.length; ei++) {
+      const effect = trigger.effects[ei];
+      const wiBefore = state.waitingForInput;
+      console.log(`[QUEUE] _resolveQueuedTrigger: resolving effect ${effect.type} for ${trigger.cardName}, controller=${trigger.controllerId}, isHuman=${state.players[trigger.controllerId]?.isHuman}, wiBefore=${wiBefore?.type || 'none'}`);
+      const result = _resolveSimpleEffect(state, trigger.controllerId, effect, fireData);
+      console.log(`[QUEUE] _resolveQueuedTrigger: after effect ${effect.type}, result=${result}, wfi=${state.waitingForInput?.type || 'none'}`);
+      if (result && result !== '__paused__') state.log.push(result);
+      // If effect set waitingForInput, pause — remaining effects handled on resume
+      if (state.waitingForInput && state.waitingForInput !== wiBefore) {
+        // Store remaining effects for continuation after human resolves
+        if (ei < trigger.effects.length - 1) {
+          const remainingEffects = trigger.effects.slice(ei + 1);
+          if (state._pendingGraveyardCardChoice) {
+            state._pendingGraveyardCardChoice.remainingEffects = remainingEffects;
+            state._pendingGraveyardCardChoice.controller = trigger.controllerId;
+            state._pendingGraveyardCardChoice.sourceCardUid = trigger.cardUid;
+          }
+          if (state._pendingGYReturn) {
+            state._pendingGYReturn.remainingEffects = remainingEffects;
+            state._pendingGYReturn.triggerControllerId = trigger.controllerId;
+          }
+        }
+        return;
       }
     }
   }
-  return logs;
 }
+
+/**
+ * Helper: build a short effect description for overlay messages.
+ */
+function _buildEffectDescription(effects: any[]): string {
+  return (effects || []).map((e: any) => {
+    if (e.type === 'search_library') return 'Search your library';
+    if (e.type === 'draw') return `Draw ${e.amount || 1}`;
+    if (e.type === 'damage') return `Deal ${e.amount} damage`;
+    if (e.type === 'gainLife') return `Gain ${e.amount} life`;
+    if (e.type === 'create_token') return `Create token`;
+    if (e.type === 'endure') return `Endure ${e.amount || 1}`;
+    return e.type;
+  }).join(', ');
+}
+
+/**
+ * Helper: push a trigger toast notification for the UI.
+ */
+function _pushTriggerToast(state: any, trigger: any): void {
+  try {
+    const triggerCard = state.players.flatMap((p: any) => p.zones.battlefield.cards)
+      .find((c: any) => c._uid === trigger.cardUid);
+    const effectDesc = (trigger.effects || []).map((e: any) => _describeTriggerEffect(e)).join(', ');
+    if (!state._triggerToastQueue) state._triggerToastQueue = [];
+    state._triggerToastQueue.push({
+      id: (state._triggerToastQueue.length > 0 ? state._triggerToastQueue[state._triggerToastQueue.length - 1].id + 1 : 1),
+      cardName: trigger.cardName || triggerCard?.name || '?',
+      imageUrl: triggerCard?.image_small || triggerCard?.image_normal || null,
+      imageUrlLarge: triggerCard?.image_normal || triggerCard?.image_small || null,
+      controllerId: trigger.controllerId,
+      effectDesc: effectDesc || 'Ability triggers',
+    });
+    if (state._triggerToastQueue.length > 20) state._triggerToastQueue.shift();
+  } catch (_) { /* ignore */ }
+}
+
+/**
+ * Helper: remove a resolved trigger's toast from the queue immediately.
+ */
+function _popTriggerToast(state: any, trigger: any): void {
+  if (!state._triggerToastQueue?.length) return;
+  const idx = state._triggerToastQueue.findIndex((t: any) => t.cardName === trigger.cardName);
+  if (idx >= 0) state._triggerToastQueue.splice(idx, 1);
+}
+
+// ─── END GAME QUEUE INFRASTRUCTURE ───
 
 export function fireTrigger(state, eventType, data) {
     const _triggeredCards = state.players?.flatMap((p: any) => p.zones?.battlefield?.cards || []).filter((c: any) => c._triggers?.length).map((c: any) => c.name).join(', ');
@@ -707,8 +859,17 @@ export function fireTrigger(state, eventType, data) {
         if (trigger.self && data.cardUid === trigger.cardUid) {
           shouldFire = true;
         } else if (!trigger.self && data.controllerId === trigger.controllerId) {
-          // Non-self: enchantment/artifact triggers on any creature attacking (e.g. War Effort)
-          shouldFire = true;
+          // Non-self: enchantment/artifact triggers on any creature attacking
+          // "Whenever you attack" (once_per_attack): fire only for the FIRST attacker
+          if (trigger.once_per_attack) {
+            const firedKey = `_attackTriggerFired_${trigger.cardUid}`;
+            if (!(state as any)[firedKey]) {
+              shouldFire = true;
+              (state as any)[firedKey] = true;
+            }
+          } else {
+            shouldFire = true;
+          }
         }
       }
       // Combat damage to player
@@ -940,251 +1101,69 @@ export function fireTrigger(state, eventType, data) {
       return logs;
     }
 
-    // Second pass: process collected triggers in order
-    // If a cost-trigger requires human input, queue remaining for after resolution
-    for (let ri = 0; ri < readyToFire.length; ri++) {
-      const { trigger, fireData } = readyToFire[ri];
-      logs.push(`Habilidade de ${trigger.cardName} dispara!`);
-
-      // Track trigger notification for UI toast
-      try {
-        const triggerCard = state.players.flatMap((p: any) => p.zones.battlefield.cards).find((c: any) => c._uid === trigger.cardUid);
-        // For Betor: compute cumulative toughness and show active thresholds
-        const isBetorTrigger = (trigger.cardName || '').toLowerCase().includes('betor') || (triggerCard?.name || '').toLowerCase().includes('betor');
-        let effectDesc = '';
-        if (isBetorTrigger) {
-          const pid = trigger.controllerId;
-          const bf = state.players[pid]?.zones?.battlefield?.cards || [];
-          const totalTou = bf.filter((c: any) => c.type_line?.includes('Creature')).reduce((s: number, c: any) => {
-            const base = parseInt(c.toughness);
-            if (isNaN(base)) return s;
-            const mod = (c._counters?.['+1/+1'] ?? 0) - (c._counters?.['-1/-1'] ?? 0);
-            return s + base + (c._toughnessMod ?? 0) + mod;
-          }, 0);
-          const active: string[] = [];
-          if (totalTou >= 10) active.push('comprar carta');
-          if (totalTou >= 20) active.push('desvirar criaturas');
-          if (totalTou >= 40) active.push('opon. perde metade da vida');
-          effectDesc = `Resistência total: ${totalTou} — ${active.length > 0 ? active.join(', ') : 'nenhum threshold atingido'}`;
-        } else {
-          effectDesc = (trigger.effects || []).map((e: any) => {
-            if (e.type === 'draw') return `Comprar ${e.amount || 1}`;
-            if (e.type === 'damage') return `${e.amount} de dano`;
-            if (e.type === 'gainLife') return `Ganhar ${e.amount} vida`;
-            if (e.type === 'destroy') return `Destruir ${e.target || 'criatura'}`;
-            if (e.type === 'counter_self') return `+${e.amount || 1}/+${e.amount || 1} fichas`;
-            if (e.type === 'create_token') return `Criar ficha ${e.name || ''}`;
-            if (e.type === 'buff') return `+${e.power}/${e.toughness} até fim de turno`;
-            if (e.type === 'counter') return `Contador +1/+1`;
-            if (e.type === 'surveil') return `Surveil ${e.amount}`;
-            if (e.type === 'scry') return `Scry ${e.amount}`;
-            if (e.type === 'mill') return `Mill ${e.amount}`;
-            if (e.type === 'bounce') return `Devolver à mão`;
-            if (e.type === 'exile') return `Exilar`;
-            if (e.type === 'untap_all') return `Desvirar ${e.target || 'todas'}`;
-            if (e.type === 'opponent_loses_half_life') return `Oponente perde metade da vida`;
-            if (e.type === 'copy_last_spell') return `Copiar 2ª magia`;
-            if (e.type === 'exile_with_suspend') return `Exilar com suspend ${e.counters || 3}`;
-            return e.type;
-          }).join(', ');
-        }
-        if (!state._triggerToastQueue) state._triggerToastQueue = [];
-        state._triggerToastQueue.push({
-          id: (state._triggerToastQueue.length > 0 ? state._triggerToastQueue[state._triggerToastQueue.length - 1].id + 1 : 1),
-          cardName: trigger.cardName || triggerCard?.name || '?',
-          imageUrl: triggerCard?.image_small || triggerCard?.image_normal || null,
-          imageUrlLarge: triggerCard?.image_normal || triggerCard?.image_small || null,
-          controllerId: trigger.controllerId,
-          effectDesc: effectDesc || 'Habilidade dispara',
-        });
-        // Keep queue small
-        if (state._triggerToastQueue.length > 20) state._triggerToastQueue.shift();
-      } catch (_) { /* ignore notification errors */ }
-
-      const effectsWithCosts = trigger.effects.filter(e => e.cost);
-      const isHumanPlayer = state.players[trigger.controllerId] && state.players[trigger.controllerId].isHuman;
-
-      // "May" triggers: optional triggers need human confirmation
-      if (trigger.optional && isHumanPlayer) {
-        // Queue remaining ready-to-fire triggers for after this cost is resolved
-        const remaining = readyToFire.slice(ri + 1);
-        if (remaining.length > 0) {
-          if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-          state._pendingTriggersToResolve.push(...remaining);
-        }
-        // Save trigger effects for resolveOptionalConfirm
-        state._pendingOptionalTrigger = {
-          trigger,
-          fireData,
-        };
-        const effectDesc = (trigger.effects || []).map((e: any) => {
-          if (e.type === 'search_library') return 'Search your library';
-          if (e.type === 'draw') return `Draw ${e.amount || 1}`;
-          if (e.type === 'damage') return `Deal ${e.amount} damage`;
-          if (e.type === 'gainLife') return `Gain ${e.amount} life`;
-          if (e.type === 'create_token') return `Create token`;
-          return e.type;
-        }).join(', ');
-        state.waitingForInput = {
-          type: 'confirm_optional',
-          message: `${trigger.cardName}: ${effectDesc}?`,
-          playerId: trigger.controllerId,
-        };
-        state._triggerDepth--;
-        return logs;
-      }
-
-      if (effectsWithCosts.length > 0 && isHumanPlayer) {
-        // Queue remaining ready-to-fire triggers for after this cost is resolved
-        const remaining = readyToFire.slice(ri + 1);
-        if (remaining.length > 0) {
-          if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-          state._pendingTriggersToResolve.push(...remaining);
-        }
-        state.waitingForInput = {
-          type: 'trigger_cost',
-          playerId: trigger.controllerId,
-          trigger: trigger,
-          data: fireData
-        };
-        state._triggerDepth--;
-        return logs;
-      }
-
-      // No cost — resolve trigger effects immediately
-      // Windcrag Siege doublefire: resolve effects twice
-      const fireCount = (readyToFire[ri] as any)?._doublefire ? 2 : 1;
-      // Track effect index so we can queue remaining effects if waitingForInput is set mid-trigger
-      const wiBefore = state.waitingForInput;
-      let pausedAt = -1;
-      for (let fc = 0; fc < fireCount; fc++) {
-        if (fc > 0) logs.push(`Habilidade de ${trigger.cardName} dispara novamente! (Windcrag Siege)`);
-        for (let ei = 0; ei < trigger.effects.length; ei++) {
-          const effect = trigger.effects[ei];
-          const wiBeforeEffect = state.waitingForInput;
-          const result = _resolveSimpleEffect(state, trigger.controllerId, effect, fireData);
-          // Filter debug markers from log
-          if (result && result !== '__paused__') logs.push(result);
-          // If this effect set waitingForInput, pause and remember which effect caused it
-          if (state.waitingForInput && state.waitingForInput !== wiBeforeEffect) {
-            pausedAt = ei;
-            break;
-          }
-        }
-        if (pausedAt >= 0) break; // Don't fire second time if paused
-      }
-
-      // If resolving this trigger set waitingForInput (e.g. buff target, graveyard choice), queue remaining
-      if (state.waitingForInput && state.waitingForInput !== wiBefore) {
-        // Store remaining effects from this trigger in the pending choice (for continuation)
-        if (pausedAt >= 0 && trigger.effects.length > pausedAt + 1) {
-          const remainingEffects = trigger.effects.slice(pausedAt + 1);
-          if (state._pendingGraveyardCardChoice) {
-            // Remaining trigger effects to fire after graveyard exile choice
-            state._pendingGraveyardCardChoice.remainingEffects = remainingEffects;
-            state._pendingGraveyardCardChoice.controller = trigger.controllerId;
-            state._pendingGraveyardCardChoice.sourceCardUid = trigger.cardUid;
-          }
-        }
-        const remaining = readyToFire.slice(ri + 1);
-        if (remaining.length > 0) {
-          if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-          state._pendingTriggersToResolve.push(...remaining);
-        }
-        // Also queue matching temp triggers so they aren't lost (BUG 5 fix)
-        for (const tempTrigger of tempTriggers) {
-          let shouldFireTemp = false;
-          if (tempTrigger.event === 'creature_etb' && data.playerId === tempTrigger.controller && tempTrigger.condition === 'own_creature_entering') shouldFireTemp = true;
-          if (tempTrigger.event === 'attacks' && data.controllerId === tempTrigger.controller && tempTrigger.condition === 'own_creature_attacking') shouldFireTemp = true;
-          if (tempTrigger.event === 'dies' && tempTrigger.targetCardUid && data.cardUid === tempTrigger.targetCardUid) {
-            if (tempTrigger.condition === 'dies_under_your_control') {
-              if (data.ownerId === tempTrigger.controller) shouldFireTemp = true;
-            } else {
-              shouldFireTemp = true;
-            }
-          }
-          if (tempTrigger.event === 'any_creature_dies' && tempTrigger.condition === 'own_creature' && data.ownerId === tempTrigger.controller) shouldFireTemp = true;
-          if (shouldFireTemp) {
-            // Wrap temp trigger into the same format as regular triggers for the drain queue
-            const pseudoTrigger = {
-              cardName: tempTrigger.sourceCard?.name || 'Temp effect',
-              cardUid: tempTrigger.sourceCard?._uid,
-              controllerId: tempTrigger.controller,
-              effects: tempTrigger.effects,
-              optional: false,
-            };
-            state._pendingTriggersToResolve.push({ trigger: pseudoTrigger, fireData: { cardUid: tempTrigger.sourceCard?._uid } });
-            if (tempTrigger.once || tempTrigger.expiresAt !== 'end_of_turn') {
-              state._tempTriggers = state._tempTriggers.filter(t => t !== tempTrigger);
-            }
-          }
-        }
-        state._triggerDepth--;
-        return logs;
-      }
+    // ─── GAME QUEUE INTEGRATION ───
+    // Push all collected triggers into _gameQueue for centralized resolution.
+    // This replaces the old inline "second pass" resolution, ensuring triggers
+    // are processed sequentially through processGameQueue with proper pause/resume.
+    for (const entry of readyToFire) {
+      state._gameQueue.push({
+        type: 'trigger',
+        trigger: entry.trigger,
+        fireData: entry.fireData,
+        _doublefire: (entry as any)._doublefire || false,
+      });
     }
 
-    // Process temporary triggers
+    // Also collect matching temp triggers and push them into the queue
     for (const tempTrigger of tempTriggers) {
-      // Check if condition matches
       let shouldFireTemp = false;
 
-      // Thunder of Unity: own_creature_entering
       if (tempTrigger.event === 'creature_etb' && data.playerId === tempTrigger.controller) {
-        if (tempTrigger.condition === 'own_creature_entering') {
-          shouldFireTemp = true;
-        }
+        if (tempTrigger.condition === 'own_creature_entering') shouldFireTemp = true;
       }
-
-      // All-Out Assault: own_creature_attacking (when you attack)
       if (tempTrigger.event === 'attacks' && data.controllerId === tempTrigger.controller) {
-        if (tempTrigger.condition === 'own_creature_attacking') {
+        if (tempTrigger.condition === 'own_creature_attacking') shouldFireTemp = true;
+      }
+      if (tempTrigger.event === 'dies' && tempTrigger.targetCardUid && data.cardUid === tempTrigger.targetCardUid) {
+        if (tempTrigger.condition === 'dies_under_your_control') {
+          if (data.ownerId === tempTrigger.controller) shouldFireTemp = true;
+        } else {
           shouldFireTemp = true;
         }
       }
-
-      // Desperate Measures: specific targeted creature dies (under your control)
-      if (tempTrigger.event === 'dies') {
-        if (tempTrigger.targetCardUid && data.cardUid === tempTrigger.targetCardUid) {
-          // If condition requires dying under your control, check ownerId
-          if (tempTrigger.condition === 'dies_under_your_control') {
-            if (data.ownerId === tempTrigger.controller) shouldFireTemp = true;
-          } else {
-            shouldFireTemp = true;
-          }
-        }
-      }
-
-      // any_creature_dies with own_creature condition (Desperate Measures: "when it dies this turn, draw 2")
       if (tempTrigger.event === 'any_creature_dies' && tempTrigger.condition === 'own_creature') {
-        if (data.ownerId === tempTrigger.controller) {
-          shouldFireTemp = true;
-        }
+        if (data.ownerId === tempTrigger.controller) shouldFireTemp = true;
       }
-
-      // cast_noncreature: "whenever you cast a noncreature spell this turn" (Rediscover the Way ch3)
       if (tempTrigger.event === 'cast_noncreature' && data.playerId === tempTrigger.controller) {
         shouldFireTemp = true;
       }
 
       if (shouldFireTemp) {
-        // Fire temp trigger effects
-        for (const effect of tempTrigger.effects) {
-          const result = _resolveSimpleEffect(state, tempTrigger.controller, effect, { cardUid: tempTrigger.sourceCard?._uid });
-          if (result) logs.push(result);
-        }
-
-        // Remove if it's a one-shot trigger (once: true) OR if it doesn't expire at end of turn
+        const pseudoTrigger = {
+          cardName: tempTrigger.sourceCard?.name || 'Temp effect',
+          cardUid: tempTrigger.sourceCard?._uid,
+          controllerId: tempTrigger.controller,
+          effects: tempTrigger.effects,
+          optional: false,
+        };
+        state._gameQueue.push({
+          type: 'trigger',
+          trigger: pseudoTrigger,
+          fireData: { cardUid: tempTrigger.sourceCard?._uid },
+        });
         if (tempTrigger.once || tempTrigger.expiresAt !== 'end_of_turn') {
           state._tempTriggers = state._tempTriggers.filter(t => t !== tempTrigger);
         }
       }
     }
 
-    // Note: temporary exile returns are handled in creatureDies/sacrificePermanent directly
-    // to avoid double-returning (returnTemporaryExiles + legacy _exiledUntilLeaves).
-
     state._triggerDepth--;
+
+    // Process the queue immediately (unless already inside processGameQueue)
+    if (!state._processingQueue) {
+      processGameQueue(state);
+    }
+
     return logs;
   }
 
@@ -1202,6 +1181,16 @@ export function _checkTriggerCondition(state, trigger, data) {
           Object.values(c._counters).some(count => count > 0));
       case 'creature_with_counter':
         return bf.some(c => CardEngine.isCreature(c) && c._counters && (c._counters['+1/+1'] || 0) > 0);
+      case 'nontoken': {
+        // Check if the entering creature is NOT a token
+        const enteringUid = data?.cardUid;
+        if (!enteringUid) return true;
+        for (const p of state.players) {
+          const c = p.zones.battlefield.get(enteringUid);
+          if (c) return !c._isToken && !c._token;
+        }
+        return true;
+      }
       case 'creature_died':
         return !!(state._creatureDiedThisTurn && state._creatureDiedThisTurn[pid]);
       case 'toughness_10+':
@@ -1279,7 +1268,7 @@ export function _checkTriggerCondition(state, trigger, data) {
         return true;
       default:
         // Unknown condition - log and allow (fail open)
-        state.log.push(`(condição desconhecida: ${cond})`);
+        state.log.push(`(unknown condition: ${cond})`);
         return true;
     }
   }
@@ -1612,6 +1601,8 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
                 if (tgt === 'own_creatures' || (tgt === 'other_dragons' && CardEngine.hasCreatureType(token, 'Dragon'))) {
                   token._powerMod = (token._powerMod || 0) + (a.power || 0);
                   token._toughnessMod = (token._toughnessMod || 0) + (a.toughness || 0);
+                  token._anthemPowerApplied = (token._anthemPowerApplied || 0) + (a.power || 0);
+                  token._anthemToughnessApplied = (token._anthemToughnessApplied || 0) + (a.toughness || 0);
                   if (a.keywords) {
                     if (!token.keywords) token.keywords = [];
                     for (const kw of a.keywords) {
@@ -1732,7 +1723,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           const c = state.players[millTarget].zones.library.drawFromTop();
           if (c) state.players[millTarget].zones.graveyard.add(c);
         }
-        return `Mill ${millAmt} (${millTarget === controllerId ? 'você' : 'oponente'}).`;
+        return `Mill ${millAmt} (${millTarget === controllerId ? 'you' : 'opponent'}).`;
       }
       case 'add_mana': {
         // Helper: resolve dynamic mana amount (e.g. "power" → creature's power)
@@ -1924,7 +1915,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             const token = CardEngine.createToken(endureTokenController, 1, 1, 'Spirit', []);
             state.players[endureTokenController].zones.battlefield.add(token);
           }
-          return `Endure ${endureAmount}: cria ${endureAmount} Spirit(s) 1/1.`;
+          return `Endure ${endureAmount}: creates ${endureAmount} Spirit(s) 1/1.`;
         }
 
         // Human: interactive choice (even if creature is in graveyard — counters go on graveyard card)
@@ -2099,16 +2090,28 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         return result;
       }
       case 'debuff_all': {
-        // Debuff_all is same as buff_all but with negative values
+        // Debuff_all: negate power/toughness values and apply as buff_all
+        let dp = effect.power, dt = effect.toughness;
+        // Resolve X values
+        if (dp === 'X' || dp === 'x') dp = state._currentXValue || 0;
+        if (dt === 'X' || dt === 'x') dt = state._currentXValue || 0;
+        if (typeof dp === 'string') dp = parseInt(dp) || 0;
+        if (typeof dt === 'string') dt = parseInt(dt) || 0;
+        // Negate to make it a debuff
+        dp = -(Math.abs(dp)); dt = -(Math.abs(dt));
         const debuffAllEffect = {
           ...effect,
-          type: 'buff_all' // Reuse buff_all logic
+          type: 'buff_all',
+          power: dp,
+          toughness: dt,
         };
-        const result = _resolveSimpleEffect(state, controllerId, debuffAllEffect, data);
-        if (result && (effect.power < 0 || effect.toughness < 0)) {
-          return result.replace(/Anthem.*/, `All enemy creatures get ${effect.power || 0}/${effect.toughness || 0}.`);
+        // Target non-dragon creatures → opponent_creatures filter but exclude dragons
+        if (effect.target === 'non_dragon_creatures') {
+          debuffAllEffect.target = 'all_creatures';
+          debuffAllEffect._excludeDragons = true;
         }
-        return result;
+        const result = _resolveSimpleEffect(state, controllerId, debuffAllEffect, data);
+        return `All non-Dragon creatures get ${dp}/${dt} until end of turn.`;
       }
       case 'surveil': {
         const lib = state.players[controllerId].zones.library;
@@ -2118,7 +2121,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           const c = lib.drawFromTop();
           if (c) cards.push(c);
         }
-        if (cards.length === 0) return 'Grimorio vazio.';
+        if (cards.length === 0) return 'Library is empty.';
         // Human: interactive surveil overlay
         if (state.players[controllerId].isHuman) {
           state._pendingScry = {
@@ -2416,7 +2419,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             const entering = state.players[controllerId].zones.battlefield.get(uid);
             if (entering && !CardEngine.hasIndestructible(entering, state)) {
               creatureDies(state, entering, controllerId);
-              return `${entering.name} e destruido pela Cerimonia de Sibsig.`;
+              return `${entering.name} is destroyed by Sibsig Ceremony.`;
             }
           }
           return null;
@@ -2496,7 +2499,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
 
         if (CardEngine.isCreature(best)) {
           const died = creatureDies(state, best, bestPid);
-          if (died) return `${best.name} e destruido.`;
+          if (died) return `${best.name} is destroyed.`;
         } else {
           // Non-creature permanent (artifact, enchantment, land)
           if (!CardEngine.canBeTargeted(best, controllerId)) return null;
@@ -2510,7 +2513,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             const result2 = _resolveSimpleEffect(state, bestPid, searchEffect, { cardUid: data.cardUid });
             if (result2) state.log.push(result2);
           }
-          return `${best.name} e destruido.`;
+          return `${best.name} is destroyed.`;
         }
         return null;
       }
@@ -2561,7 +2564,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
                 const spellItem = state.gameStack[stackIndex];
                 state.gameStack.splice(stackIndex, 1);
                 state.players[spellItem.controllerId].zones.hand.add(target);
-                results.push(`${target.name} e devolvido da pilha para a mao`);
+                results.push(`${target.name} returned from stack to hand`);
               }
             } else {
               // Handle permanent on battlefield (existing logic)
@@ -2582,7 +2585,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
               } else {
                 state.players[targetOwnerId].zones.hand.add(target);
               }
-              results.push(`${target.name} e devolvido${target._isToken ? ' (token desaparece)' : ' a mao'}`);
+              results.push(`${target.name} returned${target._isToken ? ' (token vanishes)' : ' to hand'}`);
             }
           });
 
@@ -2591,7 +2594,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             state.players[controllerId].zones.hand.add(
               state.players[controllerId].zones.library.drawFromTop()
             );
-            results.push('Compre uma carta');
+            results.push('Draw a card');
           }
 
           return results.join('. ') + '.';
@@ -2628,6 +2631,11 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         if (effect.target === 'creature_or_planeswalker' || effect.target === 'opponent_creature_or_planeswalker') {
           candidates = state.players[targetId].zones.battlefield.cards.filter(c =>
             CardEngine.isCreature(c) || CardEngine.isPlaneswalker(c)
+          );
+          candidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+        } else if (effect.target === 'opponent_artifact_or_creature') {
+          candidates = state.players[opponentId].zones.battlefield.cards.filter(c =>
+            CardEngine.isArtifact(c) || CardEngine.isCreature(c)
           );
           candidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
         } else if (effect.target === 'colored_permanent') {
@@ -2677,11 +2685,11 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           candidates.sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
         }
 
-        // Human-interactive path for optional exile effects (Ugin ETB, etc.)
-        if (candidates.length > 0 && effect.optional && controllerId === 0 && state.players[0].isHuman) {
+        // Human-interactive path for exile effects that need target selection
+        if (candidates.length > 0 && state.players[controllerId]?.isHuman) {
           const maxExile = effect.up_to_max || 1;
           state._pendingETBExile = { effect, controller: controllerId, cardUid: data?.cardUid, targetPid: targetId, maxExile };
-          state.waitingForInput = { type: 'etb_exile_target', playerId: 0, choices: candidates, maxExile };
+          state.waitingForInput = { type: 'etb_exile_target', playerId: controllerId, choices: candidates, maxExile };
           return null;
         }
 
@@ -2937,7 +2945,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         const targetOwner = state.players[0].zones.battlefield.get(target._uid) ? 0 : 1;
         const tapLogs = fireTrigger(state, 'becomes_tapped', { cardUid: target._uid, card: target, controllerId: targetOwner });
         state.log.push(...tapLogs);
-        return `${target.name} e virado.`;
+        return `${target.name} is tapped.`;
       }
       case 'discard_trigger': {
         // Opponent discards
@@ -3008,7 +3016,8 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           state._pendingOptionalDiscard = {
             controller: controllerId,
             amount: 1,
-            drawOnDiscard: true // Flag to draw after discarding
+            drawOnDiscard: true, // Flag to draw after discarding
+            sourceName: data?.card?.name || '',
           };
           state.waitingForInput = { type: 'optional_discard_choice', playerId: controllerId };
           return null; // Pause for human choice
@@ -3090,6 +3099,9 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         } else if (effect.target === 'creature_mv3') {
           // Yathan Roadwatcher: creature with mana value 3 or less
           gyCards = gy.getAll().filter(c => CardEngine.isCreature(c) && (c.cmc || 0) <= 3);
+        } else if (effect.target === 'creature_power2_or_less') {
+          // Smile at Death: creature with power 2 or less
+          gyCards = gy.getAll().filter(c => CardEngine.isCreature(c) && CardEngine.getPower(c) <= 2);
         } else if (effect.target === 'nonland_permanent_mv2') {
           // Wayspeaker Bodyguard: nonland permanent with mana value 2 or less
           gyCards = gy.getAll().filter(c => CardEngine.isPermanent(c) && !CardEngine.isLand(c) && (c.cmc || 0) <= 2);
@@ -3105,8 +3117,10 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           if (state.players[controllerId].isHuman && gyCards.length > 0) {
             const toHand = targetZone === 'hand';
             const toBf = targetZone === 'battlefield' || effect.to_battlefield;
+            const toTopLib = !!effect.to_top_library;
             state._pendingGYReturn = {
-              effect, candidates: gyCards, amount: effect.amount || 1, toHand, toTopLibrary: false, toBattlefield: toBf, controller: controllerId
+              effect, candidates: gyCards, amount: effect.amount || 1, toHand, toTopLibrary: toTopLib, toBattlefield: toTopLib ? false : toBf, controller: controllerId,
+              withCounters: effect.with_counters_on_return || null,
             };
             state.waitingForInput = { type: 'choose_gy_return', playerId: controllerId, optional: !!effect.optional };
             return '__paused__';
@@ -3249,18 +3263,28 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           creatures.sort((a, b) => CardEngine.getToughness(b) - CardEngine.getToughness(a));
           const target = creatures[0];
           target._cantBlockThisTurn = true;
-          return `${target.name} nao pode bloquear neste turno.`;
+          return `${target.name} can't block this turn.`;
         }
         return null;
       }
       case 'buff_all': {
         // Buff all own creatures until end of turn
-        const targetPid = (effect.target === 'own_creatures' || effect.target === 'all_own_creatures') ? controllerId : opponentId;
-        const creatures = state.players[targetPid].zones.battlefield.cards.filter(c => CardEngine.isCreature(c));
+        const isAllCreatures = effect.target === 'all_creatures';
+        const targetPid = isAllCreatures ? -1 : (effect.target === 'own_creatures' || effect.target === 'all_own_creatures') ? controllerId : opponentId;
+        let creatures;
+        if (isAllCreatures) {
+          creatures = state.players.flatMap((p: any) => p.zones.battlefield.cards).filter((c: any) => CardEngine.isCreature(c));
+        } else {
+          creatures = state.players[targetPid].zones.battlefield.cards.filter(c => CardEngine.isCreature(c));
+        }
+        // Exclude dragons if flagged (Exude Toxin: each non-Dragon creature)
+        if (effect._excludeDragons) {
+          creatures = creatures.filter((c: any) => !CardEngine.hasCreatureType(c, 'Dragon'));
+        }
         for (const c of creatures) {
           let bp = effect.power, bt = effect.toughness;
-          if (typeof bp === 'string') bp = bp === 'double' ? CardEngine.getPower(c) : (parseInt(bp) || 0);
-          if (typeof bt === 'string') bt = bt === 'double' ? CardEngine.getToughness(c) : (parseInt(bt) || 0);
+          if (typeof bp === 'string') bp = bp === 'double' ? CardEngine.getPower(c) : (bp === 'X' || bp === 'x') ? (state._currentXValue || 0) : (parseInt(bp) || 0);
+          if (typeof bt === 'string') bt = bt === 'double' ? CardEngine.getToughness(c) : (bt === 'X' || bt === 'x') ? (state._currentXValue || 0) : (parseInt(bt) || 0);
           bp = bp || 0; bt = bt || 0;
           c._powerMod = (c._powerMod || 0) + bp;
           c._toughnessMod = (c._toughnessMod || 0) + bt;
@@ -3302,7 +3326,21 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           CardEngine.isInstant(c) || CardEngine.isSorcery(c)
         );
         if (eligibleSpells.length > 0) {
-          // Pick highest CMC spell (most impactful)
+          // Human: show choice overlay to pick which spell gets harmonize
+          if (state.players[controllerId]?.isHuman) {
+            state._pendingGYReturn = {
+              effect: { ...effect, _grantHarmonize: true },
+              candidates: eligibleSpells,
+              amount: 1,
+              toHand: false,
+              toTopLibrary: false,
+              toBattlefield: false,
+              controller: controllerId,
+            };
+            state.waitingForInput = { type: 'choose_gy_return', playerId: controllerId };
+            return '__paused__';
+          }
+          // AI: Pick highest CMC spell (most impactful)
           eligibleSpells.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
           const spell = eligibleSpells[0];
           spell._harmonizeGranted = true;
@@ -3420,10 +3458,37 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
       case 'bounce_self': {
         const card = state.players[controllerId].zones.battlefield.get(data.cardUid);
         if (card) {
+          // If this is an aura, detach and remove effects from enchanted creature
+          if (card._attachedTo) {
+            for (const p of state.players) {
+              const target = p.zones.battlefield.get(card._attachedTo);
+              if (target) {
+                _removeAuraEffects(card, target);
+                if (target._attachments) {
+                  target._attachments = target._attachments.filter((uid: string) => uid !== card._uid);
+                }
+                break;
+              }
+            }
+            delete card._attachedTo;
+            delete card._attachedToOwner;
+          }
+          state.log.push(...fireTrigger(state, 'leaves_battlefield', { cardUid: card._uid, ownerId: controllerId, card }));
           state.players[controllerId].zones.battlefield.remove(card._uid);
           _unregisterCardTriggers(state, card._uid);
           state.players[controllerId].zones.hand.add(card);
           return `${card.name} returns to hand.`;
+        }
+        return null;
+      }
+      case 'exile_self': {
+        const card = state.players[controllerId].zones.battlefield.get(data.cardUid);
+        if (card) {
+          state.log.push(...fireTrigger(state, 'leaves_battlefield', { cardUid: card._uid, ownerId: controllerId, card }));
+          state.players[controllerId].zones.battlefield.remove(card._uid);
+          _unregisterCardTriggers(state, card._uid);
+          state.players[controllerId].zones.exile.add(card);
+          return `${card.name} is exiled.`;
         }
         return null;
       }
@@ -3511,9 +3576,9 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           remaining.forEach(c => lib.addToBottom(c));
 
           if (toPut.length > 0) {
-            return `${toPut.map(c => c.name).join(', ')} entra(m) no campo.`;
+            return `${toPut.map(c => c.name).join(', ')} enters the battlefield.`;
           } else {
-            return `Nenhum permanent válido encontrado.`;
+            return `No valid permanent found.`;
           }
         }
 
@@ -3534,8 +3599,8 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             };
             state.waitingForInput = { type: 'look_top_choice', playerId: controllerId };
             return pickDest === 'top'
-              ? `Escolha ${pickCount} carta(s) para o topo do grimorio.`
-              : `Escolha ${pickCount} carta(s) para a mao.`;
+              ? `Choose ${pickCount} card(s) for the top of the library.`
+              : `Choose ${pickCount} card(s) for your hand.`;
           } else {
             // AI or other cases: auto-pick first N cards
             const picked = looked.slice(0, pickCount);
@@ -3668,7 +3733,21 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         }
 
         if (targets.length === 0) {
-          return `Nenhum alvo válido para ${amount} de dano.`;
+          return `No valid target for ${amount} damage.`;
+        }
+
+        // Human: show distribute damage overlay
+        if (state.players[controllerId].isHuman) {
+          const enrichedTargets = targets.map(t => ({
+            type: CardEngine.isCreature(t.card) ? 'creature' : 'planeswalker',
+            uid: t.card._uid,
+            player: t.playerId,
+            name: t.card.name,
+            imageUrl: t.card.image_uris?.small || t.card.image_uris?.normal || '',
+          }));
+          state._pendingDistributeDamage = { totalDamage: amount, targets: enrichedTargets, controller: controllerId };
+          state.waitingForInput = { type: 'distribute_damage', playerId: controllerId, totalDamage: amount, targets: enrichedTargets };
+          return null; // Pause for human input
         }
 
         // AI logic: prioritize destroying high-value targets
@@ -3950,7 +4029,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         const topC = etLib.drawFromTop();
         if (topC) {
           state.players[controllerId].zones.exile.add(topC);
-          return `${topC.name} exilado do topo.`;
+          return `${topC.name} exiled from top.`;
         }
         return null;
       }
@@ -4237,7 +4316,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           const counterDesc = (effect.counters && Array.isArray(effect.counters))
             ? effect.counters.join(', ')
             : `${effect.amount === 'X' ? (state._currentXValue || 1) : (effect.amount || 1)} ${effect.counter || '+1/+1'}`;
-          return `${names.join(', ')} recebe(m) contador(es) ${counterDesc}.`;
+          return `${names.join(', ')} receives counter(s) ${counterDesc}.`;
         }
         return null;
       }
@@ -4332,7 +4411,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
               } else {
                 // Card doesn't match condition — exile it (e.g. lands exiled along the way)
                 state.players[controllerId].zones.exile.add(topCard);
-                state.log.push(`${topCard.name} exilado (revelado do topo).`);
+                state.log.push(`${topCard.name} exiled (revealed from top).`);
               }
             }
           } else {
@@ -4563,6 +4642,52 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         }
         lib.shuffle();
         return null;
+      }
+      case 'search_library_exile_cast': {
+        // Ugin ultimate: search library for any number of colorless nonland cards, exile them, cast for free
+        const slecLib = state.players[controllerId].zones.library;
+        const slecFilter = (c: any) => {
+          if (CardEngine.isLand(c)) return false;
+          const colors = CardEngine.getCardColors(c);
+          return !colors || colors.length === 0; // colorless
+        };
+        const slecCandidates = slecLib.cards.filter(slecFilter);
+
+        if (slecCandidates.length === 0) {
+          slecLib.shuffle();
+          return 'No colorless nonland cards in library.';
+        }
+
+        if (state.players[controllerId].isHuman) {
+          // Human picks which colorless nonland cards to cast (any number)
+          state._pendingSearchExileCast = {
+            candidates: slecCandidates,
+            controllerId,
+            chosen: [] as any[],
+          };
+          state.waitingForInput = { type: 'search_library_exile_cast', playerId: controllerId };
+          return null; // pause for human overlay
+        }
+
+        // AI: pick all colorless nonland cards and cast them for free
+        const slecChosen = slecCandidates.sort((a, b) => (b.cmc || 0) - (a.cmc || 0));
+        for (const card of slecChosen) {
+          const idx = slecLib.cards.indexOf(card);
+          if (idx !== -1) slecLib.cards.splice(idx, 1);
+          // Exile then mark as free-castable
+          state.players[controllerId].zones.exile.add(card);
+          if (!state._exiledPlayable) state._exiledPlayable = {};
+          state._exiledPlayable[card._uid] = {
+            card,
+            controller: controllerId,
+            turn: state.turn,
+            duration: 'end_of_turn',
+            freeCast: true,
+          };
+        }
+        slecLib.shuffle();
+        state.log.push(`Ugin ultimate: exiles ${slecChosen.map(c => c.name).join(', ')} — cast for free this turn.`);
+        return `Exiles ${slecChosen.length} colorless nonland card(s) to cast for free.`;
       }
       case 'become_copy':
       case 'clone_optional': {
@@ -4798,7 +4923,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           target._originalOwner = opponentId;
           state.players[controllerId].zones.battlefield.add(target);
           _registerCardTriggers(state, target, controllerId);
-          return `Ganha controle de ${target.name}!`;
+          return `Gains control of ${target.name}!`;
         }
         return null;
       }
@@ -4923,7 +5048,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           }
 
           const kwLabel = kwsToGrant.length > 0 ? ` com ${kwsToGrant.join(', ')}` : '';
-          return `${card.name} se torna Dragon${kwLabel}${effect.until_end_of_turn ? ' (ate o fim do turno)' : ''}.`;
+          return `${card.name} becomes a Dragon${kwLabel}${effect.until_end_of_turn ? ' (until end of turn)' : ''}.`;
         }
         return null;
       }
@@ -4973,7 +5098,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           if (!attachTarget._attachments) attachTarget._attachments = [];
           if (!attachTarget._attachments.includes(card._uid)) attachTarget._attachments.push(card._uid);
           _applyEquipmentEffects(card, attachTarget);
-          return `${card.name} equipado em ${attachTarget.name}.`;
+          return `${card.name} equipped to ${attachTarget.name}.`;
         }
         return null;
       }
@@ -5179,19 +5304,42 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
       case 'copy_last_spell': {
         // Taigam Flurry: copy the 2nd spell immediately (used with exile_with_suspend)
         const spellCard = data?.lastSpell;
-        if (!spellCard) return 'Nenhuma magia para copiar.';
-        // Get cast effects from DB
+        if (!spellCard) return 'No spell to copy.';
+
+        // For creature spells: create a token copy on the battlefield
+        if (CardEngine.isCreature(spellCard)) {
+          const tokenCopy = CardEngine.prepareForBattlefield({ ...spellCard });
+          tokenCopy._uid = `copy_${spellCard._uid}_${Date.now()}`;
+          tokenCopy._isToken = true;
+          tokenCopy._isCopy = true;
+          // Keep original name for DB lookup during _applyStaticOnETB/_registerCardTriggers
+          state.players[controllerId].zones.battlefield.add(tokenCopy);
+          _applyStaticOnETB(state, tokenCopy, controllerId);
+          _registerCardTriggers(state, tokenCopy, controllerId);
+          // Set display name AFTER ability registration so DB lookup works
+          tokenCopy.name = `${spellCard.name} (Copy)`;
+          state.log.push(...fireTrigger(state, 'creature_etb', { cardUid: tokenCopy._uid, playerId: controllerId }));
+          // Resolve ETB effects if any
+          const dbEntryCopy = (CardEffectsDB as any)[spellCard.name?.toLowerCase()];
+          const etbEffects = dbEntryCopy?.etb || [];
+          if (etbEffects.length > 0) {
+            GameStack.push(state.stack, { card: tokenCopy, controller: controllerId, targets: [], effects: etbEffects });
+            state.log.push(...GameStack.resolve(state.stack, state));
+          }
+          return `Token copy of ${spellCard.name} enters the battlefield!`;
+        }
+
+        // For instants/sorceries: push effects onto the stack for proper resolution
         const dbEntry = (CardEffectsDB as any)[spellCard.name?.toLowerCase()];
         const castEffects = dbEntry?.cast || CardEngine.getSpellEffects(spellCard);
-        if (castEffects.length === 0) return `Cópia de ${spellCard.name} resolvida (sem efeitos)!`;
-        // Resolve copy effects directly (no mana cost, no stack re-entry)
-        const copyLog: string[] = [];
-        for (const copyEffect of castEffects) {
-          if (copyEffect.type === 'modal') continue; // skip modals in copies
-          const r = _resolveSimpleEffect(state, controllerId, copyEffect, data);
-          if (r) copyLog.push(r);
+        if (castEffects.length === 0) return `Copy of ${spellCard.name} resolved (no effects)!`;
+        const filteredEffects = castEffects.filter((e: any) => e.type !== 'modal');
+        if (filteredEffects.length > 0) {
+          const copyCard = { ...spellCard, name: `${spellCard.name} (Copy)`, _isCopy: true };
+          GameStack.push(state.stack, { card: copyCard, controller: controllerId, targets: data?.targets || [], effects: filteredEffects });
+          state.log.push(...GameStack.resolve(state.stack, state));
         }
-        return `Cópia de ${spellCard.name} resolvida!${copyLog.length ? ' ' + copyLog.join('; ') : ''}`;
+        return `Copy of ${spellCard.name} resolved!`;
       }
       case 'exile_with_suspend': {
         // Suspend mechanic: exile with time counters, reduce each upkeep, cast for free when 0
@@ -5201,9 +5349,19 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         if (data && data.lastSpell) {
           const spellCard = data.lastSpell;
 
-          // Remove from graveyard first (non-permanents go to GY after resolving)
+          // Remove from wherever the card currently is:
+          // - Creatures go to battlefield after casting (not GY)
+          // - Non-permanents (instants/sorceries) go to GY after resolving
+          const bf = state.players[controllerId].zones.battlefield;
           const gy = state.players[controllerId].zones.graveyard;
-          if (gy.get && gy.get(spellCard._uid)) gy.remove(spellCard._uid);
+          if (bf.get && bf.get(spellCard._uid)) {
+            bf.remove(spellCard._uid);
+            _unregisterCardTriggers(state, spellCard._uid);
+            // Strip any ETB-applied modifications so the card suspends clean
+            delete spellCard._summoningSick;
+          } else if (gy.get && gy.get(spellCard._uid)) {
+            gy.remove(spellCard._uid);
+          }
 
           const exile = state.players[controllerId].zones.exile;
 
@@ -5225,7 +5383,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
           return `${spellCard.name} exilada com suspend ${suspendCounters} (Taigam).`;
         }
 
-        return `Efeito suspend (sem carta target).`;
+        return `Suspend effect (no target card).`;
       }
       default:
         return null;
@@ -5270,13 +5428,28 @@ export function _processSuspendedSpells(state, playerId) {
         delete exiledCard._suspendController;
 
         // Cast the spell for free (without paying mana cost)
+        // Creatures cast from suspend gain haste
+        if (CardEngine.isCreature(exiledCard)) {
+          if (!exiledCard.keywords) exiledCard.keywords = [];
+          if (!exiledCard.keywords.includes('Haste')) exiledCard.keywords.push('Haste');
+          exiledCard._suspendHaste = true; // Track for cleanup at end of turn
+        }
         logs.push(`${exiledCard.name} suspension termina - jogando de graca!`);
 
-        // Cast the spell immediately
+        // Add to _exiledPlayable so castSpell can find it (card is no longer in hand or exile)
+        if (!state._exiledPlayable) state._exiledPlayable = {};
+        state._exiledPlayable[suspended.uid] = { card: exiledCard, source: 'suspend', freeCast: true, controller: playerId };
+
+        // Cast the spell immediately using cardUid
         try {
-          castSpell(state, playerId, exiledCard, [], [], [], false);
+          castSpell(state, playerId, suspended.uid, [], false, false);
         } catch (error) {
           logs.push(`Erro ao jogar ${exiledCard.name} de suspend: ${error.message}`);
+        }
+
+        // Clean up exiled playable entry
+        if (state._exiledPlayable[suspended.uid]) {
+          delete state._exiledPlayable[suspended.uid];
         }
       }
     }
@@ -5345,14 +5518,14 @@ export function _setupHandExileChoice(state, controllerId, targetPlayerId, nonla
 
       // Double-check card still exists in hand (safety)
       if (!hand.get(cardToExile._uid)) {
-        state.log.push('Carta ja nao esta na mao.');
+        state.log.push('Card is no longer in hand.');
         if (callback) callback();
         return false;
       }
 
       hand.remove(cardToExile._uid);
       state.players[targetPlayerId].zones.exile.add(cardToExile);
-      state.log.push(`${cardToExile.name} e exilado da mao.`);
+      state.log.push(`${cardToExile.name} is exiled from hand.`);
       if (callback) callback();
       return true;
     }
@@ -5366,7 +5539,7 @@ export function _setupHandExileChoice(state, controllerId, targetPlayerId, nonla
   // Setup choice overlay for selecting card from graveyard to cast (e.g. Shiko)
 export function _setupGraveyardCastChoice(state, controllerId, cards, callback) {
     if (!Array.isArray(cards) || cards.length === 0) {
-      state.log.push('Nenhuma carta valida no cemiterio.');
+      state.log.push('No valid card in graveyard.');
       if (callback) callback(null);
       return false;
     }
@@ -5419,7 +5592,7 @@ export function resolveAttachChoice(state, shouldEquip) {
     state.waitingForInput = null;
 
     if (!shouldEquip) {
-      state.log.push(`${tokenName} não foi equipado.`);
+      state.log.push(`${tokenName} was not equipped.`);
       return;
     }
 
@@ -5442,7 +5615,7 @@ export function resolveAttachChoice(state, shouldEquip) {
       if (!attachTo._attachments) attachTo._attachments = [];
       attachTo._attachments.push(tokenToAttach._uid);
       _applyEquipmentEffects(tokenToAttach, attachTo);
-      state.log.push(`${tokenName} equipado em ${targetName}.`);
+      state.log.push(`${tokenName} equipped to ${targetName}.`);
     }
   }
 
@@ -5465,7 +5638,7 @@ export function resolveHandExileChoice(state, cardUid) {
 
     // Safety check: ensure card still exists in hand
     if (!hand.get(cardUid)) {
-      state.log.push(`Carta ${chosenCard.name} ja nao esta na mao.`);
+      state.log.push(`Card ${chosenCard.name} is no longer in hand.`);
       // Cleanup and continue anyway
       state._pendingHandExile = null;
       state.waitingForInput = null;
@@ -5609,7 +5782,7 @@ export function resolveEndureChoice(state, choice) {
         const token = CardEngine.createToken(controllerId, 1, 1, 'Spirit', []);
         state.players[controllerId].zones.battlefield.add(token);
       }
-      state.log.push(`Endure ${amount}: cria ${amount} Spirit(s) 1/1.`);
+      state.log.push(`Endure ${amount}: creates ${amount} Spirit(s) 1/1.`);
     }
 
     // Process state-based actions after casting spell
@@ -6027,6 +6200,12 @@ export function resolveDistributeCounters(state, distribution: Record<string, nu
       state.log.push(`${creature.name} receives ${count} ${counter} counter(s).`);
       fireTrigger(state, 'counter_placed', { cardUid: creature._uid, card: creature, controllerId: controller });
     }
+    // Resume remaining stack effects (e.g. grant after distribute_counters for Synchronized Charge)
+    if (state._pendingStackEffects) {
+      const pse = state._pendingStackEffects;
+      state._pendingStackEffects = null;
+      GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
+    }
     _drainPendingTriggers(state);
     _afterResolve(state);
   }
@@ -6087,11 +6266,11 @@ export function resolveETBBounceTarget(state: any, targetUids: string[]): void {
       bf.remove(perm._uid);
       _unregisterCardTriggers(state, perm._uid);
       if (perm._isToken) {
-        state.log.push(`${perm.name} token desaparece.`);
+        state.log.push(`${perm.name} token vanishes.`);
         anyTokenBounced = true;
       } else {
         state.players[ownerId].zones.hand.add(perm);
-        state.log.push(`${perm.name} devolvida à mão.`);
+        state.log.push(`${perm.name} returned to hand.`);
       }
     }
   }
@@ -6161,7 +6340,7 @@ export function resolveETBCantBlockTarget(state: any, targetUid: string | null):
       const creature = p.zones.battlefield.get(targetUid);
       if (creature && CardEngine.isCreature(creature)) {
         creature._cantBlockThisTurn = true;
-        state.log.push(`${creature.name} não pode bloquear neste turno.`);
+        state.log.push(`${creature.name} can't block this turn.`);
         break;
       }
     }
@@ -6386,7 +6565,7 @@ export function resolveETBCounterTarget(state: any, targetUid: string | null): v
     const counterAmt = (effect.amount !== undefined ? effect.amount : 1);
     if (!creature._counters) creature._counters = {};
     creature._counters[counterType] = (creature._counters[counterType] || 0) + counterAmt;
-    state.log.push(`${creature.name} recebe ${counterAmt} ${counterType} counter.`);
+    state.log.push(`${creature.name} receives ${counterAmt} ${counterType} counter.`);
     state.log.push(...fireTrigger(state, 'counter_placed', { cardUid: creature._uid, playerId: pid, counter: counterType }));
     chosenCreature = creature;
     chosenPid = pid;
@@ -6446,6 +6625,20 @@ export function resolveETBDestroyTarget(state: any, targetUids: string | string[
         state.log.push(...wardLog);
         if (!wardPaid) break; // Ward not paid — ability fizzles for this target
       }
+
+      // Damage effect (e.g. Sunset Strikemaster: 6 damage to creature with flying, Unsparing Boltcaster: 5 damage)
+      if (pending.effect?.type === 'damage') {
+        const dmgAmt = pending.effect.amount || 0;
+        perm._damage = (perm._damage || 0) + dmgAmt;
+        perm._damagedThisTurn = true;
+        state.log.push(`${perm.name} takes ${dmgAmt} damage.`);
+        if (CardEngine.isCreature(perm) && perm._damage >= CardEngine.getToughness(perm)) {
+          const ownerIdx = p._pid ?? state.players.indexOf(p);
+          creatureDies(state, perm, ownerIdx);
+        }
+        break;
+      }
+
       if (CardEngine.hasIndestructible(perm, state)) {
         state.log.push(`${perm.name} is indestructible!`);
         break;
@@ -6587,7 +6780,7 @@ export function resolveETBCloneTarget(state: any, targetUid: string | null): voi
       // Filter out become_copy to avoid infinite recursion
       const filteredEtb = copyEtb.filter((e: any) => e.type !== 'become_copy' && e.type !== 'clone_optional');
       if (filteredEtb.length > 0) {
-        state.log.push(`${srcCard.name}: habilidade de entrada no campo!`);
+        state.log.push(`${srcCard.name}: enters the battlefield ability!`);
         for (const eff of filteredEtb) {
           const result = _resolveSimpleEffect(state, pending.controller, eff, { cardUid: srcCard._uid, card: srcCard });
           if (result) state.log.push(result);
@@ -6630,13 +6823,37 @@ export function resolveLegendRuleSacrifice(state: any, sacrificeUid: string): vo
   }
 
   // Resume deferred cast flow (castSpell path — includes ETB + all triggers)
+  // MTG rule: ETB triggers go on stack when the creature enters, BEFORE SBAs (legend rule).
+  // So ETB must fire even if the new card was sacrificed by legend rule.
   if (state._deferredCastResume) {
     const dcr = state._deferredCastResume;
     delete state._deferredCastResume;
-    // Only resume if the NEW card survived (wasn't sacrificed)
     const stillOnBf = state.players[dcr.playerId].zones.battlefield.get(dcr.bfCard._uid);
+    console.log(`[LEGEND RULE] Resume deferred cast: ${dcr.bfCard?.name}, bfCard._uid=${dcr.bfCard?._uid}, sacrificed=${sacrificeUid}, stillOnBf=${!!stillOnBf}`);
     if (stillOnBf) {
+      // Card survived — full resume (ETB + triggers + anthem + register etc.)
       _resumeCastPermanent(state, dcr.bfCard, dcr.card, dcr.playerId, dcr.targets, dcr.isResuming, dcr.isEvoke, dcr.isAdventure, dcr.playerLabel);
+    } else {
+      // Card was sacrificed by legend rule, but ETB still fires (MTG rules 603.6a)
+      // Only fire ETB effects + enters triggers, skip static/anthem/register (card is dead)
+      const etbEffects = CardEngine.getETBEffects(dcr.card);
+      if (etbEffects.length > 0) {
+        console.log(`[LEGEND RULE ETB] ${dcr.card.name} was sacrificed but ETB still fires: ${etbEffects.map((e:any) => e.type).join(', ')}`);
+        state.log.push(`${dcr.card.name}: ability triggers! (entered before legend rule)`);
+        dcr.bfCard._wasCast = dcr.card._wasCast || false;
+        GameStack.push(state.stack, { card: dcr.bfCard, controller: dcr.playerId, targets: dcr.targets, effects: etbEffects });
+        const stackLog = GameStack.resolve(state.stack, state);
+        state.log.push(...stackLog);
+      }
+      // Fire enters_battlefield triggers (other creatures care about something entering)
+      if (CardEngine.isCreature(dcr.bfCard)) {
+        state.log.push(...fireTrigger(state, 'enters_or_attacks', { cardUid: dcr.bfCard._uid, entering: true, playerId: dcr.playerId }));
+        if ((dcr.bfCard.type_line || '').toLowerCase().includes('dragon')) {
+          state.log.push(...fireTrigger(state, 'dragon_enters', { cardUid: dcr.bfCard._uid, playerId: dcr.playerId }));
+        }
+      }
+      state.log.push(...fireTrigger(state, 'creature_enters', { cardUid: dcr.bfCard._uid, playerId: dcr.playerId, card: dcr.bfCard }));
+      // Note: leaves_battlefield + creature_dies already fired above when card was sacrificed
     }
     // If waitingForInput was set by the resumed ETB, don't call _afterResolve
     if (state.waitingForInput) return;
@@ -6673,7 +6890,8 @@ export function resolveDistributeDamage(state: any, distribution: Record<string,
       if (creature) {
         if (vfxPlay) vfxPlay('damage', creature._uid);
         creature._damage += dmg;
-        if (creature._damage >= getToughness(creature)) {
+        creature._damagedThisTurn = true;
+        if (creature._damage >= CardEngine.getToughness(creature)) {
           creatureDies(state, creature, target.player);
           log.push(`${creature.name} takes ${dmg} damage and dies.`);
         } else {
@@ -6681,6 +6899,8 @@ export function resolveDistributeDamage(state: any, distribution: Record<string,
         }
       }
     } else if (target.type === 'player') {
+      if (!state._damageDealtThisTurn) state._damageDealtThisTurn = [0, 0];
+      state._damageDealtThisTurn[target.player] = (state._damageDealtThisTurn[target.player] || 0) + dmg;
       state.players[target.player].life -= dmg;
       if (vfxPlay) vfxPlay('playerDamage', 'p' + target.player);
       log.push(`${dmg} damage to ${target.player === 0 ? 'you' : 'opponent'}.`);
@@ -6752,15 +6972,18 @@ export function resolveScry(state, choices, topOrder?) {
     // These effect types target battlefield permanents and need a human click
     const battlefieldEffects = new Set([
       'buff', 'debuff', 'destroy', 'exile', 'damage', 'damage_divided', 'tap', 'untap', 'bounce',
-      'bounce_to_library', 'fight', 'counter_target', 'gain_control', 'attach', 'stun',
+      'bounce_to_library', 'fight', 'counter_target', 'gain_control', 'attach', 'stun', 'power_damage',
     ]);
     const interactiveTargets = [
-      'creature', 'own_creature', 'own_nonlegendary_creature', 'opponent_creature', 'creature_with_flying',
+      'creature', 'own_creature', 'own_nonlegendary_creature', 'opponent_creature', 'creature_with_flying', 'creature_without_flying',
       'creature_or_planeswalker', 'opponent_creature_or_planeswalker',
       'artifact', 'enchantment', 'permanent', 'nonland_permanent', 'any',
       // Extended target types used in modal modes
       'creature_power4+', 'opponent_artifact_or_enchantment', 'opponent_artifact_or_creature', 'artifact_or_enchantment',
       'noncreature_artifact', 'creature_or_artifact', 'creature_or_enchantment', 'opponent_nonland',
+      // Additional target types for full coverage
+      'attacking_creature', 'attacking_or_blocking_creature', 'creature_power_3_or_less', 'creature_power2_or_less',
+      'creature_mv3', 'nonland_permanent_mv2', 'other_own_creature', 'dragon', 'opponent_creature_mv3+',
     ];
     for (const eff of effects) {
       if (battlefieldEffects.has(eff.type) && eff.target && interactiveTargets.includes(eff.target)) {
@@ -6791,74 +7014,18 @@ export function resolveTriggerOrder(state: any, orderedIndices: number[]): void 
     if (!shownIdxSet.has(i)) orderedQueue.push(queue[i]);
   }
 
-  // Process the triggers in the chosen order (same logic as fireTrigger second pass)
-  const logs: string[] = [];
-  for (let ri = 0; ri < orderedQueue.length; ri++) {
-    const { trigger, fireData } = orderedQueue[ri];
-    logs.push(`Habilidade de ${trigger.cardName} dispara!`);
-
-    const effectsWithCosts = trigger.effects.filter((e: any) => e.cost);
-    const isHumanPlayer = state.players[trigger.controllerId]?.isHuman;
-
-    // Optional trigger for human → confirm_optional overlay
-    if (trigger.optional && isHumanPlayer) {
-      const remaining = orderedQueue.slice(ri + 1);
-      if (remaining.length > 0) {
-        if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-        state._pendingTriggersToResolve.push(...remaining);
-      }
-      state._pendingOptionalTrigger = { trigger, fireData };
-      const effectDesc = (trigger.effects || []).map((e: any) => {
-        if (e.type === 'search_library') return 'Search your library';
-        if (e.type === 'draw') return `Draw ${e.amount || 1}`;
-        if (e.type === 'damage') return `Deal ${e.amount} damage`;
-        if (e.type === 'gainLife') return `Gain ${e.amount} life`;
-        if (e.type === 'create_token') return `Create token`;
-        return e.type;
-      }).join(', ');
-      state.waitingForInput = {
-        type: 'confirm_optional',
-        message: `${trigger.cardName}: ${effectDesc}?`,
-        playerId: trigger.controllerId,
-      };
-      state.log.push(...logs);
-      return;
-    }
-
-    if (effectsWithCosts.length > 0 && isHumanPlayer) {
-      // Queue remaining for after cost resolves
-      const remaining = orderedQueue.slice(ri + 1);
-      if (remaining.length > 0) {
-        if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-        state._pendingTriggersToResolve.push(...remaining);
-      }
-      state.waitingForInput = { type: 'trigger_cost', playerId: trigger.controllerId, trigger, data: fireData };
-      state.log.push(...logs);
-      return;
-    }
-
-    // Windcrag Siege doublefire: resolve effects twice
-    const fireCount = (orderedQueue[ri] as any)?._doublefire ? 2 : 1;
-    const wiBefore = state.waitingForInput;
-    for (let fc = 0; fc < fireCount; fc++) {
-      if (fc > 0) logs.push(`Habilidade de ${trigger.cardName} dispara novamente! (Windcrag Siege)`);
-      for (const effect of trigger.effects) {
-        const result = _resolveSimpleEffect(state, trigger.controllerId, effect, fireData);
-        if (result) logs.push(result);
-      }
-    }
-
-    if (state.waitingForInput && state.waitingForInput !== wiBefore) {
-      const remaining = orderedQueue.slice(ri + 1);
-      if (remaining.length > 0) {
-        if (!state._pendingTriggersToResolve) state._pendingTriggersToResolve = [];
-        state._pendingTriggersToResolve.push(...remaining);
-      }
-      state.log.push(...logs);
-      return;
-    }
+  // Push ordered triggers into _gameQueue for centralized resolution
+  for (const entry of orderedQueue) {
+    state._gameQueue.push({
+      type: 'trigger',
+      trigger: entry.trigger,
+      fireData: entry.fireData,
+      _doublefire: (entry as any)?._doublefire || false,
+    });
   }
-  state.log.push(...logs);
+
+  // Process the queue
+  processGameQueue(state);
 }
 
 export function cancelModal(state) {
@@ -6875,7 +7042,7 @@ export function cancelModal(state) {
         // Card was deferred — never went to GY, just return to hand
         state.players[controller].zones.hand.add(state._pendingSpellToGY.card);
         state._pendingSpellToGY = null;
-        state.log.push(`${card.name} volta para a mão (cancelado).`);
+        state.log.push(`${card.name} returns to hand (cancelled).`);
       } else {
         // Fallback: card already in GY (old flow)
         const gy = state.players[controller].zones.graveyard;
@@ -6883,7 +7050,7 @@ export function cancelModal(state) {
         if (gyCard) {
           gy.remove(card._uid);
           state.players[controller].zones.hand.add(gyCard);
-          state.log.push(`${card.name} volta para a mão (cancelado).`);
+          state.log.push(`${card.name} returns to hand (cancelled).`);
         }
       }
     }
@@ -6964,6 +7131,8 @@ export function resolveModal(state, modeIndices) {
                 if (c._uid === bfCard._uid || !CardEngine.isCreature(c)) continue;
                 c._powerMod = (c._powerMod || 0) + (s.power || 0);
                 c._toughnessMod = (c._toughnessMod || 0) + (s.toughness || 0);
+                c._anthemPowerApplied = (c._anthemPowerApplied || 0) + (s.power || 0);
+                c._anthemToughnessApplied = (c._anthemToughnessApplied || 0) + (s.toughness || 0);
                 if (s.keywords) {
                   if (!c.keywords) c.keywords = [];
                   for (const kw of s.keywords) {
@@ -6979,7 +7148,7 @@ export function resolveModal(state, modeIndices) {
     }
 
     const modeLabels = chosen.filter(m => m?.label).map(m => m.label);
-    state.log.push(`Modo(s) escolhido(s): ${modeLabels.length > 0 ? modeLabels.join(', ') : modeEffects.map(e => e.type).join(', ')}.`);
+    state.log.push(`Mode(s) chosen: ${modeLabels.length > 0 ? modeLabels.join(', ') : modeEffects.map(e => e.type).join(', ')}.`);
     state._pendingModal = null;
 
     // Siege enchantments (chooseOnETB): handle static and triggered mode effects directly.
@@ -7093,14 +7262,14 @@ export function resolvePostModalTarget(state, target) {
       if (state._pendingSpellToGY && state._pendingSpellToGY.card?._uid === pend.card._uid) {
         state.players[pend.controller].zones.hand.add(state._pendingSpellToGY.card);
         state._pendingSpellToGY = null;
-        state.log.push(`${pend.card.name} volta para a mão (cancelado).`);
+        state.log.push(`${pend.card.name} returns to hand (cancelled).`);
       } else {
         const gy = state.players[pend.controller].zones.graveyard;
         const gyCard = gy.get(pend.card._uid);
         if (gyCard) {
           gy.remove(pend.card._uid);
           state.players[pend.controller].zones.hand.add(gyCard);
-          state.log.push(`${pend.card.name} volta para a mão (cancelado).`);
+          state.log.push(`${pend.card.name} returns to hand (cancelled).`);
         }
       }
       // Restore mana pool and tapped state from snapshot (exact undo)
@@ -7113,7 +7282,7 @@ export function resolvePostModalTarget(state, target) {
             land._tapped = pend.savedTapped?.includes(land._uid) || false;
           }
         }
-        state.log.push(`Mana restaurada ao estado anterior (cancelado).`);
+        state.log.push(`Mana restored to previous state (cancelled).`);
       }
       state.spellsCastThisTurn = Math.max(0, (state.spellsCastThisTurn || 0) - 1);
       if (state._spellsThisTurn && state._spellsThisTurn[pend.controller] > 0) {
@@ -7678,7 +7847,7 @@ export function _processPhase(state) {
                   for (const pw of oppPWs) {
                     if (((pw as any)._loyalty || 0) <= power) {
                       (attackEntry as any).attackTarget = pw._uid;
-                      state.log.push(`IA redireciona ${attCard.name} para atacar ${pw.name}.`);
+                      state.log.push(`AI redirects ${attCard.name} to attack ${pw.name}.`);
                       break;
                     }
                   }
@@ -7855,6 +8024,10 @@ export function _processPhase(state) {
       }
 
       case 'combat_end':
+        // Clear once_per_attack trigger flags (War Effort etc.)
+        for (const key of Object.keys(state)) {
+          if (key.startsWith('_attackTriggerFired_')) delete state[key];
+        }
         // Sacrifice attacking creatures with Decayed keyword/counter
         // (uses _decayedAttackerUids saved before combat damage, since resetCombatState clears attackers[])
         {
@@ -7865,7 +8038,7 @@ export function _processPhase(state) {
             const atkCard = atkBf.get(info.uid);
             if (atkCard) {
               sacrifice(state, info.pid, atkCard._uid);
-              state.log.push(`${atkCard.name} é sacrificada (Decayed).`);
+              state.log.push(`${atkCard.name} is sacrificed (Decayed).`);
             }
           }
         }
@@ -8052,7 +8225,7 @@ export function playLand(state, playerId, cardUid) {
     // Check if land should enter tapped based on static abilities
     if (bfCard._entersTapped) {
       bfCard._tapped = true;
-      state.log.push(`${card.name} entra virado.`);
+      state.log.push(`${card.name} enters tapped.`);
     } else if (bfCard._entersTappedConditional) {
       // For conditional tapped lands: check if condition is met
       let shouldBeTapped = true;
@@ -8073,10 +8246,10 @@ export function playLand(state, playerId, cardUid) {
       }
       if (shouldBeTapped) {
         bfCard._tapped = true;
-        state.log.push(`${card.name} entra virado.`);
+        state.log.push(`${card.name} enters tapped.`);
       } else {
         bfCard._tapped = false; // Override any tap set by oracle text path
-        state.log.push(`${card.name} entra desvirado (você controla ${unlessTypes.join(' ou ')}).`);
+        state.log.push(`${card.name} enters untapped (you control ${unlessTypes.join(' or ')}).`);
       }
     }
 
@@ -8193,11 +8366,11 @@ export function _checkHideawayCondition(state, playerId, landCard) {
   // Activate hideaway: play the exiled card for free
 export function activateHideaway(state, playerId, landUid) {
     const land = state.players[playerId].zones.battlefield.get(landUid);
-    if (!land || !land._hideaway || !land._hideawayCard) return { success: false, msg: 'Sem carta escondida.' };
-    if (land._tapped) return { success: false, msg: 'Terreno ja virado.' };
+    if (!land || !land._hideaway || !land._hideawayCard) return { success: false, msg: 'No hidden card.' };
+    if (land._tapped) return { success: false, msg: 'Land already tapped.' };
 
     if (!_checkHideawayCondition(state, playerId, land)) {
-      return { success: false, msg: 'Condicao do hideaway nao atendida.' };
+      return { success: false, msg: 'Hideaway condition not met.' };
     }
 
     // Tap the land
@@ -8432,6 +8605,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       for (const bfCard of bf.cards) {
         if (!bfCard._costReduction) continue;
         const cr = bfCard._costReduction;
+        console.log(`[COST-RED] ${bfCard.name} has _costReduction:`, JSON.stringify(cr), `applying to ${card.name}, useCmc before=${useCmc}`);
         if (cr.target === 'dragon_spells' && CardEngine.hasCreatureType(card, 'Dragon')) {
           if (cr.reduction === 'free') { useCmc = 0; useCost = ''; }
           else { useCmc = Math.max(0, useCmc - (cr.reduction || 0)); }
@@ -8492,8 +8666,15 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
     // When resuming from stack priority, all validation/payment was already done
     const isResuming = !!state._resumingFromStackPriority;
 
-    // Check if can cast (instant/flash anytime, others only main phase) - skip if resuming
-    if (!isResuming) {
+    // Check if card is being cast for free from exile (suspend, etc.) — needed before phase check
+    let isFreeFromExile = false;
+    if (fromExile && state._exiledPlayable && state._exiledPlayable[cardUid]) {
+      const exileEntryEarly = state._exiledPlayable[cardUid];
+      isFreeFromExile = exileEntryEarly.freeCast || false;
+    }
+
+    // Check if can cast (instant/flash anytime, others only main phase) - skip if resuming or free from exile (suspend)
+    if (!isResuming && !isFreeFromExile) {
       if (isAdventure) {
         const advIsInstant = CardEngine.isAdventureInstant(card);
         if (!advIsInstant) {
@@ -8528,7 +8709,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
             useCmc: useCmc,
             fromExile: fromExile
           };
-          return { success: true, waitForChoice: true, msg: 'Escolha qual lendária manter.' };
+          return { success: true, waitForChoice: true, msg: 'Choose which legendary to keep.' };
         } else {
           // AI player - automatically proceed with cast (will remove existing duplicates after)
           // No special handling needed here, will be handled when card enters battlefield
@@ -8536,12 +8717,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       }
     }
 
-    // Check if card is being cast for free from exile
-    let isFreeFromExile = false;
-    if (fromExile && state._exiledPlayable && state._exiledPlayable[cardUid]) {
-      const exileEntry = state._exiledPlayable[cardUid];
-      isFreeFromExile = exileEntry.freeCast || false;
-    }
+    // isFreeFromExile already computed above (before phase check)
 
     // Handle additional costs (sacrifice as part of casting) — before mana payment.
     // For human players, pause and show overlay. For AI, auto-resolve.
@@ -8558,7 +8734,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
         else sacTargets = bfCards;
 
         if (sacTargets.length === 0) {
-          return { success: false, msg: `Nao ha ${sacCost.target || 'permanente'} para sacrificar.` };
+          return { success: false, msg: `No ${sacCost.target || 'permanent'} to sacrifice.` };
         }
 
         if (state.players[playerId].isHuman) {
@@ -8614,7 +8790,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
               const gyCard = gyNonLands[i];
               gy.remove(gyCard._uid);
               state.players[playerId].zones.exile.add(gyCard);
-              state.log.push(`Delve: ${gyCard.name} exilado para pagar {1}.`);
+              state.log.push(`Delve: ${gyCard.name} exiled to pay {1}.`);
               useCmc = Math.max(0, useCmc - 1);
             }
           }
@@ -8682,6 +8858,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       // _preCastManaSnapshot is set in useGameEngine BEFORE auto-tap for full undo on cancel
 
       // Check mana - verify pool has enough (after auto-tap should have added mana)
+      console.log(`[CAST-MANA] ${card.name}: useCost=${useCost}, useCmc=${useCmc}, pool=`, JSON.stringify(state.manaPool[playerId]), `poolTotal=${ManaSystem.poolTotal(state.manaPool[playerId])}, canPay=${ManaSystem.canPay(state.manaPool[playerId], useCost, useCmc)}`);
       if (!ManaSystem.canPay(state.manaPool[playerId], useCost, useCmc)) {
         return { success: false, msg: 'Not enough mana.' };
       }
@@ -8692,7 +8869,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       const _parsedForHybridCheck = ManaSystem.parseCost(useCost);
       if (!_parsedForHybridCheck.hybrids || _parsedForHybridCheck.hybrids.length === 0) {
         const poolTotal = ManaSystem.poolTotal(state.manaPool[playerId]);
-        const requiredTotal = useCmc || _parsedForHybridCheck.total || 0;
+        const requiredTotal = (useCmc !== undefined && useCmc >= 0) ? useCmc : (_parsedForHybridCheck.total || 0);
         if (poolTotal < requiredTotal) {
           return { success: false, msg: 'Not enough mana.' };
         }
@@ -8788,10 +8965,10 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
           const extraCost = `{${beholdCost.alternateCost}}`;
           autoTapForSpell(state, playerId, extraCost, beholdCost.alternateCost);
           state.manaPool[playerId] = ManaSystem.payMana(state.manaPool[playerId], extraCost, beholdCost.alternateCost);
-          state.log.push(`${playerId === 0 ? 'Voce paga' : 'Oponente paga'} ${extraCost} (sem dragao para revelar).`);
+          state.log.push(`${playerId === 0 ? 'You pay' : 'Opponent pays'} ${extraCost} (no dragon to reveal).`);
         } else if (beholdCost.optional) {
           // No behold target, no alternate cost - just skip behold
-          state.log.push('Sem dragao na mao para revelar (behold ignorado).');
+          state.log.push('No dragon in hand to reveal (behold ignored).');
         }
       }
     }
@@ -8852,7 +9029,13 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       const opponentId = playerId === 0 ? 1 : 0;
       const isOpponentHuman = state.players[opponentId].isHuman;
 
-      if (isOpponentHuman) {
+      // Also give caster priority for non-permanent spells (instants/sorceries)
+      // so they can respond to their own spells with more instants
+      const isCasterHuman = state.players[playerId].isHuman;
+      const givesCasterPriority = isCasterHuman && !CardEngine.isPermanent(card);
+
+      if (isOpponentHuman || givesCasterPriority) {
+        const priorityPlayerId = isOpponentHuman ? opponentId : playerId;
         // Temporarily push to stack so getPlayableCards detects counterspells as playable
         const effects = CardEngine.isPermanent(card) ? [] : CardEngine.getSpellEffects(card);
         GameStack.push(state.stack, { card, controller: playerId, targets, effects });
@@ -8862,10 +9045,12 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
         // Without this, sorceries count as "playable" and stack_priority fires
         // even when the human has zero actual responses, causing a stuck stack.
         const savedWfi = state.waitingForInput;
-        state.waitingForInput = { type: 'stack_priority', playerId: opponentId, spellCaster: playerId };
-        const playableCardsCount = getPlayableCards(state, opponentId).length;
-        const hasAbilities = hasAffordableAbilities(state, opponentId);
+        state.waitingForInput = { type: 'stack_priority', playerId: priorityPlayerId, spellCaster: playerId };
+        const playableCards = getPlayableCards(state, priorityPlayerId);
+        const playableCardsCount = playableCards.length;
+        const hasAbilities = hasAffordableAbilities(state, priorityPlayerId);
         state.waitingForInput = savedWfi;
+        console.log(`[STACK-PRIORITY] spell=${card.name}, caster=${playerId}, priorityPlayer=${priorityPlayerId}, playable=${playableCardsCount} [${playableCards.map(c=>c.name).join(', ')}], abilities=${hasAbilities}, isOpponentHuman=${isOpponentHuman}, givesCasterPriority=${givesCasterPriority}`);
 
         if (playableCardsCount > 0 || hasAbilities) {
           // Human CAN respond - keep on stack, pause for response
@@ -8876,7 +9061,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
             isPermanent: CardEngine.isPermanent(card),
             playerLabel
           };
-          state.waitingForInput = { type: 'stack_priority', playerId: opponentId, spellCaster: playerId };
+          state.waitingForInput = { type: 'stack_priority', playerId: priorityPlayerId, spellCaster: playerId };
 
           // Fire cast triggers now (they happen on cast, not on resolve)
           if (state._spellsThisTurn[playerId] === 2) {
@@ -8991,7 +9176,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
         for (const pc of card._pendingETBCounters) {
           bfCard._counters[pc.counter] = (bfCard._counters[pc.counter] || 0) + pc.amount;
           if (pc.counter === 'finality') bfCard._finalityCounter = true;
-          state.log.push(`${card.name} entra com ${pc.amount} ${pc.counter} counter(s).`);
+          state.log.push(`${card.name} enters with ${pc.amount} ${pc.counter} counter(s).`);
         }
         delete card._pendingETBCounters;
         delete bfCard._pendingETBCounters;
@@ -9045,6 +9230,26 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       // Push to stack and resolve immediately (we only reach here if opponent is AI or no responses)
       GameStack.push(state.stack, { card, controller: playerId, targets, effects });
 
+      // Protection check: filter out targets that have protection from this spell's colors
+      if (targets && targets.length > 0) {
+        const spellColors = CardEngine.getCardColors(card);
+        console.log(`[PROTECTION-ENGINE] Spell=${card.name}, mana_cost=${card.mana_cost}, colors=${JSON.stringify(spellColors)}, targets=${targets.length}`);
+        for (let i = targets.length - 1; i >= 0; i--) {
+          const tgt = targets[i];
+          if (tgt.player !== undefined && tgt.uid) {
+            const tgtCard = state.players[tgt.player]?.zones.battlefield.get(tgt.uid);
+            if (tgtCard) {
+              const protColors = CardEngine.getProtectionColors(tgtCard);
+              console.log(`[PROTECTION-ENGINE] Target=${tgtCard.name}, keywords=${JSON.stringify(tgtCard.keywords)}, protColors=${JSON.stringify(protColors)}`);
+              if (protColors.length > 0 && spellColors.some(c => protColors.includes(c))) {
+                state.log.push(`${tgtCard.name} has protection from ${spellColors.join('/')} — can't be targeted!`);
+                targets.splice(i, 1);
+              }
+            }
+          }
+        }
+      }
+
       // Fire creature_targeted_by_opponent for any player whose creatures are being targeted
       if (targets && targets.length > 0) {
         const targetedPlayerIds = new Set<number>();
@@ -9078,7 +9283,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       // Cards stolen from opponent (Kotis exile) have _ownerId set to original owner
       const gyDestPlayer = card._ownerId !== undefined ? card._ownerId : playerId;
       // If modal/target selection is pending, defer GY move until after resolution
-      if (state.waitingForInput && (state.waitingForInput.type === 'modal_choice' || state.waitingForInput.type === 'post_modal_target')) {
+      if (state.waitingForInput && (state.waitingForInput.type === 'modal_choice' || state.waitingForInput.type === 'post_modal_target' || state.waitingForInput.type === 'distribute_damage')) {
         state._pendingSpellToGY = { card, playerId: gyDestPlayer };
       } else {
         state.players[gyDestPlayer].zones.graveyard.add(card);
@@ -9133,6 +9338,11 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
     // Clear the ETB-pause flag so it doesn't persist
     delete state._castTriggersAlreadyFired;
 
+    // Final anthem equalization after all triggers (fixes storm P/T discrepancies)
+    if (CardEngine.isCreature(card)) {
+      _recomputeAllAnthems(state, playerId);
+    }
+
     _checkWinner(state);
     return { success: true };
   }
@@ -9171,6 +9381,8 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
             if (anthemMatches) {
               bfCard._powerMod = (bfCard._powerMod || 0) + (a.power || 0);
               bfCard._toughnessMod = (bfCard._toughnessMod || 0) + (a.toughness || 0);
+              bfCard._anthemPowerApplied = (bfCard._anthemPowerApplied || 0) + (a.power || 0);
+              bfCard._anthemToughnessApplied = (bfCard._anthemToughnessApplied || 0) + (a.toughness || 0);
               if (a.keywords && a.keywords.length > 0) {
                 if (!bfCard.keywords) bfCard.keywords = [];
                 for (const kw of a.keywords) {
@@ -9230,15 +9442,16 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
     const etbEffects = CardEngine.getETBEffects(card);
     if (etbEffects.length > 0) {
       console.log(`[ETB] ${card.name}: ${etbEffects.length} effects: ${etbEffects.map((e:any) => e.type).join(', ')}`);
-      state.log.push(`${card.name}: habilidade de entrada no campo!`);
+      state.log.push(`${card.name}: enters the battlefield ability!`);
       bfCard._wasCast = card._wasCast || false;
       GameStack.push(state.stack, { card: bfCard, controller: playerId, targets, effects: etbEffects });
       const stackLog = GameStack.resolve(state.stack, state);
       state.log.push(...stackLog);
 
-      // If ETB set waitingForInput, pause here
-      const _etbPauseTypes = ['search_library', 'search_library_choice', 'confirm_optional', 'etb_bounce_target', 'etb_destroy_target', 'tap_creature_cost', 'etb_tap_target', 'choose_gy_return', 'etb_exile_target', 'etb_clone_target', 'etb_cant_block_target', 'buff_choice', 'multi_buff_choice', 'etb_any_damage_target', 'graveyard_card_choice', 'graveyard_choice', 'distribute_counters', 'ramp_choice', 'mill_land_choice', 'scry', 'surveil', 'etb_counter_target', 'modal_choice', 'post_modal_target', 'exile_reveal', 'spirit_dragons_choose', 'reveal_pick', 'search_library_to_gy', 'optional_mill', 'ward_choice', 'etb_remove_counters_target', 'legend_rule_sacrifice', 'optional_discard_choice', 'botanist_look', 'graveyard_cast_choice', 'opponent_hand_exile', 'look_top'];
-      if (state.waitingForInput && _etbPauseTypes.includes(state.waitingForInput.type)) {
+      // If ETB set waitingForInput (any type), pause here so the overlay can show.
+      // Previously used a whitelist but that caused bugs when new overlay types were added
+      // without being included (e.g. endure_choice). Now we pause on ANY waitingForInput.
+      if (state.waitingForInput) {
         // Fire cast triggers NOW before pausing
         if (!isResuming) {
           if (state._spellsThisTurn[playerId] === 2) {
@@ -9252,6 +9465,11 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
           }
           if ((state._spellsThisTurn[playerId] || 0) >= 2) {
             state.log.push(...fireTrigger(state, 'cast_with_another_spell', castData));
+          }
+          // creature_enters_cast: fire for creatures with interactive ETBs (Sibsig Ceremony etc.)
+          if (CardEngine.isCreature(card) && CardEngine.isPermanent(card)) {
+            state._lastCreatureEntersCastUid = card._uid;
+            state.log.push(...fireTrigger(state, 'creature_enters_cast', castData));
           }
           state._castTriggersAlreadyFired = true;
         }
@@ -9307,7 +9525,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
     if (state._pendingSpellCopy && state._pendingSpellCopy[playerId] && !bfCard._spellCopy
         && state._pendingSpellCopy[playerId] !== bfCard._uid) {
       delete state._pendingSpellCopy[playerId];
-      state.log.push(`Cópia de ${card.name} como token entra em campo!`);
+      state.log.push(`Copy of ${card.name} as token enters the battlefield!`);
       const tokenCopy = CardEngine.prepareForBattlefield({ ...card });
       tokenCopy._uid = `${bfCard._uid}_spellcopy`;
       tokenCopy._token = true;
@@ -9330,28 +9548,16 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       if (cardHasStorm) {
         const stormCopies = (state._spellsThisTurn[playerId] || 0) - 1;
         if (stormCopies > 0) {
-          state.log.push(`Storm! ${stormCopies} cópia(s) de ${card.name} entram em jogo!`);
+          state.log.push(`Storm! ${stormCopies} copy/copies of ${card.name} enter the battlefield!`);
           for (let sc = 0; sc < stormCopies; sc++) {
-            const stormCopy = CardEngine.prepareForBattlefield({ ...card });
+            const stormCopy = CardEngine.prepareForBattlefield({ ...card, _anthem: undefined, _grantAllKeyword: undefined });
             stormCopy._uid = `${bfCard._uid}_storm${sc}`;
             stormCopy._stormCopy = true;
+            stormCopy._etbFired = true; // skip onAdd hook — we handle ETB manually below
             state.players[playerId].zones.battlefield.add(stormCopy);
             _applyStaticOnETB(state, stormCopy, playerId);
             _registerCardTriggers(state, stormCopy, playerId);
-            if (CardEngine.isCreature(stormCopy)) {
-              for (const perm of state.players[playerId].zones.battlefield.cards) {
-                if (perm._uid === stormCopy._uid) continue;
-                if (perm._anthem) {
-                  for (const a of perm._anthem) {
-                    const tgt = a.target || 'own_creatures';
-                    if (tgt === 'own_creatures' || (tgt === 'other_dragons' && CardEngine.hasCreatureType(stormCopy, 'Dragon'))) {
-                      stormCopy._powerMod = (stormCopy._powerMod || 0) + (a.power || 0);
-                      stormCopy._toughnessMod = (stormCopy._toughnessMod || 0) + (a.toughness || 0);
-                    }
-                  }
-                }
-              }
-            }
+            // Note: anthem buffs for storm copies are handled by _recomputeAllAnthems after the loop
             if (CardEngine.hasCreatureType(stormCopy, 'Dragon')) {
               const artifacts = state.players[playerId].zones.battlefield.cards.filter((c: any) => c._dragonETBCounter);
               if (artifacts.length > 0) {
@@ -9362,6 +9568,16 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
             }
             state.log.push(...fireTrigger(state, 'creature_etb', { cardUid: stormCopy._uid, playerId }));
           }
+          // Recompute all anthem buffs so storm copies + original have equal P/T
+          console.log(`[STORM] Before recompute:`, state.players[playerId].zones.battlefield.cards
+            .filter((c: any) => CardEngine.hasCreatureType(c, 'Dragon'))
+            .map((c: any) => `${c.name}(${c._uid}): pMod=${c._powerMod}, tMod=${c._toughnessMod}, anthemApplied=${c._anthemPowerApplied}`)
+          );
+          _recomputeAllAnthems(state, playerId);
+          console.log(`[STORM] After recompute:`, state.players[playerId].zones.battlefield.cards
+            .filter((c: any) => CardEngine.hasCreatureType(c, 'Dragon'))
+            .map((c: any) => `${c.name}(${c._uid}): pMod=${c._powerMod}, tMod=${c._toughnessMod}, anthemApplied=${c._anthemPowerApplied}`)
+          );
           _updateDynamicPower(state, playerId);
           _updateVividCreatures(state, playerId);
         }
@@ -9400,6 +9616,11 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       }
     }
     delete state._castTriggersAlreadyFired;
+
+    // Final anthem equalization after all triggers (fixes storm P/T discrepancies)
+    if (CardEngine.isCreature(card)) {
+      _recomputeAllAnthems(state, playerId);
+    }
 
     _checkWinner(state);
     return { success: true };
@@ -9512,7 +9733,7 @@ export function _smartActivateManaAbilities(state, playerId, manaCostNeeded, cmc
             const color = landColors[0] || 'C';
             land._tapped = true;
             state.manaPool[playerId][color] = (state.manaPool[playerId][color] || 0) + 1;
-            state.log.push(`${land.name} tapped → {${color}} (para filtro de mana)`);
+            state.log.push(`${land.name} tapped → {${color}} (for mana filter)`);
             if (playerId === 0 && typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('mana:float', { detail: { uid: land._uid, color } }));
             }
@@ -9617,7 +9838,7 @@ export function _smartActivateManaAbilities(state, playerId, manaCostNeeded, cmc
       // Tap the creature ONLY if ability requires it
       if (ability.cost && ability.cost.tap) {
         creature._tapped = true;
-        state.log.push(`${creature.name} foi virado para gerar mana.`);
+        state.log.push(`${creature.name} was tapped to generate mana.`);
       }
       // Sacrifice the permanent if ability requires it (e.g. Treasure tokens: {T}, Sacrifice)
       if (ability.cost && ability.cost.sacrifice) {
@@ -9634,7 +9855,7 @@ export function _smartActivateManaAbilities(state, playerId, manaCostNeeded, cmc
             state.players[playerId].zones.graveyard.add(creature);
           }
         }
-        state.log.push(`${creature.name} foi sacrificado para gerar mana.`);
+        state.log.push(`${creature.name} was sacrificed to generate mana.`);
       }
 
       // Resolve the mana generation
@@ -10250,6 +10471,43 @@ export function _updateVividCreatures(state, playerId) {
   }
 
   // Update _dynamicPower for creatures with power_equals static (e.g. Zurgo's Vanguard)
+// Recompute all anthem buffs from scratch for a player's battlefield
+// Used after storm copies to equalize P/T
+function _recomputeAllAnthems(state: any, playerId: number) {
+  const bf = state.players[playerId].zones.battlefield.cards;
+  // Debug: log all anthem sources
+  const anthemSources = bf.filter((c: any) => c._anthem && c._anthem.length > 0);
+  console.log(`[ANTHEM-RECOMPUTE] Sources:`, anthemSources.map((s: any) => `${s.name}(${s._uid}): ${s._anthem.length} anthem(s) → ${JSON.stringify(s._anthem)}`));
+
+  // 1. Zero out all anthem-contributed mods on creatures
+  for (const c of bf) {
+    if (!CardEngine.isCreature(c)) continue;
+    c._powerMod = (c._powerMod || 0) - (c._anthemPowerApplied || 0);
+    c._toughnessMod = (c._toughnessMod || 0) - (c._anthemToughnessApplied || 0);
+    c._anthemPowerApplied = 0;
+    c._anthemToughnessApplied = 0;
+  }
+  // 2. Re-apply all anthems
+  for (const source of bf) {
+    if (!source._anthem) continue;
+    for (const a of source._anthem) {
+      const tgt = a.target || 'own_creatures';
+      for (const c of bf) {
+        if (c._uid === source._uid) continue;
+        if (!CardEngine.isCreature(c)) continue;
+        const matches = tgt === 'own_creatures' ||
+          (tgt === 'other_dragons' && CardEngine.hasCreatureType(c, 'Dragon'));
+        if (matches) {
+          c._powerMod = (c._powerMod || 0) + (a.power || 0);
+          c._toughnessMod = (c._toughnessMod || 0) + (a.toughness || 0);
+          c._anthemPowerApplied = (c._anthemPowerApplied || 0) + (a.power || 0);
+          c._anthemToughnessApplied = (c._anthemToughnessApplied || 0) + (a.toughness || 0);
+        }
+      }
+    }
+  }
+}
+
 export function _updateDynamicPower(state, playerId) {
     const bf = state.players[playerId].zones.battlefield;
     const creatureCount = bf.cards.filter(c => CardEngine.isCreature(c)).length;
@@ -10389,6 +10647,8 @@ export function _applyStaticOnETB(state, card, playerId) {
             if (matches) {
               c._powerMod = (c._powerMod || 0) + (s.power || 0);
               c._toughnessMod = (c._toughnessMod || 0) + (s.toughness || 0);
+              c._anthemPowerApplied = (c._anthemPowerApplied || 0) + (s.power || 0);
+              c._anthemToughnessApplied = (c._anthemToughnessApplied || 0) + (s.toughness || 0);
               // Apply keywords to creatures if specified
               if (s.keywords) {
                 if (!c.keywords) c.keywords = [];
@@ -10488,7 +10748,7 @@ export function _fireETBOnEnter(state: any, bfCard: any, playerId: number): void
   // Fire ETB effects (the card's own "enters the battlefield" abilities)
   const etbEffects = CardEngine.getETBEffects(bfCard);
   if (etbEffects.length > 0) {
-    state.log.push(`${bfCard.name}: habilidade de entrada no campo!`);
+    state.log.push(`${bfCard.name}: enters the battlefield ability!`);
     GameStack.push(state.stack, { card: bfCard, controller: playerId, targets: [], effects: etbEffects });
     const stackLog = GameStack.resolve(state.stack, state);
     state.log.push(...stackLog);
@@ -10637,7 +10897,7 @@ export function _endOfTurnCleanup(state) {
           const owner = entry.controller ?? 0;
           state.players[owner].zones.exile.remove(uid);
           state.players[owner].zones.hand.add(card);
-          state.log.push(`${card.name} retorna para a mao (nao foi jogado).`);
+          state.log.push(`${card.name} returns to hand (was not played).`);
         }
         delete state._exiledPlayable[uid];
       });
@@ -10684,7 +10944,7 @@ export function _endOfTurnCleanup(state) {
         }
         c._tapped = true;
         state.players[originalOwner].zones.battlefield.add(c);
-        state.log.push(`${c.name} volta ao controle do dono original.`);
+        state.log.push(`${c.name} returns to original owner's control.`);
       });
     });
     // Reset damage prevention shields
@@ -10841,10 +11101,31 @@ export function _applyAuraEffects(aura, creature, state?) {
         creature._grantedKeywords.push(e.keyword);
       }
     });
-    // Check DB for aura_prevent_untap static
+    // Check DB for aura static effects
     const db = CardEngine.getPreprocessedEffects(aura);
     if (db && db.static) {
       for (const s of db.static) {
+        // DB-defined grant for aura: only apply what parseAuraEffects missed
+        // parseAuraEffects handles "gets +X/+Y" buffs; DB handles keywords it can't parse
+        if (s.type === 'grant' && s.target === 'enchanted') {
+          // Only apply power/toughness if parseAuraEffects didn't already (check if it found a buff)
+          const parsedHasBuff = effects.some(e => e.type === 'buff');
+          if (!parsedHasBuff) {
+            if (s.power) creature._powerMod = (creature._powerMod || 0) + s.power;
+            if (s.toughness) creature._toughnessMod = (creature._toughnessMod || 0) + s.toughness;
+          }
+          // Always apply keywords from DB (parseAuraEffects may miss complex patterns)
+          const kws = s.keywords || (s.keyword ? [s.keyword] : []);
+          const parsedKws = effects.filter(e => e.type === 'grant_keyword').map(e => e.keyword?.toLowerCase());
+          for (const kw of kws) {
+            // Skip if parseAuraEffects already granted this keyword
+            if (parsedKws.includes(kw.toLowerCase())) continue;
+            if (!creature.keywords) creature.keywords = [];
+            if (!creature._grantedKeywords) creature._grantedKeywords = [];
+            if (!creature.keywords.includes(kw)) creature.keywords.push(kw);
+            if (!creature._grantedKeywords.includes(kw)) creature._grantedKeywords.push(kw);
+          }
+        }
         if (s.type === 'aura_prevent_untap') creature._preventUntap = true;
         if (s.type === 'aura_grant_activated') {
           if (!creature._grantedActivated) creature._grantedActivated = [];
@@ -10928,10 +11209,31 @@ export function _removeAuraEffects(aura, creature) {
         }
       }
     });
-    // Remove aura_prevent_untap and loses_abilities
+    // Remove DB-defined aura static effects
     const db = CardEngine.getPreprocessedEffects(aura);
     if (db && db.static) {
       for (const s of db.static) {
+        // DB-defined grant for aura: only remove what _applyAuraEffects added from DB
+        if (s.type === 'grant' && s.target === 'enchanted') {
+          const parsedHasBuff = effects.some(e => e.type === 'buff');
+          if (!parsedHasBuff) {
+            if (s.power) creature._powerMod = (creature._powerMod || 0) - s.power;
+            if (s.toughness) creature._toughnessMod = (creature._toughnessMod || 0) - s.toughness;
+          }
+          const kws = s.keywords || (s.keyword ? [s.keyword] : []);
+          const parsedKws = effects.filter(e => e.type === 'grant_keyword').map(e => e.keyword?.toLowerCase());
+          for (const kw of kws) {
+            if (parsedKws.includes(kw.toLowerCase())) continue;
+            if (creature._grantedKeywords) {
+              const idx = creature._grantedKeywords.indexOf(kw);
+              if (idx >= 0) creature._grantedKeywords.splice(idx, 1);
+            }
+            if (creature.keywords) {
+              const kwIdx = creature.keywords.indexOf(kw);
+              if (kwIdx >= 0) creature.keywords.splice(kwIdx, 1);
+            }
+          }
+        }
         if (s.type === 'aura_prevent_untap') delete creature._preventUntap;
         if (s.type === 'aura_grant_activated' && creature._grantedActivated) {
           creature._grantedActivated = creature._grantedActivated.filter(a => a.auraUid !== aura._uid);
@@ -10982,12 +11284,12 @@ export function equipCreature(state, playerId, equipmentUid, creatureUid) {
 
     if (equipCmc > 0) {
       if (!ManaSystem.canAfford(state, playerId, { mana_cost: equipCostStr, cmc: equipCmc } as any, equipCostStr, equipCmc)) {
-        state.log.push(`Mana insuficiente para equipar ${equipment.name} (custo: ${equipCostStr}).`);
+        state.log.push(`Insufficient mana to equip ${equipment.name} (cost: ${equipCostStr}).`);
         return false;
       }
       autoTapForSpell(state, playerId, equipCostStr, equipCmc);
       state.manaPool[playerId] = ManaSystem.payMana(state.manaPool[playerId], equipCostStr, equipCmc);
-      state.log.push(`${equipCostStr} pagos para equipar ${equipment.name}.`);
+      state.log.push(`${equipCostStr} paid to equip ${equipment.name}.`);
     } else {
       state.log.push(`Equip cost is {0} — equipped for free!`);
     }
@@ -11013,7 +11315,7 @@ export function equipCreature(state, playerId, equipmentUid, creatureUid) {
     if (!creature._attachments) creature._attachments = [];
     creature._attachments.push(equipmentUid);
     _applyEquipmentEffects(equipment, creature);
-    state.log.push(`${equipment.name} equipado em ${creature.name}.`);
+    state.log.push(`${equipment.name} equipped to ${creature.name}.`);
     return true;
   }
 
@@ -11190,7 +11492,7 @@ export function resolveMoveCountersTarget(state: any, targetUid: string | null) 
       for (const [type, count] of Object.entries(pending.counterMap)) {
         dest._counters[type] = (dest._counters[type] || 0) + (count as number);
       }
-      state.log.push(`Counters de ${pending.dyingCardName} movidos para ${dest.name}.`);
+      state.log.push(`Counters from ${pending.dyingCardName} moved to ${dest.name}.`);
     }
   } else {
     state.log.push(`Declined to move counters.`);
@@ -11283,7 +11585,7 @@ export function creatureDies(state, card, ownerId) {
 
     // Return temporarily exiled creatures (e.g., Stormplain Detainment, until_source_leaves)
     const returnedNames = returnTemporaryExiles(state, card._uid);
-    returnedNames.forEach(name => state.log.push(`${name} retorna ao campo de batalha.`));
+    returnedNames.forEach(name => state.log.push(`${name} returns to the battlefield.`));
     // Clear legacy _exiledUntilLeaves array (return is handled by returnTemporaryExiles above)
     if (card._exiledUntilLeaves && card._exiledUntilLeaves.length > 0) {
       card._exiledUntilLeaves = [];
@@ -11322,7 +11624,7 @@ export function creatureDies(state, card, ownerId) {
               p.zones.battlefield.remove(attUid);
               p.zones.graveyard.add(att);
               _unregisterCardTriggers(state, attUid);
-              state.log.push(`${att.name} vai para o cemiterio.`);
+              state.log.push(`${att.name} goes to the graveyard.`);
             }
           }
         }
@@ -11382,7 +11684,7 @@ export function creatureDies(state, card, ownerId) {
         // Persist handles its own ETB via _resolveSimpleEffect (not stack-based)
         card._etbFired = true;
         state.players[ownerId].zones.battlefield.add(card);
-        state.log.push(`${card.name} retorna com persist! (-1/-1 counter)`);
+        state.log.push(`${card.name} returns with persist! (-1/-1 counter)`);
         _registerCardTriggers(state, card, ownerId);
         // Fire ETB triggers
         const etbEffects = CardEngine.getETBEffects(card);
@@ -11404,7 +11706,7 @@ export function creatureDies(state, card, ownerId) {
         if (exiled) {
           state.players[card._championedPlayer].zones.battlefield.add(exiled);
           exiled._summoningSick = true;
-          state.log.push(`${exiled.name} retorna do exilio!`);
+          state.log.push(`${exiled.name} returns from exile!`);
         }
       }
     }
@@ -11441,10 +11743,10 @@ export function transformCreature(state, playerId, cardUid) {
 
     const oldName = card.name;
     const result = CardEngine.transformCard(card);
-    if (!result) return { success: false, msg: 'Falha ao transformar.' };
+    if (!result) return { success: false, msg: 'Failed to transform.' };
 
-    const label = playerId === 0 ? 'Voce' : 'Oponente';
-    state.log.push(`${label} transforma ${oldName} em ${card.name}!`);
+    const label = playerId === 0 ? 'You' : 'Opponent';
+    state.log.push(`${label} transforms ${oldName} into ${card.name}!`);
 
     // Re-register triggers for new face
     _unregisterCardTriggers(state, card._uid);
@@ -11460,7 +11762,7 @@ export function sacrifice(state, playerId, cardUid) {
     const card = bf.get(cardUid);
     if (!card) return false;
 
-    state.log.push(`${playerId === 0 ? 'Voce' : 'Oponente'} sacrifica ${card.name}.`);
+    state.log.push(`${playerId === 0 ? 'You' : 'Opponent'} sacrifices ${card.name}.`);
 
     // Use creatureDies for creatures (fires triggers), direct remove for others
     if (CardEngine.isCreature(card)) {
@@ -11477,7 +11779,7 @@ export function sacrifice(state, playerId, cardUid) {
 
     // Return temporarily exiled cards (e.g. Stormplain Detainment sacrificed)
     const returned = returnTemporaryExiles(state, card._uid);
-    returned.forEach(name => state.log.push(`${name} retorna ao campo de batalha.`));
+    returned.forEach(name => state.log.push(`${name} returns to the battlefield.`));
 
     _unregisterCardTriggers(state, cardUid);
     bf.remove(cardUid);
@@ -11517,7 +11819,7 @@ export function _advanceSagaChapter(state, saga, playerId) {
           controller: playerId
         };
         state.waitingForInput = { type: 'choose_target', playerId: 0 };
-        logs.push(`Escolha um alvo para ${saga.name} — Capitulo ${ch}.`);
+        logs.push(`Choose a target for ${saga.name} — Chapter ${ch}.`);
         return logs;
       } else {
         // No targeting needed or AI auto-targeting
@@ -11553,10 +11855,10 @@ export function _advanceSagaChapter(state, saga, playerId) {
 export function activateCycling(state, playerId, cardUid) {
     const hand = state.players[playerId].zones.hand;
     const card = hand.get(cardUid);
-    if (!card) return { success: false, msg: 'Carta nao encontrada.' };
+    if (!card) return { success: false, msg: 'Card not found.' };
 
     const cycling = CardEngine.parseCyclingAbility(card);
-    if (!cycling) return { success: false, msg: 'Carta nao tem cycling.' };
+    if (!cycling) return { success: false, msg: 'Card does not have cycling.' };
 
     // Check if can afford the cost (use actual mana cost string if available)
     const costStr = cycling.manaCost || `{${cycling.cost}}`;
@@ -11573,16 +11875,16 @@ export function activateCycling(state, playerId, cardUid) {
     hand.remove(cardUid);
     state.players[playerId].zones.graveyard.add(card);
 
-    const playerLabel = playerId === 0 ? 'Voce' : 'Oponente';
+    const playerLabel = playerId === 0 ? 'You' : 'Opponent';
 
     if (cycling.type === 'cycling') {
       // Basic cycling: draw a card
       const drawn = state.players[playerId].zones.library.drawFromTop();
       if (drawn) {
         state.players[playerId].zones.hand.add(drawn);
-        state.log.push(`${playerLabel} faz cycling de ${card.name}, descarta e compra ${drawn.name}.`);
+        state.log.push(`${playerLabel} cycles ${card.name}, discards and draws ${drawn.name}.`);
       } else {
-        state.log.push(`${playerLabel} faz cycling de ${card.name}, descarta mas o deck esta vazio.`);
+        state.log.push(`${playerLabel} cycles ${card.name}, discards but deck is empty.`);
       }
     } else if (cycling.type === 'typecycling' || cycling.type === 'basiclandcycling') {
       // Search for specific land type
@@ -11605,7 +11907,7 @@ export function activateCycling(state, playerId, cardUid) {
         state.log.push(`${playerLabel} faz ${cycling.searchType || 'basic land'}cycling de ${card.name}, busca ${land.name}.`);
       } else {
         lib.shuffle();
-        state.log.push(`${playerLabel} faz cycling de ${card.name}, mas nao encontrou terreno.`);
+        state.log.push(`${playerLabel} cycles ${card.name}, but no land was found.`);
       }
     }
 
@@ -11748,7 +12050,6 @@ export function getPlayableCards(state, playerId) {
     const allPlayableSource = [...handCards, ...exiledPlayable, ...graveyardLands];
 
 
-    if (playerId === 0) console.log(`[PLAYABLE] getPlayableCards: phase=${state.phase}, wfi=${state.waitingForInput?.type}, isMain=${isMainPhase}, isInstOnly=${isInstantOnlyWindow}, totalMana=${totalAvailable}, hand=${allPlayableSource.length} cards, colors=${JSON.stringify(availableMana)}, pool=${JSON.stringify(state.manaPool[playerId])}`);
     const result = allPlayableSource.filter(card => {
       if (CardEngine.isLand(card)) {
         return isMainPhase && !state.landPlayedThisTurn && !isInstantOnlyWindow;
@@ -11756,7 +12057,6 @@ export function getPlayableCards(state, playerId) {
 
       // prevent_opponent_casting: can't cast non-land spells
       if (opponentHasLockdown) {
-        console.log(`[PLAYABLE] ${card.name}: BLOCKED by opponent lockdown`);
         return false;
       }
 
@@ -11785,7 +12085,6 @@ export function getPlayableCards(state, playerId) {
 
       // CRITICAL FIX: Check if card requires targets and has valid targets available
       if (!_hasValidTargetsForCard(state, playerId, card)) {
-        console.log(`[PLAYABLE] ${card.name}: BLOCKED by no valid targets`);
         return false;
       }
 
@@ -11977,7 +12276,6 @@ export function getPlayableCards(state, playerId) {
             return isMainPhase && !isInstantOnlyWindow; // Evoke still requires main phase (it's a creature)
           }
         }
-        console.log(`[PLAYABLE] ${card.name}: BLOCKED by can't afford (need ${maxCmc}, have ${totalAvailable}, cost=${frontFaceManaCost})`);
         return false;
       }
 
@@ -12102,10 +12400,10 @@ export function getHarmonizableCards(state, playerId) {
 export function castHarmonize(state, playerId, cardUid, targets, tappedCreatureUid) {
     const gy = state.players[playerId].zones.graveyard;
     const card = gy.get(cardUid);
-    if (!card) return { success: false, msg: 'Carta nao encontrada no cemiterio.' };
+    if (!card) return { success: false, msg: 'Card not found in graveyard.' };
 
     const harmonizeCost = CardEngine.getHarmonizeCost(card);
-    if (!harmonizeCost) return { success: false, msg: 'Carta nao tem harmonize.' };
+    if (!harmonizeCost) return { success: false, msg: 'Card does not have harmonize.' };
 
     const isMainPhase = state.phase === 'main1' || state.phase === 'main2';
     if (!isMainPhase) return { success: false, msg: 'So pode harmonizar na fase principal.' };
@@ -12171,8 +12469,8 @@ export function castHarmonize(state, playerId, cardUid, targets, tappedCreatureU
     // Track spells cast this turn
     state._spellsThisTurn[playerId] = (state._spellsThisTurn[playerId] || 0) + 1;
 
-    const playerLabel = playerId === 0 ? 'Voce' : 'Oponente';
-    state.log.push(`${playerLabel} harmoniza ${card.name} do cemiterio!`);
+    const playerLabel = playerId === 0 ? 'You' : 'Opponent';
+    state.log.push(`${playerLabel} harmonizes ${card.name} from graveyard!`);
 
     // Flag so stack doesn't move card back to graveyard after resolution
     card._harmonizeCast = true;
@@ -12200,23 +12498,40 @@ export function castHarmonize(state, playerId, cardUid, targets, tappedCreatureU
       state.log.push(...flurryLogs);
     }
 
+    // Detect becomes_tapped triggers (Rescue Leopard, Dragonsbrood Relic, etc.)
+    // If waitingForInput is already set (e.g. modal_choice from the harmonized spell),
+    // detectAndFireTapTriggers will QUEUE triggers to _pendingTriggersToResolve.
+    // They'll be drained after the current overlay resolves (via _afterResolve).
+    detectAndFireTapTriggers(state);
+
+    // If no overlay is blocking, drain queued triggers now
+    if (!state.waitingForInput) {
+      _drainPendingTriggers(state);
+    }
+
     _checkWinner(state);
+
+    // If the harmonized spell set an overlay (modal, scry, etc.), return with waitForInput
+    // so the UI shows the overlay before continuing
+    if (state.waitingForInput) {
+      return { success: true, waitForInput: true };
+    }
     return { success: true };
   }
 
 export function submitExileChoice(state, playerId, chosenCardUids) {
     if (!state.waitingForInput || state.waitingForInput.type !== 'exile_choose') {
-      return { success: false, msg: 'Nenhuma escolha de exile pendente.' };
+      return { success: false, msg: 'No pending exile choice.' };
     }
 
     const pending = state._pendingExileChoice;
     if (!pending || pending.controllerId !== playerId) {
-      return { success: false, msg: 'Escolha de exile inválida.' };
+      return { success: false, msg: 'Invalid exile choice.' };
     }
 
     const chosenCards = pending.cards.filter(c => chosenCardUids.includes(c._uid));
     if (chosenCards.length !== pending.choose) {
-      return { success: false, msg: `Deve escolher exatamente ${pending.choose} carta(s).` };
+      return { success: false, msg: `Must choose exactly ${pending.choose} card(s).` };
     }
 
     // Make chosen cards playable
@@ -12237,7 +12552,7 @@ export function submitExileChoice(state, playerId, chosenCardUids) {
     state.waitingForInput = null;
 
     const cardNames = chosenCards.map(c => c.name).join(', ');
-    state.log.push(`Escolheu: ${cardNames}. Disponível(is) para jogar${pending.duration === 'next_turn' ? ' até end of next turn' : ''}.`);
+    state.log.push(`Chosen: ${cardNames}. Available to play${pending.duration === 'next_turn' ? ' until end of next turn' : ''}.`);
 
     return { success: true };
   }
@@ -12275,6 +12590,11 @@ export function _hasValidTargetsForCard(state, playerId, card) {
     // cast even if their ETB has no valid targets (ETB trigger simply fizzles).
     const effects = CardEngine.getSpellEffects(card);
     const allEffects = [...effects];
+
+    // Modal spells: targets are chosen AFTER mode selection, not at cast time.
+    // Skip target validation for modal spells (each mode validated separately at resolution).
+    const isModalSpell = allEffects.some((e: any) => e.type === 'modal');
+    if (isModalSpell) return true;
 
     // Check if any effect requires mandatory targets
     for (const effect of allEffects) {
@@ -12463,7 +12783,7 @@ export function _processStateBasedActions(state) {
           };
         }
         state.players[playerId].zones.graveyard.add(walker);
-        state.log.push(`${walker.name} vai para o cemiterio (lealdade 0).`);
+        state.log.push(`${walker.name} goes to the graveyard (loyalty 0).`);
         actionsPerformed = true;
       });
     }
@@ -12500,7 +12820,7 @@ export function resolveTriggerCost(state, paymentChoice) {
 
       if (!ManaSystem.canAfford(state, trigger.controllerId, { mana_cost: costStr, cmc }, costStr, cmc)) {
         // Can't afford - just skip without resolving
-        state.log.push(`Mana insuficiente para pagar ${effect.cost}.`);
+        state.log.push(`Insufficient mana to pay ${effect.cost}.`);
         state.waitingForInput = null;
         return;
       }
@@ -12513,7 +12833,7 @@ export function resolveTriggerCost(state, paymentChoice) {
       );
 
       // Resolve the trigger effects
-      state.log.push(`Voce paga ${effect.cost}. Habilidade de ${trigger.cardName} se resolve!`);
+      state.log.push(`You pay ${effect.cost}. ${trigger.cardName} ability resolves!`);
       for (const eff of trigger.effects) {
         const result = _resolveSimpleEffect(state, trigger.controllerId, eff, wi.data);
         if (result) state.log.push(result);
@@ -12521,7 +12841,7 @@ export function resolveTriggerCost(state, paymentChoice) {
     } else {
       // Player chose not to pay
       const effect = trigger.effects.find(e => e.cost);
-      state.log.push(`Voce opta por nao pagar ${effect?.cost || '?'} para habilidade de ${trigger.cardName}.`);
+      state.log.push(`You choose not to pay ${effect?.cost || '?'} for ${trigger.cardName} ability.`);
     }
 
     // Cleanup — only clear waitingForInput if a nested effect (like endure_choice, scry, etc.)
@@ -12555,12 +12875,12 @@ export function resolveMillTargetChoice(state: any, targetSelf: boolean): void {
       const c = state.players[millTarget].zones.library.drawFromTop();
       if (c) state.players[millTarget].zones.graveyard.add(c);
     }
-    state.log.push(`Mill ${millAmt} (${targetSelf ? 'você' : 'oponente'}).`);
+    state.log.push(`Mill ${millAmt} (${targetSelf ? 'you' : 'opponent'}).`);
     _afterResolve(state);
   }
 
   /**
-   * Calcula o CMC efetivo de uma carta considerando TODAS as reducoes de custo.
+   * Calculates the effective CMC of a card considering ALL cost reductions.
    * Funcao centralizada - usar em vez de duplicar logica de reducao.
    */
 export function getEffectiveCmcWithReduction(state, playerId, card) {
@@ -12575,7 +12895,7 @@ export function getEffectiveCmcWithReduction(state, playerId, card) {
       : (card.cmc || parsedCost.total || 0);
     let costReduced = false;
 
-    // 1. Reducao por habilidades estaticas no battlefield (_costReduction)
+    // 1. Reduction from static abilities on battlefield (_costReduction)
     for (const bfCard of bf.cards) {
       if (!bfCard._costReduction) continue;
       const cr = bfCard._costReduction;
@@ -12715,13 +13035,55 @@ export function resolveSearchLibrary(state: any, cardUid: string | null): void {
         }
         bf.add(bfCard);
         lib.shuffle();
-        state.log.push(`Busca ${picked.name} e coloca no campo${pending.effect.tapped ? ' virado' : ''}.`);
+        state.log.push(`Searches ${picked.name} and puts onto the battlefield${pending.effect.tapped ? ' tapped' : ''}.`);
       } else {
         state.players[pending.controllerId].zones.hand.add(picked);
         lib.shuffle();
         state.log.push(`Busca ${picked.name} da biblioteca.`);
       }
     }
+    _afterResolve(state);
+    return;
+  }
+
+  // Handle search_library_exile_cast (_pendingSearchExileCast) — Ugin ultimate
+  if (state._pendingSearchExileCast) {
+    const pending = state._pendingSearchExileCast;
+    state._pendingSearchExileCast = null;
+    state.waitingForInput = null;
+
+    // cardUid here is a JSON array of selected card uids (or null if declined)
+    let chosenUids: string[] = [];
+    if (cardUid) {
+      try { chosenUids = JSON.parse(cardUid); } catch { chosenUids = [cardUid]; }
+    }
+
+    if (chosenUids.length === 0) {
+      state.log.push('Ugin ultimate: no card selected.');
+      const lib = state.players[pending.controllerId].zones.library;
+      lib.shuffle();
+      _afterResolve(state);
+      return;
+    }
+
+    const lib = state.players[pending.controllerId].zones.library;
+    if (!state._exiledPlayable) state._exiledPlayable = {};
+    for (const uid of chosenUids) {
+      const card = pending.candidates.find((c: any) => c._uid === uid);
+      if (!card) continue;
+      const idx = lib.cards.indexOf(card);
+      if (idx !== -1) lib.cards.splice(idx, 1);
+      state.players[pending.controllerId].zones.exile.add(card);
+      state._exiledPlayable[card._uid] = {
+        card,
+        controller: pending.controllerId,
+        turn: state.turn,
+        duration: 'end_of_turn',
+        freeCast: true,
+      };
+    }
+    lib.shuffle();
+    state.log.push(`Ugin ultimate: exiles ${chosenUids.length} card(s) — cast for free this turn.`);
     _afterResolve(state);
     return;
   }
@@ -12756,17 +13118,17 @@ export function resolveSearchLibrary(state: any, cardUid: string | null): void {
       if (pending.toHand) {
         state.players[pending.playerId].zones.hand.add(picked);
         lib.shuffle();
-        state.log.push(`Busca ${picked.name} para a mao.`);
+        state.log.push(`Searches ${picked.name} to hand.`);
       } else if (pending.toTop) {
         lib.cards.unshift(picked);
-        state.log.push(`Busca ${picked.name} e coloca no topo.`);
+        state.log.push(`Searches ${picked.name} and puts on top.`);
       } else if (pending.toBattlefield) {
         const bfCard = CardEngine.prepareForBattlefield(picked);
         bfCard._ownerId = pending.playerId;
         bfCard._tapped = true;
         bf.add(bfCard);
         lib.shuffle();
-        state.log.push(`Busca ${picked.name} e coloca no campo virado.`);
+        state.log.push(`Searches ${picked.name} and puts onto the battlefield tapped.`);
         const lf1 = fireTrigger(state, 'landfall', { playerId: pending.playerId, cardUid: bfCard._uid });
         state.log.push(...lf1);
       } else {
@@ -12846,18 +13208,18 @@ export function resolveSearchLibrary(state: any, cardUid: string | null): void {
 
       if (pending.toTop) {
         lib.cards.unshift(picked);
-        state.log.push(`Busca ${picked.name} e coloca no topo.`);
+        state.log.push(`Searches ${picked.name} and puts on top.`);
       } else if (pending.toHand) {
         state.players[pending.controller].zones.hand.add(picked);
         lib.shuffle();
-        state.log.push(`Busca ${picked.name} para a mao.`);
+        state.log.push(`Searches ${picked.name} to hand.`);
       } else if (pending.toBattlefield) {
         const bfCard = CardEngine.prepareForBattlefield(picked);
         bfCard._ownerId = pending.controller;
         if (pending.tapped) bfCard._tapped = true;
         bf.add(bfCard);
         lib.shuffle();
-        state.log.push(`Busca ${picked.name} e coloca no campo${pending.tapped ? ' virado' : ''}.`);
+        state.log.push(`Searches ${picked.name} and puts onto the battlefield${pending.tapped ? ' tapped' : ''}.`);
         if (CardEngine.isLand(bfCard)) {
           const lf = fireTrigger(state, 'landfall', { playerId: pending.controller, cardUid: bfCard._uid });
           state.log.push(...lf);
@@ -12866,7 +13228,7 @@ export function resolveSearchLibrary(state: any, cardUid: string | null): void {
         // Default: put in hand
         state.players[pending.controller].zones.hand.add(picked);
         lib.shuffle();
-        state.log.push(`Busca ${picked.name} para a mao.`);
+        state.log.push(`Searches ${picked.name} to hand.`);
       }
     }
     _afterResolve(state);
@@ -12956,17 +13318,18 @@ export function resolveLookTop(state: any, choices: string[]): void {
   // Special case: look_top_permanent_choice (United Battlefront)
   // 'keep' cards go to battlefield, everything else + pending.rest go to library bottom
   if (pending.type === 'look_top_permanent_choice') {
-    // UI shows candidates (valid permanents), choices indices map to candidates array
-    const cands = pending.candidates || pending.cards || [];
-    const selectedCards = cands.filter((_: any, i: number) => choices[i] === 'keep');
-    const notSelectedCands = cands.filter((_: any, i: number) => choices[i] !== 'keep');
-    const allToBottom = [...notSelectedCands, ...(pending.rest || [])];
+    // UI shows ALL looked cards; choices indices map to pending.cards (all 7)
+    // Only cards in candidates set can actually be kept (put onto BF)
+    const allCards = pending.cards || [];
+    const candidateUids = new Set((pending.candidates || []).map((c: any) => c._uid));
+    const selectedCards = allCards.filter((c: any, i: number) => choices[i] === 'keep' && candidateUids.has(c._uid));
+    const allToBottom = allCards.filter((c: any) => !selectedCards.includes(c));
 
     selectedCards.forEach((c: any) => {
       const bfCard = CardEngine.prepareForBattlefield(c);
       bfCard._ownerId = pid;
       state.players[pid].zones.battlefield.add(bfCard);
-      state.log.push(`${c.name} entra no campo de batalha.`);
+      state.log.push(`${c.name} enters the battlefield.`);
     });
     const shuffled = allToBottom.sort(() => Math.random() - 0.5);
     shuffled.forEach((c: any) => lib.addToBottom(c));
@@ -12980,14 +13343,14 @@ export function resolveLookTop(state: any, choices: string[]): void {
       if (dest === 'hand' || dest === 'keep') {
         if (pending.pickTo === 'top') {
           lib.addToTop(card);
-          state.log.push(`${card.name} para o topo do grimorio.`);
+          state.log.push(`${card.name} to the top of the library.`);
         } else {
           state.players[pid].zones.hand.add(card);
-          state.log.push(`${card.name} para a mao.`);
+          state.log.push(`${card.name} to hand.`);
         }
       } else if (dest === 'graveyard') {
         state.players[pid].zones.graveyard.add(card);
-        state.log.push(`${card.name} para o cemiterio.`);
+        state.log.push(`${card.name} goes to the graveyard.`);
       } else {
         lib.addToBottom(card);
       }
@@ -13022,7 +13385,7 @@ export function resolveRevealPick(state: any, cardUid: string | null): void {
     const picked = pending.cards.find((c: any) => c._uid === cardUid);
     if (picked) {
       state.players[pid].zones.hand.add(picked);
-      state.log.push(`${picked.name} revelado e colocado na mão.`);
+      state.log.push(`${picked.name} revealed and put into hand.`);
       const rest = pending.cards.filter((c: any) => c !== picked);
       rest.sort(() => Math.random() - 0.5);
       rest.forEach((c: any) => lib.addToBottom(c));
@@ -13031,7 +13394,7 @@ export function resolveRevealPick(state: any, cardUid: string | null): void {
     // Skipped — all cards go to bottom
     const shuffled = [...pending.cards].sort(() => Math.random() - 0.5);
     shuffled.forEach((c: any) => lib.addToBottom(c));
-    state.log.push('Nenhuma carta escolhida. Cartas vão para o fundo do grimório.');
+    state.log.push('No card chosen. Cards go to the bottom of the library.');
   }
 
   _drainPendingTriggers(state);
@@ -13045,56 +13408,24 @@ export function resolveRevealPick(state: any, cardUid: string | null): void {
  * Uses shift() so unprocessed items stay in the array if we pause.
  */
 function _drainPendingTriggers(state: any): void {
-  if (!state._pendingTriggersToResolve || state._pendingTriggersToResolve.length === 0) return;
-  if (state.waitingForInput) return;
-
-  while (state._pendingTriggersToResolve.length > 0) {
-    if (state.waitingForInput) return; // paused by previous iteration
-
-    const next = state._pendingTriggersToResolve.shift();
-    if (!next) continue;
-    const { trigger, fireData } = next;
-    const isHumanPlayer = state.players[trigger.controllerId]?.isHuman;
-
-    state.log.push(`Habilidade de ${trigger.cardName} dispara!`);
-
-    // Optional trigger for human → confirm_optional overlay
-    if (trigger.optional && isHumanPlayer) {
-      state._pendingOptionalTrigger = { trigger, fireData };
-      const effectDesc = (trigger.effects || []).map((e: any) => {
-        if (e.type === 'search_library') return 'Search your library';
-        if (e.type === 'draw') return `Draw ${e.amount || 1}`;
-        if (e.type === 'damage') return `Deal ${e.amount} damage`;
-        if (e.type === 'gainLife') return `Gain ${e.amount} life`;
-        if (e.type === 'create_token') return `Create token`;
-        return e.type;
-      }).join(', ');
-      state.waitingForInput = {
-        type: 'confirm_optional',
-        message: `${trigger.cardName}: ${effectDesc}?`,
-        playerId: trigger.controllerId,
-      };
-      return;
+  // Bridge: move any remaining _pendingTriggersToResolve items into _gameQueue
+  // so they are processed by the centralized queue system.
+  if (state._pendingTriggersToResolve && state._pendingTriggersToResolve.length > 0) {
+    console.log(`[QUEUE] _drainPendingTriggers: moving ${state._pendingTriggersToResolve.length} pending → _gameQueue`);
+    while (state._pendingTriggersToResolve.length > 0) {
+      const next = state._pendingTriggersToResolve.shift();
+      if (!next) continue;
+      console.log(`  [QUEUE] drain: ${next.trigger?.cardName || '?'} (event=${next.trigger?.event || '?'})`);
+      state._gameQueue.push({
+        type: 'trigger',
+        trigger: next.trigger,
+        fireData: next.fireData,
+      });
     }
-
-    // Cost trigger for human → trigger_cost overlay
-    const effectsWithCosts = trigger.effects.filter((e: any) => e.cost);
-    if (effectsWithCosts.length > 0 && isHumanPlayer) {
-      state.waitingForInput = {
-        type: 'trigger_cost',
-        playerId: trigger.controllerId,
-        trigger: trigger,
-        data: fireData
-      };
-      return;
-    }
-
-    // No cost, no optional → resolve immediately
-    for (const eff of trigger.effects) {
-      const result = _resolveSimpleEffect(state, trigger.controllerId, eff, fireData);
-      if (result && result !== '__paused__') state.log.push(result);
-      if (state.waitingForInput) return; // effect opened an overlay (buff target, scry, etc.)
-    }
+  }
+  // Process through the centralized queue
+  if (!state._processingQueue) {
+    processGameQueue(state);
   }
 }
 
@@ -13227,7 +13558,7 @@ export function resolveSacrifice(state: any, cardUid: string | null): void {
     if (cardUid) {
       // Sacrifice the selected permanent
       sacrifice(state, 0, cardUid);
-      state.log.push(`${cardUid ? '' : ''}Sacrificado como custo adicional.`);
+      state.log.push(`${cardUid ? '' : ''}Sacrificed as additional cost.`);
       // Resume the cast, skipping the additional cost check this time
       state._skipAdditionalCostCheck = true;
       castSpell(state, pending.playerId, pending.cardUid, pending.targets,
@@ -13235,7 +13566,7 @@ export function resolveSacrifice(state: any, cardUid: string | null): void {
       delete state._skipAdditionalCostCheck;
     } else {
       // Human cancelled - card stays in hand, mana stays in pool
-      state.log.push('Lancamento cancelado (sacrificio recusado).');
+      state.log.push('Cast cancelled (sacrifice refused).');
       _afterResolve(state);
     }
     return;
@@ -13274,7 +13605,7 @@ export function resolveSacrifice(state: any, cardUid: string | null): void {
       _continueActivationAfterSacrifice(state, pending);
     } else {
       // Cancelled — nothing was spent, just restore state
-      state.log.push('Habilidade cancelada.');
+      state.log.push('Ability cancelled.');
       _afterResolve(state);
     }
     return;
@@ -13309,6 +13640,39 @@ export function resolveGYReturn(state: any, cardUids: string[]): void {
   const controller = pending.controller;
   const gy = state.players[controller].zones.graveyard;
 
+  // Special: grant_harmonize — don't move card, just flag it (Songcrafter Mage)
+  if (pending.effect?._grantHarmonize) {
+    for (const uid of cardUids) {
+      const card = gy.get(uid);
+      if (card) {
+        card._harmonizeGranted = true;
+        state.log.push(`${card.name} gains harmonize (cost: ${card.mana_cost}).`);
+      }
+    }
+    _afterResolve(state);
+    return;
+  }
+
+  // If returning multiple cards to top of library AND human player, show ordering overlay
+  if (pending.toTopLibrary && cardUids.length > 1 && state.players[controller]?.isHuman) {
+    // Collect the cards for ordering
+    const cardsToOrder: any[] = [];
+    for (const uid of cardUids) {
+      const card = gy.get(uid);
+      if (card) cardsToOrder.push({ uid, card });
+    }
+    if (cardsToOrder.length > 1) {
+      state._pendingLibraryOrder = {
+        controller,
+        cards: cardsToOrder,
+        remainingEffects: pending.remainingEffects,
+        triggerControllerId: pending.triggerControllerId,
+      };
+      state.waitingForInput = { type: 'order_library_top', playerId: controller };
+      return;
+    }
+  }
+
   for (const uid of cardUids) {
     const card = gy.get(uid);
     if (!card) continue;
@@ -13325,10 +13689,10 @@ export function resolveGYReturn(state: any, cardUids: string[]): void {
 
     if (pending.toTopLibrary) {
       state.players[controller].zones.library.cards.unshift(card);
-      state.log.push(`${card.name} retorna ao topo da biblioteca.`);
+      state.log.push(`${card.name} returns to the top of the library.`);
     } else if (pending.toHand !== false) {
       state.players[controller].zones.hand.add(card);
-      state.log.push(`${card.name} retorna do cemiterio para a mao.`);
+      state.log.push(`${card.name} returns from graveyard to hand.`);
     } else {
       // Put onto battlefield
       const bfCard = CardEngine.prepareForBattlefield(card);
@@ -13345,7 +13709,28 @@ export function resolveGYReturn(state: any, cardUids: string[]): void {
         }
       }
       state.players[controller].zones.battlefield.add(bfCard);
-      state.log.push(`${card.name} retorna ao campo de batalha.`);
+      state.log.push(`${card.name} returns to the battlefield.`);
+    }
+  }
+
+  // Resolve remaining trigger effects (e.g. Smile at Death: +1/+1 counters on returned creatures)
+  if (pending.remainingEffects && pending.remainingEffects.length > 0) {
+    const ctrl = pending.triggerControllerId ?? pending.controller;
+    for (const eff of pending.remainingEffects) {
+      if (eff.type === 'counter' && eff.target === 'returned_creatures') {
+        // Apply counters to all creatures just returned to BF
+        for (const uid of cardUids) {
+          const bfCard = state.players[ctrl].zones.battlefield.cards.find((c: any) => c._uid === uid || c._originalUid === uid);
+          if (bfCard && CardEngine.isCreature(bfCard)) {
+            if (!bfCard._counters) bfCard._counters = {};
+            bfCard._counters[eff.counter] = (bfCard._counters[eff.counter] || 0) + (eff.amount || 1);
+            state.log.push(`${bfCard.name} receives ${eff.amount || 1} ${eff.counter} counter(s).`);
+          }
+        }
+      } else {
+        const result = _resolveSimpleEffect(state, ctrl, eff, {});
+        if (result && result !== '__paused__') state.log.push(result);
+      }
     }
   }
 
@@ -13355,6 +13740,54 @@ export function resolveGYReturn(state: any, cardUids: string[]): void {
     state._pendingStackEffects = null;
     // resolveEffects pushes to state.log internally and returns void
     GameStack.resolveEffects(state, pse.controller, pse.card, pse.effects, pse.targets || []);
+  }
+
+  _afterResolve(state);
+}
+
+/**
+ * Resolve library top ordering — human chose the order of cards going to top of library.
+ * orderedUids: array of card uids in desired order (first = top of library).
+ */
+export function resolveLibraryOrder(state: any, orderedUids: string[]): void {
+  if (!state._pendingLibraryOrder) {
+    state.waitingForInput = null;
+    _afterResolve(state);
+    return;
+  }
+
+  const pending = state._pendingLibraryOrder;
+  state._pendingLibraryOrder = null;
+  state.waitingForInput = null;
+
+  const controller = pending.controller;
+  const gy = state.players[controller].zones.graveyard;
+
+  // Add cards to library in reverse order (so first in orderedUids = top of library)
+  for (let i = orderedUids.length - 1; i >= 0; i--) {
+    const uid = orderedUids[i];
+    const entry = pending.cards.find((c: any) => c.uid === uid);
+    if (!entry) continue;
+    const card = entry.card;
+    gy.remove(uid);
+
+    if (CardEngine.isCreature(card)) {
+      state._lastReturnedPower = CardEngine.getPower(card);
+    }
+    const gyLeaveLogs = fireTrigger(state, 'card_leaves_graveyard', { playerId: controller, card });
+    state.log.push(...gyLeaveLogs);
+
+    state.players[controller].zones.library.cards.unshift(card);
+    state.log.push(`${card.name} returns to the top of the library.`);
+  }
+
+  // Resolve remaining trigger effects
+  if (pending.remainingEffects && pending.remainingEffects.length > 0) {
+    const ctrl = pending.triggerControllerId ?? controller;
+    for (const eff of pending.remainingEffects) {
+      const result = _resolveSimpleEffect(state, ctrl, eff, {});
+      if (result && result !== '__paused__') state.log.push(result);
+    }
   }
 
   _afterResolve(state);
@@ -13377,7 +13810,7 @@ export function resolveShuffleGYChoosePlayer(state: any, targetPid: number): voi
   if (gyCards.length === 0) {
     state._pendingShuffleGY = null;
     state.waitingForInput = null;
-    state.log.push('Cemitério vazio — nada para embaralhar.');
+    state.log.push('Graveyard empty — nothing to shuffle.');
     // Resume remaining effects
     if (pending.remainingEffects?.length > 0) {
       GameStack.resolveEffects(state, pending.controller, pending.card, pending.remainingEffects, []);
@@ -13418,7 +13851,7 @@ export function resolveShuffleGYChooseCards(state: any, cardUids: string[]): voi
   }
   if (cardUids.length > 0) {
     lib.shuffle();
-    state.log.push(`${cardUids.length} carta(s) do cemitério embaralhadas na biblioteca.`);
+    state.log.push(`${cardUids.length} card(s) from graveyard shuffled into library.`);
   }
 
   // Resume remaining effects
@@ -13479,7 +13912,7 @@ export function resolveGraveyardChoice(state: any, pid: number): void {
   const efgCards = efgGy.getAll();
 
   if (efgCards.length === 0) {
-    state.log.push(`Cemitério escolhido está vazio.`);
+    state.log.push(`Chosen graveyard is empty.`);
     _flushPendingSpellToGY(state);
     _afterResolve(state);
     return;
@@ -13541,7 +13974,7 @@ export function resolveGraveyardCardChoice(state: any, cardUids: string[]): void
       if (!card) continue;
       gy.remove(uid);
       exile.add(card);
-      state.log.push(`${card.name} exilado do cemiterio.`);
+      state.log.push(`${card.name} exiled from graveyard.`);
       state._exiledThisResolution = true; // for "if_exiled" condition checks
       // Fire trigger when card leaves graveyard (Kheru Goldkeeper treasure, etc.)
       if (!state._cardLeftGraveyardThisTurn) state._cardLeftGraveyardThisTurn = {};
@@ -13609,7 +14042,7 @@ export function resolveMandatoryDiscard(state: any, cardUids: string[]): void {
   const pid = pending.targetPlayer ?? 0;
   const hand = state.players[pid].zones.hand;
   const gy = state.players[pid].zones.graveyard;
-  const who = pid === 0 ? 'Voce' : 'Oponente';
+  const who = pid === 0 ? 'You' : 'Opponent';
 
   // unless_creature: if human discards a creature card, only that 1 card is needed
   let discardedCreature = false;
@@ -13629,7 +14062,7 @@ export function resolveMandatoryDiscard(state: any, cardUids: string[]): void {
       const trigLogs = fireTrigger(state, 'opponent_discards', { playerId: pending.controller, cardUid: card._uid });
       state.log.push(...trigLogs);
     }
-    state.log.push(`${who} descarta ${card.name}.`);
+    state.log.push(`${who} discards ${card.name}.`);
     // unless_creature: if we discarded a creature, we're done (no need to discard more)
     if (discardedCreature) break;
   }
@@ -13677,7 +14110,7 @@ export function resolveGYCounterTargets(state: any, targetUids: string[]): void 
       tc._counters[counterName] = (tc._counters[counterName] || 0) + 1;
       if (!tc.keywords) tc.keywords = [];
       if (!tc.keywords.includes(counterName)) tc.keywords.push(counterName);
-      state.log.push(`${tc.name} recebe 1 contador ${counterName}.`);
+      state.log.push(`${tc.name} receives 1 ${counterName} counter.`);
     }
   }
 
@@ -13697,13 +14130,13 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
   // (e.g. Hundred-Battle Veteran: "You may cast this card from your graveyard")
   if (ability.cost?.cast_from_gy) {
     if (state.phase !== 'main1' && state.phase !== 'main2') {
-      state.log.push('Só pode conjurar do cemitério na fase principal.');
+      state.log.push('Can only cast from graveyard during main phase.');
       return;
     }
     const manaCost = card.mana_cost || '';
     const cmc = card.cmc || ManaSystem.parseCost(manaCost).total || 0;
     if (!ManaSystem.canAfford(state, pid, card, manaCost, cmc)) {
-      state.log.push('Mana insuficiente para conjurar do cemitério.');
+      state.log.push('Insufficient mana to cast from graveyard.');
       return;
     }
     // Remove from graveyard, add to hand temporarily so castSpell finds it
@@ -13734,16 +14167,16 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
       delete card._castFromGraveyard;
       delete card._pendingETBCounters;
       gy.add(card);
-      state.log.push(`Não foi possível conjurar ${card.name} do cemitério.`);
+      state.log.push(`Failed to cast ${card.name} from graveyard.`);
     } else {
-      state.log.push(`${card.name} conjurado do cemitério!`);
+      state.log.push(`${card.name} cast from graveyard!`);
     }
     return;
   }
 
   // Check sorcery speed restriction
   if (ability.sorcerySpeed && state.phase !== 'main1' && state.phase !== 'main2') {
-    state.log.push('Esta habilidade so pode ser ativada na fase principal.');
+    state.log.push('This ability can only be activated during main phase.');
     return;
   }
 
@@ -13765,7 +14198,7 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
       }
       const maxX = Math.max(0, maxAvailable - fixedTotal);
       if (maxAvailable < fixedTotal) {
-        state.log.push('Mana insuficiente para a habilidade.');
+        state.log.push('Insufficient mana for ability.');
         return;
       }
 
@@ -13789,7 +14222,7 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
       const parsed = ManaSystem.parseCost(costStr);
       const fakeCard = { mana_cost: costStr, cmc: parsed.total || 0 };
       if (!ManaSystem.canAfford(state, pid, fakeCard, costStr, fakeCard.cmc)) {
-        state.log.push('Mana insuficiente para a habilidade.');
+        state.log.push('Insufficient mana for ability.');
         return;
       }
       autoTapForSpell(state, pid, costStr, fakeCard.cmc);
@@ -13797,7 +14230,7 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
     }
   }
 
-  state.log.push(`${card.name}: habilidade do cemiterio ativada!`);
+  state.log.push(`${card.name}: graveyard ability activated!`);
 
   // If cost requires exile, remove from graveyard and add to exile now.
   // Otherwise, leave card in graveyard so effects like return_to_hand can move it themselves.
@@ -13830,7 +14263,7 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
       const dcType = effect.counter || '+1/+1';
       state._pendingDistribute = { amount: dcAmt, counter: dcType, controller: pid, card };
       state.waitingForInput = { type: 'distribute_counters', playerId: pid };
-      state.log.push(`Distribua ${dcAmt} contador(es) ${dcType} entre suas criaturas.`);
+      state.log.push(`Distribute ${dcAmt} ${dcType} counter(s) among your creatures.`);
       return; // pause for human input
     }
     let targets: any[] = [];
@@ -13858,7 +14291,7 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
           sharedTargets,
         };
         state.waitingForInput = { type: 'gy_counter_targets', playerId: pid };
-        state.log.push(`Escolha até ${xCount} criaturas.`);
+        state.log.push(`Choose up to ${xCount} creatures.`);
         return; // pause for human input
       }
 
@@ -13876,7 +14309,7 @@ export function activateGraveyardAbility(state: any, pid: number, cardUid: strin
             tc._counters[effect.counter] = (tc._counters[effect.counter] || 0) + 1;
             if (!tc.keywords) tc.keywords = [];
             if (!tc.keywords.includes(effect.counter)) tc.keywords.push(effect.counter);
-            state.log.push(`${tc.name} recebe 1 contador ${effect.counter}.`);
+            state.log.push(`${tc.name} receives 1 ${effect.counter} counter.`);
           }
         }
         continue; // skip _resolveSimpleEffect, we handled it
@@ -13979,9 +14412,12 @@ function _afterResolve(state: any): void {
   // Clear ETB-pause flag so next castSpell fires triggers normally
   delete state._castTriggersAlreadyFired;
   detectAndFireTapTriggers(state); // Centralized becomes_tapped detection
+  // Drain any pending triggers that were queued while an overlay was active
+  console.log(`[QUEUE] _afterResolve: pending=${state._pendingTriggersToResolve?.length || 0}, queue=${state._gameQueue?.length || 0}, wfi=${state.waitingForInput?.type || 'none'}`);
+  _drainPendingTriggers(state);
   _recomputeConditionalBuffs(state); // Recompute conditional buffs after each player action
   if (state.winner) return; // Game already over — don't set new waitingForInput
-  if (state.waitingForInput) return; // Already set by effect resolution
+  if (state.waitingForInput) return; // Already set by effect resolution or queued trigger
   const isMainPhase = state.phase === 'main1' || state.phase === 'main2';
   const humanIsActive = state.players[state.activePlayer]?.isHuman;
   if (isMainPhase && humanIsActive) {
@@ -14015,14 +14451,14 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       p.zones.battlefield.cards.some((c: any) => c._preventActivatedAbilities)
     );
     if (locked) {
-      state.log.push(`${creature.name}: habilidades ativadas bloqueadas (Clarion Conqueror).`);
+      state.log.push(`${creature.name}: activated abilities blocked (Clarion Conqueror).`);
       return;
     }
   }
 
   // Phase check (sorcery speed abilities)
   if (ability.sorcerySpeed && state.phase !== 'main1' && state.phase !== 'main2') {
-    state.log.push('Esta habilidade so pode ser ativada na fase principal.');
+    state.log.push('This ability can only be activated during main phase.');
     return;
   }
 
@@ -14034,7 +14470,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       const hasHaste = CardEngine.hasKeyword(creature, 'Haste') ||
         (creature._tempKeywords || []).includes('Haste');
       if (!hasHaste) {
-        state.log.push(`${creature.name} sofre de doenca de invocação e nao pode usar habilidades de virar.`);
+        state.log.push(`${creature.name} has summoning sickness and can't use tap abilities.`);
         return;
       }
     }
@@ -14043,9 +14479,9 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
   // Check ability condition (e.g. control_dragon for Mox Jasper)
   if (ability.condition) {
     if (!_checkEffectCondition(state, pid, { condition: ability.condition })) {
-      state.log.push(`${creature.name}: condicao nao atendida para ativar esta habilidade.`);
+      state.log.push(`${creature.name}: condition not met to activate this ability.`);
       if (typeof window !== 'undefined' && typeof (window as any).__gameToast === 'function') {
-        (window as any).__gameToast(`${creature.name}: condição não atendida para ativar esta habilidade.`, 'warning');
+        (window as any).__gameToast(`${creature.name}: condition not met to activate this ability.`, 'warning');
       }
       return;
     }
@@ -14058,19 +14494,19 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       CardEngine.isCreature(c) && !c._tapped && c._uid !== creature._uid,
     );
     if (untappedCreatures.length === 0) {
-      state.log.push(`${creature.name}: sem criaturas disponíveis para virar.`);
+      state.log.push(`${creature.name}: no creatures available to tap.`);
       return;
     }
     // Validate other costs before showing UI (don't consume mana yet)
     if (ability.cost?.tap && creature._tapped) {
-      state.log.push('Criatura já está virada.');
+      state.log.push('Creature is already tapped.');
       return;
     }
     if (ability.cost?.once_per_turn) {
       if (!state._abilityUsedThisTurn) state._abilityUsedThisTurn = {};
       const key2 = creature._uid + '_' + abilityIdx;
       if (state._abilityUsedThisTurn[key2]) {
-        state.log.push('Habilidade já usada neste turno.');
+        state.log.push('Ability already used this turn.');
         return;
       }
     }
@@ -14081,7 +14517,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       choices: untappedCreatures,
       cardUid: creature._uid,
     };
-    state.log.push(`${creature.name}: escolha uma criatura para virar como custo.`);
+    state.log.push(`${creature.name}: choose a creature to tap as cost.`);
     return;
   }
 
@@ -14091,14 +14527,14 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
   if (state.players[pid].isHuman && (ability.cost?.sacrifice_creature || ability.cost?.sacrifice_token)) {
     // Pre-validate all other costs before showing the sacrifice overlay
     if (ability.cost?.tap && creature._tapped) {
-      state.log.push('Criatura ja esta virada.');
+      state.log.push('Creature is already tapped.');
       return;
     }
     if (ability.cost?.mana) {
       const cs = ManaSystem.formatManaCost(ability.cost.mana);
       const cmc2 = ManaSystem.parseCost(cs).total || 0;
       if (!ManaSystem.canAfford(state, pid, { mana_cost: cs, cmc: cmc2 }, cs, cmc2)) {
-        state.log.push('Mana insuficiente para a habilidade.');
+        state.log.push('Insufficient mana for ability.');
         return;
       }
     }
@@ -14106,7 +14542,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       if (!state._abilityUsedThisTurn) state._abilityUsedThisTurn = {};
       const key2 = creature._uid + '_' + abilityIdx;
       if (state._abilityUsedThisTurn[key2]) {
-        state.log.push('Habilidade ja usada neste turno.');
+        state.log.push('Ability already used this turn.');
         return;
       }
     }
@@ -14120,7 +14556,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
     });
 
     if (others.length === 0) {
-      state.log.push(`Nenhuma ${isSacToken ? 'token' : 'criatura'} disponivel para sacrificar.`);
+      state.log.push(`No ${isSacToken ? 'token' : 'creature'} available to sacrifice.`);
       return;
     }
 
@@ -14134,7 +14570,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       cardUid: creature._uid,
       _forActivation: true,
     };
-    state.log.push(`${creature.name}: escolha uma criatura para sacrificar (ou cancele).`);
+    state.log.push(`${creature.name}: choose a creature to sacrifice (or cancel).`);
     return; // ← Will resume via resolveSacrifice → _continueActivationAfterSacrifice
   }
 
@@ -14142,19 +14578,19 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
   if (state.players[pid].isHuman && ability.cost?.exile_gy_creature) {
     const gyCreatures = state.players[pid].zones.graveyard.getAll().filter((c: any) => CardEngine.isCreature(c));
     if (gyCreatures.length === 0) {
-      state.log.push('Nenhuma criatura no cemiterio para exilar.');
+      state.log.push('No creature in graveyard to exile.');
       return;
     }
     // Pre-validate other costs
     if (ability.cost?.tap && creature._tapped) {
-      state.log.push('Criatura ja esta virada.');
+      state.log.push('Creature is already tapped.');
       return;
     }
     if (ability.cost?.mana) {
       const cs = ManaSystem.formatManaCost(ability.cost.mana);
       const cmc2 = ManaSystem.parseCost(cs).total || 0;
       if (!ManaSystem.canAfford(state, pid, { mana_cost: cs, cmc: cmc2 }, cs, cmc2)) {
-        state.log.push('Mana insuficiente para a habilidade.');
+        state.log.push('Insufficient mana for ability.');
         return;
       }
     }
@@ -14166,7 +14602,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       optional: true,
       cardUid: creature._uid,
     };
-    state.log.push(`${creature.name}: escolha uma criatura do cemiterio para exilar (ou cancele).`);
+    state.log.push(`${creature.name}: choose a creature from graveyard to exile (or cancel).`);
     return;
   }
 
@@ -14174,7 +14610,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
 
   // Tap cost
   if (ability.cost?.tap) {
-    if (creature._tapped) { state.log.push('Criatura ja esta virada.'); return; }
+    if (creature._tapped) { state.log.push('Creature is already tapped.'); return; }
     creature._tapped = true;
   }
 
@@ -14191,7 +14627,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
         const totalNeeded = xValue + fixedTotal;
         const fullCostStr = costStr.replace(/\{X\}/g, `{${xValue}}`);
         if (!ManaSystem.canAfford(state, pid, { mana_cost: fullCostStr, cmc: totalNeeded }, fullCostStr, totalNeeded)) {
-          state.log.push(`Mana insuficiente para X=${xValue}.`);
+          state.log.push(`Insufficient mana for X=${xValue}.`);
           if (ability.cost.tap) creature._tapped = false;
           return;
         }
@@ -14213,7 +14649,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       const fakeCard = { mana_cost: costStr, cmc };
       // Pass costStr and cmc explicitly — canAfford needs all 5 args
       if (!ManaSystem.canAfford(state, pid, fakeCard, costStr, cmc)) {
-        state.log.push('Mana insuficiente para a habilidade.');
+        state.log.push('Insufficient mana for ability.');
         if (ability.cost.tap) creature._tapped = false; // Undo tap
         return;
       }
@@ -14227,7 +14663,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
     if (!state._abilityUsedThisTurn) state._abilityUsedThisTurn = {};
     const key = creature._uid + '_' + abilityIdx;
     if (state._abilityUsedThisTurn[key]) {
-      state.log.push('Habilidade ja usada neste turno.');
+      state.log.push('Ability already used this turn.');
       if (ability.cost.tap) creature._tapped = false;
       return;
     }
@@ -14237,7 +14673,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
   // Remove counter cost
   if (ability.cost?.removeCounter) {
     if (!creature._counters || (creature._counters[ability.cost.removeCounter] || 0) <= 0) {
-      state.log.push('Sem counters para remover.');
+      state.log.push('No counters to remove.');
       if (ability.cost.tap) creature._tapped = false;
       return;
     }
@@ -14251,7 +14687,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       : (lifeCostRaw === 'X' || lifeCostRaw === 'x') ? (state._currentXValue || 0)
       : (parseInt(lifeCostRaw) || 1);
     state.players[pid].life -= lifeCost;
-    state.log.push(`Paga ${lifeCost} vida como custo.`);
+    state.log.push(`Pays ${lifeCost} life as cost.`);
   }
 
   // Sacrifice creature cost (AI path — human handled via overlay above)
@@ -14262,9 +14698,9 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
     if (others.length > 0) {
       state._lastSacForAbilityMV = others[0].cmc || 0; // Store MV for creature_mv_plus1 targeting (Sidisi)
       creatureDies(state, others[0], pid);
-      state.log.push(`Sacrifica ${others[0].name} como custo.`);
+      state.log.push(`Sacrifices ${others[0].name} as cost.`);
     } else {
-      state.log.push('Nenhuma criatura disponivel para sacrificar.');
+      state.log.push('No creature available to sacrifice.');
     }
   }
 
@@ -14275,13 +14711,48 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       .sort((a: any, b: any) => CardEngine.getPower(a) - CardEngine.getPower(b));
     if (tokens.length > 0) {
       creatureDies(state, tokens[0], pid);
-      state.log.push(`Sacrifica ${tokens[0].name} token como custo.`);
+      state.log.push(`Sacrifices ${tokens[0].name} token as cost.`);
     } else {
-      state.log.push('Nenhuma token disponivel para sacrificar.');
+      state.log.push('No token available to sacrifice.');
     }
   }
 
   // Self-sacrifice cost (e.g. Sunset Strikemaster: "sacrifice this, deal 6 to flying creature")
+  // Pre-check: if human and ability requires targets, verify targets exist BEFORE sacrificing
+  if (ability.cost?.sacrifice && state.players[pid].isHuman) {
+    for (const eff of (ability.effects || [])) {
+      if (eff.type === 'destroy' && (eff.target === 'artifact_or_enchantment' || eff.target === 'opponent_artifact_or_enchantment')) {
+        const allBF2 = [
+          ...state.players[0].zones.battlefield.cards.map((c: any) => ({ c, cpid: 0 })),
+          ...state.players[1].zones.battlefield.cards.map((c: any) => ({ c, cpid: 1 })),
+        ];
+        const hasTarget = allBF2.some(({ c, cpid }) =>
+          cpid !== pid && (CardEngine.isArtifact(c) || CardEngine.isEnchantment(c)) &&
+          CardEngine.canBeTargeted(c, pid)
+        );
+        if (!hasTarget) {
+          state.log.push(`${creature.name}: no valid target (artifact or enchantment) — can't activate.`);
+          _afterResolve(state);
+          return;
+        }
+      }
+      if (eff.type === 'damage' && eff.target === 'creature_with_flying') {
+        const allBF2 = [
+          ...state.players[0].zones.battlefield.cards.map((c: any) => ({ c, cpid: 0 })),
+          ...state.players[1].zones.battlefield.cards.map((c: any) => ({ c, cpid: 1 })),
+        ];
+        const hasTarget = allBF2.some(({ c }) =>
+          CardEngine.isCreature(c) && CardEngine.hasKeyword(c, 'Flying') &&
+          CardEngine.canBeTargeted(c, pid)
+        );
+        if (!hasTarget) {
+          state.log.push(`${creature.name}: no creature with flying — can't activate.`);
+          _afterResolve(state);
+          return;
+        }
+      }
+    }
+  }
   if (ability.cost?.sacrifice) {
     if (CardEngine.isCreature(creature)) {
       creatureDies(state, creature, pid);
@@ -14296,7 +14767,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
         state.players[pid].zones.graveyard.add(creature);
       }
     }
-    state.log.push(`${creature.name} se sacrifica como custo.`);
+    state.log.push(`${creature.name} sacrifices itself as cost.`);
   }
 
   // Discard hand cost (Reverberating Summons: discard your hand as part of ability cost)
@@ -14306,7 +14777,7 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       state.players[pid].zones.hand.remove(hcard._uid);
       state.players[pid].zones.graveyard.add(hcard);
     }
-    if (handCards.length > 0) state.log.push(`${creature.name}: descarta mao (${handCards.length} cartas) como custo.`);
+    if (handCards.length > 0) state.log.push(`${creature.name}: discards hand (${handCards.length} cards) as cost.`);
   }
 
   // Exile GY creature cost (AI fallback path — human handled via overlay above)
@@ -14316,13 +14787,13 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
       const victim = gyCreatures.sort((a: any, b: any) => (a.cmc || 0) - (b.cmc || 0))[0];
       state.players[pid].zones.graveyard.remove(victim._uid);
       state.players[pid].zones.exile.add(victim);
-      state.log.push(`Exila ${victim.name} do cemiterio como custo.`);
+      state.log.push(`Exiles ${victim.name} from graveyard as cost.`);
       const gyLeaveLogs = fireTrigger(state, 'card_leaves_graveyard', { playerId: pid, card: victim });
       state.log.push(...gyLeaveLogs);
     }
   }
 
-  state.log.push(`${creature.name}: habilidade ativada!`);
+  state.log.push(`${creature.name}: activated ability!`);
 
   // Human interactive targeting: for destroy effects that target artifact_or_enchantment,
   // pause and let the player choose (reuses the etb_destroy_target overlay/resolver).
@@ -14349,11 +14820,42 @@ export function activateBattlefieldAbility(state: any, pid: number, cardUid: str
           optional: !!destroyEff.optional,
           maxDestroy: destroyEff.up_to || 1,
         };
-        state.log.push(`${creature.name}: escolha um artefato ou encantamento para destruir.`);
+        state.log.push(`${creature.name}: choose an artifact or enchantment to destroy.`);
         _afterResolve(state);
         return;
       }
-      state.log.push(`${creature.name}: sem artefato ou encantamento valido para destruir.`);
+      state.log.push(`${creature.name}: no valid artifact or enchantment to destroy.`);
+      _afterResolve(state);
+      return;
+    }
+
+    // Human interactive targeting: for damage effects that target creature_with_flying
+    // (e.g. Sunset Strikemaster: deal 6 to target creature with flying)
+    const dmgFlyingEff = (ability.effects || []).find((e: any) =>
+      e.type === 'damage' && e.target === 'creature_with_flying'
+    );
+    if (dmgFlyingEff) {
+      const allBF = [
+        ...state.players[0].zones.battlefield.cards.map((c: any) => ({ c, cpid: 0 })),
+        ...state.players[1].zones.battlefield.cards.map((c: any) => ({ c, cpid: 1 })),
+      ];
+      const validChoices = allBF.filter(({ c }) =>
+        CardEngine.isCreature(c) && CardEngine.hasKeyword(c, 'Flying') &&
+        CardEngine.canBeTargeted(c, pid)
+      );
+      if (validChoices.length > 0) {
+        state._pendingETBDestroy = { effect: dmgFlyingEff, controller: pid, cardUid: creature._uid };
+        state.waitingForInput = {
+          type: 'etb_destroy_target',
+          playerId: pid,
+          choices: validChoices.map(({ c, cpid }) => ({ ...c, _ownerPid: cpid })),
+          targetType: 'creature_with_flying',
+        };
+        state.log.push(`${creature.name}: choose a creature with flying to deal damage.`);
+        _afterResolve(state);
+        return;
+      }
+      state.log.push(`${creature.name}: no creature with flying to deal damage.`);
       _afterResolve(state);
       return;
     }
@@ -14389,7 +14891,7 @@ export function resolveActivationTapCreature(state: any, tappedUid: string | nul
 
   // Tap the chosen creature as cost
   tapped._tapped = true;
-  state.log.push(`Vira ${tapped.name} como custo.`);
+  state.log.push(`Taps ${tapped.name} as cost.`);
 
   const abilities = CardEngine.getActivatedAbilities(creature);
   const ability = abilities[pending.abilityIdx];
@@ -14413,7 +14915,7 @@ export function resolveActivationTapCreature(state: any, tappedUid: string | nul
     state._abilityUsedThisTurn[creature._uid + '_' + pending.abilityIdx] = true;
   }
 
-  state.log.push(`${creature.name}: habilidade ativada!`);
+  state.log.push(`${creature.name}: activated ability!`);
 
   for (const effect of (ability.effects || [])) {
     const data: any = { cardUid: creature._uid, card: creature };
@@ -14453,7 +14955,7 @@ function _continueActivationAfterSacrifice(state: any, pending: any): void {
     state._abilityUsedThisTurn[creature._uid + '_' + pending.abilityIdx] = true;
   }
 
-  state.log.push(`${creature.name}: habilidade ativada!`);
+  state.log.push(`${creature.name}: activated ability!`);
 
   // Resolve effects
   for (const effect of (ability.effects || [])) {
@@ -14475,7 +14977,7 @@ export function resolveExileGYCreatureCost(state: any, cardUid: string | null) {
   state.waitingForInput = null;
 
   if (!pending || !cardUid) {
-    state.log.push('Cancelou habilidade.');
+    state.log.push('Ability cancelled.');
     _afterResolve(state);
     return;
   }
@@ -14485,7 +14987,7 @@ export function resolveExileGYCreatureCost(state: any, cardUid: string | null) {
   if (gyCard) {
     state.players[pending.pid].zones.graveyard.remove(cardUid);
     state.players[pending.pid].zones.exile.add(gyCard);
-    state.log.push(`Exila ${gyCard.name} do cemiterio como custo.`);
+    state.log.push(`Exiles ${gyCard.name} from graveyard as cost.`);
     // Fire card_leaves_graveyard trigger (e.g. Attuned Hunter)
     const gyLeaveLogs = fireTrigger(state, 'card_leaves_graveyard', { playerId: pending.pid, card: gyCard });
     state.log.push(...gyLeaveLogs);
@@ -14513,7 +15015,7 @@ export function resolveExileGYCreatureCost(state: any, cardUid: string | null) {
     state._abilityUsedThisTurn[creature._uid + '_' + pending.abilityIdx] = true;
   }
 
-  state.log.push(`${creature.name}: habilidade ativada!`);
+  state.log.push(`${creature.name}: activated ability!`);
   for (const effect of (ability.effects || [])) {
     const data: any = { cardUid: creature._uid, card: creature };
     const result = _resolveSimpleEffect(state, pending.pid, effect, data);

@@ -6,6 +6,8 @@ import type { GameCard } from './engine-types';
 export class Zone {
   name: string;
   cards: GameCard[];
+  /** Optional callback fired AFTER a card is added (used by battlefield for ETB) */
+  onAdd?: (card: GameCard) => void;
 
   constructor(name: string) {
     this.name = name;
@@ -14,6 +16,7 @@ export class Zone {
 
   add(card: GameCard): void {
     this.cards.push(card);
+    if (this.onAdd) this.onAdd(card);
   }
 
   addToTop(card: GameCard): void {

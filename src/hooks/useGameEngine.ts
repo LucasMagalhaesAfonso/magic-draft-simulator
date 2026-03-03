@@ -414,6 +414,8 @@ export interface GameActions {
 
   // Look-top choice
   resolveLookTop(choices: string[]): void;
+  resolveBotanistLook(choice: 'hand' | 'graveyard' | 'top'): void;
+  resolveBounceToLibrary(position: 'top' | 'bottom'): void;
 
   // Reveal pick (Dragonologist etc.)
   resolveRevealPick(cardUid: string | null): void;
@@ -444,6 +446,12 @@ export interface GameActions {
 
   // GY return choice
   resolveGYReturn(cardUids: string[]): void;
+
+  resolveShuffleGYChoosePlayer(targetPid: number): void;
+  resolveShuffleGYChooseCards(cardUids: string[]): void;
+  resolveGYCounterTargets(targetUids: string[]): void;
+  resolveLegendRuleSacrifice(sacrificeUid: string): void;
+  activateGrantedAbility(creatureUid: string, abilityIdx: number): void;
 
   resolveGYBottomLibrary(cardUid: string | null): void;
 
@@ -601,6 +609,20 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         refresh();
       }, 350);
       return;
+    }
+    // Check for queued legend rule (deferred because ETB needed input first)
+    if (!gs.waitingForInput && gs._queuedLegendRule) {
+      const legendData = gs._queuedLegendRule;
+      delete gs._queuedLegendRule;
+      // Verify there are still duplicates on BF (the sacrificed card may have already left)
+      const bf = gs.players[legendData.controllerId].zones.battlefield;
+      const stillAlive = legendData.candidates.filter((c: any) => bf.get(c.uid));
+      if (stillAlive.length > 1) {
+        gs._pendingLegendRuleSacrifice = { ...legendData, candidates: stillAlive };
+        gs.waitingForInput = { type: 'legend_rule_sacrifice', playerId: legendData.controllerId };
+        refresh();
+        return;
+      }
     }
     if (!gs.waitingForInput && !gs.winner && _GS) {
       const ap = gs.activePlayer;
@@ -762,7 +784,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         // When human confirms attackers (Space in combat_attackers), fire attack triggers
         // and tap attackers before advancing. This mirrors what the AI path does.
         if (prevWaiting?.type === 'declare_attackers' && gs.combat?.attackers?.length > 0) {
-          // Tap attacking creatures (unless vigilance) and fire "attacks" + "becomes_tapped" triggers
+          // Tap attacking creatures (unless vigilance)
           for (const entry of gs.combat.attackers) {
             const attacker = (entry as any).card || entry;
             if (!attacker) continue;
@@ -770,18 +792,13 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
               (attacker.oracle_text || '').toLowerCase().includes('vigilance');
             if (!hasVigilance && !attacker._tapped) {
               attacker._tapped = true;
-              // Fire becomes_tapped trigger (e.g. Rescue Leopard)
-              if (_GS?.fireTrigger) {
-                const tapLogs = _GS.fireTrigger(gs, 'becomes_tapped', {
-                  cardUid: attacker._uid,
-                  card: attacker,
-                  controllerId: 0,
-                });
-                if (tapLogs?.length > 0) gs.log.push(...tapLogs);
-              }
             }
             // Mark as tapped-by-attack to prevent double-tap in resetCombatState
             attacker._tappedByAttack = true;
+          }
+          // Centralized becomes_tapped detection (fires for Rescue Leopard, Traveling Botanist, etc.)
+          if (_GS?.detectAndFireTapTriggers) {
+            _GS.detectAndFireTapTriggers(gs);
           }
           if (_Combat?.fireAttackTriggers) {
             const triggerLogs = _Combat.fireAttackTriggers(gs.combat, gs, 0);
@@ -1008,6 +1025,8 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (!gs._skipWardCheck && !_spellCantBeCountered && targets && targets.length > 0 && _Cards) {
           for (const t of targets) {
             if (t.type !== 'creature') continue;
+            // Ward only triggers when an OPPONENT targets the creature
+            if (t.player === pid) continue;
             const wCreature = gs.players[t.player]?.zones?.battlefield?.get(t.uid);
             if (!wCreature || !(_Cards as any).hasKeyword(wCreature, 'Ward')) continue;
             const wMatch = (wCreature.oracle_text || '').match(/ward[\s\u2014\-]+\{?(\d+)\}?/i);
@@ -1023,15 +1042,17 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (gs._skipWardCheck) delete (gs as any)._skipWardCheck;
 
         // Apply affinity discount (Salt Road Packbeast, etc.) before canPay check
+        // Note: _effectiveCmc may have already reduced tapCmc above — we must update
+        // tapCost string AND recalculate tapCmc from the parsed cost to avoid double-reduction.
         if (tapCost && tapCmc > 0 && _GS && _Mana && _Cards && _Cards.hasAffinity(card)) {
           const affinityDiscount = _GS.calculateAffinityDiscount(gs, pid, card);
           if (affinityDiscount > 0) {
             const parsedCost = _Mana.parseCost(tapCost);
-            const oldGeneric = parsedCost.generic;
             parsedCost.generic = Math.max(0, parsedCost.generic - affinityDiscount);
-            const actualDiscount = oldGeneric - parsedCost.generic;
             tapCost = _Mana.costToString(parsedCost);
-            tapCmc = Math.max(0, tapCmc - actualDiscount);
+            // Recalculate tapCmc from the actual parsed cost (not by subtracting from potentially already-reduced value)
+            const coloredTotal = Object.values(parsedCost.colored as Record<string, number>).reduce((a: number, b: number) => a + b, 0);
+            tapCmc = parsedCost.generic + coloredTotal;
           }
         }
 
@@ -1243,6 +1264,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
         }
 
+        // Fallback: fire becomes_tapped triggers after castSpell returns (in case castSpell didn't catch them)
+        if (result?.success !== false && _GS?.detectAndFireTapTriggers) {
+          _GS.detectAndFireTapTriggers(gs);
+        }
+
         // Ensure human stays in main_phase after successful cast (prevents race with autoPass)
         if (result?.success !== false && !gs.waitingForInput &&
             (gs.phase === 'main1' || gs.phase === 'main2') && gs.players[pid]?.isHuman) {
@@ -1440,6 +1466,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             (card._tempKeywords || []).some((k: any) => (typeof k === 'string' ? k : k?.keyword || '').toLowerCase() === 'defender');
           const hasCanAttack = (card.keywords || []).some((k: string) => k?.toLowerCase().replace(/_/g, ' ') === 'can attack') ||
             (card._tempKeywords || []).some((k: any) => (typeof k === 'string' ? k : k?.keyword || '').toLowerCase().replace(/_/g, ' ') === 'can attack');
+          console.log(`[ATTACK CHECK] ${card.name}: tapped=${card._tapped}, sick=${card._summoningSick}, haste=${hasHaste}, defender=${hasDefender}, canAttack=${hasCanAttack}, preventUntap=${card._preventUntap}`);
           if (!card._tapped && (!card._summoningSick || hasHaste) && (!hasDefender || hasCanAttack)) {
             card._attacking = true;
             if (!gs.combat.attackers) gs.combat.attackers = [];
@@ -1965,8 +1992,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       if (!gs || !_GS) return;
       try {
         _GS.resolveGraveyardCastChoice(gs, cardUid);
-        gs.waitingForInput = null;
-        afterResolve(gs);
+        // DON'T null waitingForInput here — the callback inside resolveGraveyardCastChoice
+        // may have set a NEW waitingForInput (e.g. ETB of copied creature needs human input)
+        if (!gs.waitingForInput) {
+          afterResolve(gs);
+        }
         refresh();
       } catch (e) { console.warn('[resolveGraveyardCastChoice] error:', e); }
     },
@@ -2068,7 +2098,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         gs.waitingForInput = null;
         delete (gs as any)._pendingLegendaryChoice;
         if (choice === 'keep_new') {
-          // Resume the cast with legendary check skipped
+          // Resume cast — skip the pre-cast legendary check (castSpell handles legend rule internally now)
           (gs as any)._skipLegendaryCheck = true;
           if (typeof (_GS as any)?.castSpell === 'function') {
             (_GS as any).castSpell(
@@ -2676,8 +2706,10 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         gs._humanChosenX = xValue;
         gs.waitingForInput = null;
         delete gs._pendingXCast;
-        // Re-trigger the cast: harmonize or normal spell
-        if (pending.isHarmonize) {
+        // Re-trigger: graveyard ability, harmonize, or normal spell
+        if (pending.isGraveyardAbility) {
+          actions.activateGraveyardAbility(pending.cardUid, pending.abilityIdx);
+        } else if (pending.isHarmonize) {
           actions.castHarmonize(pending.cardUid, pending.targets || [], pending.tappedCreatureUid);
         } else {
           actions.castSpell(pending.cardUid, pending.targets || []);
@@ -2731,6 +2763,56 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveLookTop]', e); }
+    },
+
+    // ── Bounce to library choice (Riverwalk Technique) ─────────────────
+
+    resolveBounceToLibrary(position: 'top' | 'bottom') {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const pending = gs._pendingBounceToLibrary;
+        if (!pending) { gs.waitingForInput = null; afterResolve(gs); refresh(); return; }
+        const card = pending.card;
+        delete gs._pendingBounceToLibrary;
+        gs.waitingForInput = null;
+        if (position === 'top') {
+          gs.players[pending.ownerId].zones.library.addToTop(card);
+          gs.log.push(`${card.name} is put on top of library.`);
+        } else {
+          gs.players[pending.ownerId].zones.library.addToBottom(card);
+          gs.log.push(`${card.name} is put on the bottom of library.`);
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveBounceToLibrary]', e); }
+    },
+
+    // ── Botanist look (Traveling Botanist) ──────────────────────────────
+
+    resolveBotanistLook(choice: 'hand' | 'graveyard' | 'top') {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const pending = gs._pendingBotanistLook;
+        if (!pending) { gs.waitingForInput = null; afterResolve(gs); refresh(); return; }
+        const card = pending.card;
+        delete gs._pendingBotanistLook;
+        gs.waitingForInput = null;
+        if (choice === 'hand' && pending.isLand) {
+          gs.players[pending.controllerId].zones.hand.add(card);
+          gs.log.push(`${card.name} (land) goes to hand.`);
+        } else if (choice === 'graveyard') {
+          gs.players[pending.controllerId].zones.graveyard.add(card);
+          gs.log.push(`${card.name} goes to graveyard.`);
+        } else {
+          // top — put back on top of library
+          gs.players[pending.controllerId].zones.library.addToTop(card);
+          gs.log.push(`${card.name} stays on top of library.`);
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveBotanistLook]', e); }
     },
 
     // ── Reveal pick (Dragonologist etc.) ────────────────────────────────
@@ -2980,6 +3062,36 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveGYReturn]', e); }
+    },
+
+    resolveShuffleGYChoosePlayer(targetPid: number) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveShuffleGYChoosePlayer(gs, targetPid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveShuffleGYChoosePlayer]', e); }
+    },
+
+    resolveShuffleGYChooseCards(cardUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveShuffleGYChooseCards(gs, cardUids);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveShuffleGYChooseCards]', e); }
+    },
+
+    resolveGYCounterTargets(targetUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveGYCounterTargets(gs, targetUids);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGYCounterTargets]', e); }
     },
 
     resolveGYBottomLibrary(cardUid: string | null) {

@@ -499,6 +499,8 @@ export function _resolveItem(item, state) {
           if (tgt === 'artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact'));
           else if (tgt === 'enchantment') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Enchantment'));
           else if (tgt === 'opponent_artifact_or_enchantment') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && (Cards.isArtifact(c) || Cards.isEnchantment(c)) && Cards.canBeTargeted(c, controller));
+          else if (tgt === 'opponent_artifact_or_creature') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && (Cards.isArtifact(c) || Cards.isCreature(c)) && Cards.canBeTargeted(c, controller));
+          else if (tgt === 'opponent_nonland') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && !Cards.isLand(c) && Cards.canBeTargeted(c, controller));
           else if (tgt === 'creature_with_flying') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.hasKeyword(c, 'Flying') && Cards.canBeTargeted(c, controller));
           else if (tgt === 'noncreature_artifact') validChoices = allBFCards.filter(({ c }) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
           else if (tgt === 'creature_power4+') validChoices = allBFCards.filter(({ c, pid }) => pid !== controller && Cards.isCreature(c) && Cards.getPower(c) >= 4 && Cards.canBeTargeted(c, controller));
@@ -578,6 +580,7 @@ export function _resolveItem(item, state) {
               if (died) log.push(`${permanent.name} is destroyed.`);
             } else {
               // Non-creature permanent (enchantment, artifact, planeswalker)
+              GameState.cleanupLeavingPermanent(gameState, permanent, target.player);
               bf.remove(permanent._uid);
               GameState._unregisterCardTriggers(gameState, permanent._uid);
               // Fire leaves_battlefield trigger
@@ -586,17 +589,8 @@ export function _resolveItem(item, state) {
               // Return temporarily exiled cards (e.g. Stormplain Detainment)
               const returned = GameState.returnTemporaryExiles(gameState, permanent._uid);
               returned.forEach(name => log.push(`${name} retorna ao campo de batalha.`));
-              // Legacy fallback
-              if (permanent._exiledUntilLeaves && permanent._exiledUntilLeaves.length > 0) {
-                for (const exiled of permanent._exiledUntilLeaves) {
-                  if (exiled) {
-                    gameState.players[exiled._owner || target.player].zones.exile.remove(exiled._uid);
-                    gameState.players[exiled._owner || target.player].zones.battlefield.add(exiled);
-                    log.push(`${exiled.name} retorna ao campo de batalha.`);
-                  }
-                }
-                permanent._exiledUntilLeaves = [];
-              }
+              // Clear legacy _exiledUntilLeaves (return handled by returnTemporaryExiles above)
+              if (permanent._exiledUntilLeaves) permanent._exiledUntilLeaves = [];
               gameState.players[target.player].zones.graveyard.add(permanent);
               log.push(`${permanent.name} is destroyed.`);
               vfxPlay('destroy', permanent._uid);
@@ -683,6 +677,9 @@ export function _resolveItem(item, state) {
             // Store exiled card on the source card for LtB trigger
             if (!card._exiledByPriest) card._exiledByPriest = [];
             card._exiledByPriest.push({ card: exiledCard, cmc: exiledCard.cmc || 0 });
+            // Visual: show exiled card underneath the priest
+            if (!card._exiledCards) card._exiledCards = [];
+            card._exiledCards.push(exiledCard);
             log.push(`${exiledCard.name} is exiled from opponent's hand.`);
           }
         } else if (effect.target === 'nonland_from_hand') {
@@ -832,17 +829,7 @@ export function _resolveItem(item, state) {
           const exile = gameState.players[pid].zones.exile;
           const toExile = bf.cards.filter(c => Cards.isCreature(c));
           for (const c of toExile) {
-            // Remove aura effects if this creature has auras
-            if (c._attachments) {
-              for (const attUid of c._attachments) {
-                for (const p of gameState.players) {
-                  const att = p.zones.battlefield.get(attUid);
-                  if (att && Cards.isAura(att)) {
-                    GameState._removeAuraEffects(gameState, att, c);
-                  }
-                }
-              }
-            }
+            GameState.cleanupLeavingPermanent(gameState, c, pid);
             bf.remove(c._uid);
             GameState._unregisterCardTriggers(gameState, c._uid);
             exile.add(c);
@@ -936,17 +923,8 @@ export function _resolveItem(item, state) {
             vfxPlay('bounce', permanent._uid);
             bouncedUids.add(permanent._uid);
 
-            // If aura, remove effects from enchanted creature
-            if (Cards.isAura(permanent) && permanent._attachedTo) {
-              for (const p of gameState.players) {
-                const enchanted = p.zones.battlefield.get(permanent._attachedTo);
-                if (enchanted) {
-                  GameState._removeAuraEffects(gameState, permanent, enchanted);
-                  enchanted._attachments = enchanted._attachments.filter(uid => uid !== permanent._uid);
-                  break;
-                }
-              }
-            }
+            // Clean up aura/equipment effects before removing
+            GameState.cleanupLeavingPermanent(gameState, permanent, target.player);
 
             bf.remove(permanent._uid);
             GameState._unregisterCardTriggers(gameState, permanent._uid);
@@ -987,6 +965,8 @@ export function _resolveItem(item, state) {
             }
             vfxPlay('bounce', permanent._uid);
 
+            // Clean up aura/equipment effects before removing
+            GameState.cleanupLeavingPermanent(gameState, permanent, target.player);
             // Remove from battlefield
             bf.remove(permanent._uid);
             GameState._unregisterCardTriggers(gameState, permanent._uid);
@@ -998,17 +978,17 @@ export function _resolveItem(item, state) {
             const position = effect.position || 'top'; // default to top
             if (permanent._isToken) {
               log.push(`${permanent.name} token vanishes.`);
+            } else if (gameState.players[target.player].isHuman && effect.position === 'top_or_bottom') {
+              // Owner is human and gets to choose top or bottom
+              gameState._pendingBounceToLibrary = {
+                card: permanent,
+                ownerId: target.player,
+              };
+              gameState.waitingForInput = { type: 'bounce_to_library_choice', playerId: target.player };
             } else {
               // AI always chooses bottom (to avoid redrawing it immediately)
-              // Human would get UI choice (not implemented yet - defaults to top)
-              const chosenPosition = target.player === 0 ? 'top' : 'bottom'; // player 0 = human (top), player 1 = AI (bottom)
-              if (chosenPosition === 'top') {
-                gameState.players[target.player].zones.library.putOnTop(permanent);
-                log.push(`${permanent.name} is put on top of library.`);
-              } else {
-                gameState.players[target.player].zones.library.putOnBottom(permanent);
-                log.push(`${permanent.name} is put on the bottom of library.`);
-              }
+              gameState.players[target.player].zones.library.addToBottom(permanent);
+              log.push(`${permanent.name} is put on the bottom of library.`);
             }
           }
         }
@@ -1176,12 +1156,28 @@ export function _resolveItem(item, state) {
             }
           });
           log.push(`All creatures get ${bp >= 0 ? '+' : ''}${bp}/${bt >= 0 ? '+' : ''}${bt}.`);
-        } else if (effect.type === 'multi_buff_up_to' && targets && targets.length > 0) {
-          // Rally the Monastery: buff multiple targets
-          for (const target of targets) {
-            const bf = gameState.players[target.player].zones.battlefield;
-            const creature = bf.get(target.uid);
-            if (creature && Cards.canBeTargeted(creature, controller)) {
+        } else if (effect.type === 'multi_buff_up_to') {
+          // Rally the Monastery: buff up to N creatures
+          const maxTargets = effect.max_targets || 1;
+          const myBf = gameState.players[controller].zones.battlefield;
+          const candidates = myBf.cards.filter((c: any) => Cards.isCreature(c));
+          if (candidates.length > 0 && gameState.players[controller].isHuman) {
+            // Human: show multi-select overlay
+            gameState._pendingMultiBuffChoice = {
+              playerId: controller,
+              effect: effect,
+              candidates: candidates.map((c: any) => c._uid),
+              selected: [],
+              maxTargets: maxTargets,
+              sourceUid: card?._uid
+            };
+            gameState.waitingForInput = { type: 'multi_buff_choice', playerId: controller };
+            log.push(`Choose up to ${maxTargets} creature(s) to get +${effect.power || 0}/+${effect.toughness || 0}.`);
+          } else if (candidates.length > 0) {
+            // AI: pick best creatures
+            candidates.sort((a: any, b: any) => Cards.getPower(b) - Cards.getPower(a));
+            const chosen = candidates.slice(0, Math.min(maxTargets, candidates.length));
+            for (const creature of chosen) {
               const r = applyBuff(creature);
               log.push(`${creature.name} gets ${r.p >= 0 ? '+' : ''}${r.p}/${r.t >= 0 ? '+' : ''}${r.t}.`);
             }
@@ -1656,12 +1652,7 @@ export function _resolveItem(item, state) {
         bf.add(token);
         GameState._registerCardTriggers(gameState, token, opponentForToken);
 
-        // Return the exiled card to opponent's hand
-        if (exiledData.card) {
-          gameState.players[opponentForToken].zones.hand.add(exiledData.card);
-          log.push(`${exiledData.card.name} returns to its owner's hand.`);
-        }
-
+        // Exiled card stays in exile (oracle doesn't say it returns)
         log.push(`${opponentForToken === 0 ? 'You get' : 'Opponent gets'} a ${cmc}/${cmc} white Spirit token.`);
         break;
       }
@@ -1709,6 +1700,20 @@ export function _resolveItem(item, state) {
           bf.add(token);
           gameState._lastCreatedToken = token._uid;
           GameState._registerCardTriggers(gameState, token, tokenOwner);
+          // Register prowess trigger for tokens with Prowess keyword (tokens aren't in CardEffectsDB)
+          if (token.keywords?.some((kw: string) => kw.toLowerCase() === 'prowess')) {
+            if (!gameState._triggers) gameState._triggers = [];
+            gameState._triggers.push({
+              event: 'cast_noncreature',
+              self: false,
+              cardUid: token._uid,
+              cardName: token.name,
+              controllerId: tokenOwner,
+              _registeredAtSpellCount: gameState._spellsThisTurn?.[tokenOwner] || 0,
+              _registeredAtTurn: gameState.turn,
+              effects: [{ type: 'buff', power: 1, toughness: 1, target: 'self', duration: 'end_of_turn' }]
+            });
+          }
           // Fire other_creature_enters / creature_etb for tokens (Shocking Sharpshooter etc.)
           if (Cards.isCreature(token)) {
             const enterLogs = GameState.fireTrigger(gameState, 'other_creature_enters', { cardUid: token._uid, playerId: tokenOwner, entering: true });
@@ -2323,16 +2328,30 @@ export function _resolveItem(item, state) {
           if (auraCard && auraCard._attachedTo) {
             const ownerPid = auraCard._attachedToOwner ?? opponent;
             const enchanted = gameState.players[ownerPid].zones.battlefield.get(auraCard._attachedTo);
-            if (enchanted) {
+            if (enchanted && !enchanted._tapped) {
               enchanted._tapped = true;
+              enchanted._tapTriggerFired = true;
               log.push(`${enchanted.name} is tapped by ${auraCard.name}.`);
+              // Fire becomes_tapped triggers immediately (Rescue Leopard rummage, etc.)
+              const tapLogs = GameState.fireTrigger(gameState, 'becomes_tapped', {
+                cardUid: enchanted._uid, card: enchanted, controllerId: ownerPid
+              });
+              if (tapLogs.length > 0) log.push(...tapLogs);
             }
           }
           break;
         }
         if (effect.target === 'all_opponent_creatures') {
           const tapCreatures = gameState.players[opponent].zones.battlefield.cards.filter(c => Cards.isCreature(c));
-          tapCreatures.forEach(c => { c._tapped = true; });
+          tapCreatures.forEach(c => {
+            const wasTapped = c._tapped;
+            c._tapped = true;
+            c._tapTriggerFired = true;
+            if (!wasTapped) {
+              const tapLogs = GameState.fireTrigger(gameState, 'becomes_tapped', { cardUid: c._uid, card: c, controllerId: opponent });
+              log.push(...tapLogs);
+            }
+          });
           log.push(`All opponent's creatures are tapped.`);
         } else if (targets && targets.length > 0) {
           const target = targets[0];
@@ -2345,6 +2364,7 @@ export function _resolveItem(item, state) {
             }
             const wasTapped = creature._tapped;
             creature._tapped = true;
+            creature._tapTriggerFired = true;
             log.push(`${creature.name} is tapped.`);
             // Fire becomes_tapped trigger
             if (!wasTapped) {
@@ -2374,6 +2394,7 @@ export function _resolveItem(item, state) {
           );
           for (const c of tapCandidates.slice(0, maxTap)) {
             c._tapped = true;
+            c._tapTriggerFired = true;
             log.push(`${c.name} is tapped.`);
             GameState.fireTrigger(gameState, 'becomes_tapped', { cardUid: c._uid, card: c, controllerId: tapOpponent });
           }
@@ -2604,7 +2625,6 @@ export function _resolveItem(item, state) {
             }
 
             gameState.players[controller].zones.battlefield.add(bfCard);
-            GameState._registerCardTriggers(gameState, bfCard, controller);
             gameState._lastReturnedUIDs.push({ uid: bfCard._uid, player: controller });
             log.push(`${card.name} returns from graveyard to the battlefield!`);
           }
@@ -2840,6 +2860,10 @@ export function _resolveItem(item, state) {
 export function _payWardCost(creature, controller, state, log, castingCantBeCountered = false) {
   const gameState = state;
   if (!Cards.hasKeyword(creature, 'Ward')) return true;
+
+  // Ward only triggers when an OPPONENT targets — skip if controller owns the creature
+  const creatureOwnerPid = state.players.findIndex((p: any) => p.zones.battlefield.get(creature._uid));
+  if (creatureOwnerPid === controller) return true;
 
   // If the originating spell can't be countered, ward's countering effect doesn't apply
   if (castingCantBeCountered) {

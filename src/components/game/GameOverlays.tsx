@@ -200,6 +200,10 @@ function describeMode(mode: any): string {
     const tLabel = typeof mode.toughness === 'string' ? amtLabel(mode.toughness) : `${mode.toughness || 0}`;
     return `${tgtLabel(tgt) || 'Creature'} gets +${pLabel}/+${tLabel}${dur}`;
   }
+  if (t === 'multi_buff_up_to') {
+    const dur = mode.duration === 'end_of_turn' ? ' until end of turn' : '';
+    return `Up to ${mode.max_targets || 1} ${tgtLabel(tgt) || 'creatures'} each get +${mode.power || 0}/+${mode.toughness || 0}${dur}`;
+  }
   if (t === 'buff_all') {
     const dur = mode.duration === 'end_of_turn' ? ' until end of turn' : '';
     return `${tgtLabel(tgt) || 'All creatures'} get +${mode.power || 0}/+${mode.toughness || 0}${dur}`;
@@ -694,7 +698,7 @@ export function BounceMultiOverlay({ permanents, maxBounce, title, onConfirm }: 
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(selected)} disabled={selected.length === 0}>
-            Bounce ({selected.length})
+            Confirm ({selected.length})
           </button>
           <button className="btn btn-muted" onClick={() => onConfirm([])}>Skip</button>
         </div>
@@ -806,8 +810,16 @@ export function LookTopOverlay({ cards, pickCount, title, hint, keepLabel, disca
   function toggle(i: number) {
     setChoices(prev => {
       const next = [...prev];
-      if (next[i] === 'keep') { next[i] = 'graveyard'; }
-      else if (keptCount < maxKeep) { next[i] = 'keep'; }
+      if (next[i] === 'keep') {
+        next[i] = 'graveyard';
+      } else {
+        // If at max, swap: unkeep the first kept card, then keep this one
+        if (keptCount >= maxKeep) {
+          const firstKept = next.indexOf('keep');
+          if (firstKept >= 0) next[firstKept] = 'graveyard';
+        }
+        next[i] = 'keep';
+      }
       return next;
     });
   }

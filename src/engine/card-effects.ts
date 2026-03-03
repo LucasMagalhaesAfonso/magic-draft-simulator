@@ -659,7 +659,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "rot-curse rakshasa": {
     static: [{ type: "has_keyword", keywords: ["trample", "decayed"] }],
-    activated: [{ cost: { mana: "XBB", zone: "graveyard", exile: true }, sorcerySpeed: true, effects: [{ type: "grant_counter", counter: "decayed", amount: "X", target: "opponent_creatures" }] }]
+    activated: [{ cost: { mana: "XBB", zone: "graveyard", exile: true }, sorcerySpeed: true, effects: [{ type: "grant_counter", counter: "decayed", amount: "X", target: "creatures" }] }]
   },
 
   "shiko, paragon of the way": {
@@ -782,8 +782,8 @@ export const CardEffectsDB: Record<string, any> = {
 
   "rite of renewal": {
     cast: [
-      { type: "return_from_graveyard", target: "permanent", amount: 2, to_hand: true },
-      { type: "shuffle_gy_to_library", amount: 4, target: "any_player", optional: true }
+      { type: "return_from_graveyard", target: "permanent", amount: 2, to_hand: true, optional: true, up_to: true },
+      { type: "shuffle_gy_to_library", amount: 4, target: "choose_player", up_to: true }
     ],
     exile_self: true
   },
@@ -1324,7 +1324,7 @@ export const CardEffectsDB: Record<string, any> = {
     chapters: {
       1: [{ type: "look_top", amount: 3, pick: 1, rest_to: "bottom" }],
       2: [{ type: "look_top", amount: 3, pick: 1, rest_to: "bottom" }],
-      3: [{ type: "grant", keywords: ["double_strike"], target: "own_creature", condition: "cast_noncreature", duration: "end_of_turn" }]
+      3: [{ type: "register_temp_trigger", event: "cast_noncreature", effects: [{ type: "grant", keywords: ["double_strike"], target: "own_creature", duration: "end_of_turn" }] }]
     }
   },
   "revival of the ancestors": {
@@ -1373,8 +1373,8 @@ export const CardEffectsDB: Record<string, any> = {
   "seize opportunity": {
     modal: {
       modes: [
-        { label: "Exile top 2 play", effects: [{ type: "exile_top_play", amount: 2 }] },
-        { label: "+2/+1 two creatures", effects: [{ type: "buff", power: 2, toughness: 1, target: "own_creatures", count: 2, duration: "end_of_turn" }] }
+        { label: "Exile the top 2 cards of your library. Until end of your next turn, you may play them.", effects: [{ type: "exile_top_play", amount: 2, duration: "next_turn" }] },
+        { label: "Up to 2 target creatures each get +2/+1 until end of turn.", effects: [{ type: "multi_buff_up_to", power: 2, toughness: 1, target: "own_creature", max_targets: 2, duration: "end_of_turn" }] }
       ]
     }
   },
@@ -1515,10 +1515,8 @@ export const CardEffectsDB: Record<string, any> = {
       self: true,
       effects: [
         {
-          type: "look_top",
-          amount: 1,
-          condition: "land_to_hand",
-          optional: true
+          type: "look_top_botanist",
+          amount: 1
         }
       ]
     }]
@@ -1667,6 +1665,8 @@ export const CardEffectsDB: Record<string, any> = {
 
   "purging stormbrood": {
     etb: [{ type: "remove_counters_all", target: "creature", optional: true, up_to: 1 }],
+    cast: [{ type: "buff", power: 2, toughness: 2, target: "creature", duration: "end_of_turn" }, { type: "grant", keywords: ["lifelink", "hexproof"], target: "creature", duration: "end_of_turn" }],
+    omen: true,
     static: [{ type: "has_keyword", keywords: ["flying", "ward"] }]
   },
   "runescale stormbrood": {

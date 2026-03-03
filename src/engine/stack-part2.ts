@@ -263,6 +263,51 @@ export function handleClash(
   return null;
 }
 
+/**
+ * Undo a counter spell that can't legally resolve — return spell to hand + restore mana.
+ */
+function _undoCounterSpell(state: any, controller: number, log: string[]) {
+  // Use existing pre-cast mana snapshot if available
+  if (state._preCastManaSnapshot) {
+    state.manaPool[controller] = { ...state._preCastManaSnapshot.pool };
+    const bf = state.players[controller].zones.battlefield;
+    for (const land of bf.cards) {
+      if (state._preCastManaSnapshot.tapped.includes(land._uid)) {
+        land._tapped = true;
+      } else {
+        land._tapped = false;
+      }
+    }
+    state._preCastManaSnapshot = null;
+  }
+  // Return spell from GY or pending to hand
+  if (state._pendingSpellToGY && state._pendingSpellToGY.card) {
+    state.players[controller].zones.hand.add(state._pendingSpellToGY.card);
+    state._pendingSpellToGY = null;
+    log.push('Spell returns to hand (illegal target).');
+  } else {
+    // Try to find it in GY
+    const gy = state.players[controller].zones.graveyard;
+    const allGy = gy.getAll();
+    const last = allGy[allGy.length - 1];
+    if (last) {
+      gy.remove(last._uid);
+      state.players[controller].zones.hand.add(last);
+      log.push('Spell returns to hand (illegal target).');
+    }
+  }
+  // Show notification
+  if (!state._triggerToastQueue) state._triggerToastQueue = [];
+  state._triggerToastQueue.push({
+    id: Date.now(),
+    cardName: 'Counter falhou',
+    effectDesc: 'Alvo é creature spell — não pode ser counterado por este efeito. Magia volta para a mão.',
+    controllerId: controller,
+    imageUrl: null,
+    imageUrlLarge: null,
+  });
+}
+
 export function handleCounterSpell(
   state: any,
   effect: any,
@@ -286,6 +331,17 @@ export function handleCounterSpell(
   if (targetSpell._uncounterable) {
     log.push(`${targetSpell.name} can't be countered.`);
     return null;
+  }
+
+  // Validate noncreature_spell restriction (e.g. Riverwalk Technique counter mode)
+  if (effect.target === 'noncreature_spell') {
+    const tl = (targetSpell.type_line || '').toLowerCase();
+    if (tl.includes('creature')) {
+      log.push(`${targetSpell.name} is a creature spell — can't be countered by this effect.`);
+      // Return spell to hand + restore mana (undo)
+      _undoCounterSpell(state, controller, log);
+      return null;
+    }
   }
 
   if (effect.max_mana_value !== undefined) {
@@ -535,6 +591,45 @@ export function handleBounceSelf(
   }
 }
 
+/**
+ * Traveling Botanist: "Look at the top card of your library.
+ * If it's a land card, you may reveal it and put it into your hand.
+ * If you don't put the card into your hand, you may put it into your graveyard."
+ */
+export function handleLookTopBotanist(
+  state: any,
+  controller: number,
+  log: string[]
+): string[] | null {
+  const lib = state.players[controller].zones.library;
+  if (lib.count() === 0) return null;
+  const topCard = lib.drawFromTop();
+  if (!topCard) return null;
+  const isLand = CardEngine.isLand(topCard);
+
+  if (state.players[controller].isHuman) {
+    // Human: always show the card and let them choose
+    state._pendingBotanistLook = {
+      card: topCard,
+      isLand,
+      controllerId: controller,
+    };
+    state.waitingForInput = { type: 'botanist_look', playerId: controller };
+    return log;
+  }
+
+  // AI: if land, take it; otherwise put on top (conservative)
+  if (isLand) {
+    state.players[controller].zones.hand.add(topCard);
+    log.push(`${topCard.name} (land) goes to hand.`);
+  } else {
+    // AI puts non-land back on top (could be graveyard but top is safer)
+    lib.addToTop(topCard);
+    log.push(`Looked at top card, kept on top.`);
+  }
+  return null;
+}
+
 export function handleLookTop(
   state: any,
   effect: any,
@@ -676,7 +771,9 @@ export function handleLookTop(
       const toBf = candidates.slice(0, putCount);
       const toBottom = [...candidates.slice(putCount), ...rest];
       toBf.forEach((c: any) => {
-        state.players[controller].zones.battlefield.add(c);
+        const bfCard = Cards.prepareForBattlefield(c);
+        bfCard._ownerId = controller;
+        state.players[controller].zones.battlefield.add(bfCard);
         log.push(`${c.name} enters the battlefield.`);
       });
       const shuffled = toBottom.sort(() => Math.random() - 0.5);
@@ -2160,6 +2257,69 @@ export function handleExtraCombat(
   log.push('Fase de combate adicional!');
 }
 
+function _placeGYCopyOnBattlefield(state: any, controller: number, picked: any, effects: any[], ei: number, log: string[]): void {
+  const egccGy = state.players[controller].zones.graveyard;
+  const egccExile = state.players[controller].zones.exile;
+
+  // Move original to exile
+  egccGy.remove(picked._uid);
+  egccExile.add(picked);
+
+  // Create a clean copy for the battlefield
+  const copy = CardEngine.prepareForBattlefield({ ...picked });
+  copy._uid = `copy_${picked._uid}_${Date.now()}`;
+  copy._isCopy = true;
+  copy._ownerId = controller;
+  // Clear stale data from previous life
+  delete copy._exiledByPriest;
+  delete copy._exiledCards;
+
+  // CRITICAL: Skip automatic ETB in onAdd — we'll fire it manually AFTER legendary rule
+  // This prevents waitingForInput contention between ETB and legendary rule
+  copy._etbFired = true;
+
+  // Manually register triggers (onAdd skips this when _etbFired is set)
+  state.players[controller].zones.battlefield.add(copy);
+  GameState._registerCardTriggers(state, copy, controller);
+
+  // Legendary rule check FIRST (state-based action, happens before triggers in MTG rules)
+  let legendRulePending = false;
+  if (CardEngine.isLegendary(copy)) {
+    const dupes = CardEngine.findLegendaryDuplicates(state, controller, copy.name)
+      .filter((c: any) => c._uid !== copy._uid);
+    if (dupes.length > 0) {
+      if (state.players[controller].isHuman) {
+        const allLegends = [copy, ...dupes];
+        state._pendingLegendRuleSacrifice = {
+          controllerId: controller,
+          candidates: allLegends.map((c: any) => ({
+            uid: c._uid, name: c.name,
+            isCopy: !!c._isCopy,
+            isNew: c._uid === copy._uid,
+          })),
+        };
+        state.waitingForInput = { type: 'legend_rule_sacrifice', playerId: controller };
+        // Defer ETB until after legend rule resolves
+        state._deferredETB = { card: copy, playerId: controller };
+        legendRulePending = true;
+      } else {
+        dupes.forEach((d: any) => {
+          state.players[controller].zones.battlefield.remove(d._uid);
+          GameState._unregisterCardTriggers(state, d._uid);
+          state.players[controller].zones.graveyard.add(d);
+        });
+      }
+    }
+  }
+
+  // Fire ETB now if no legend rule is blocking (AI or no duplicates)
+  if (!legendRulePending) {
+    GameState._fireETBOnEnter(state, copy, controller);
+  }
+
+  log.push(`Exila ${picked.name} do cemiterio e joga copia de graca!`);
+}
+
 export function handleExileGraveyardCastCopy(
   state: any,
   effect: any,
@@ -2169,8 +2329,6 @@ export function handleExileGraveyardCastCopy(
   log: string[]
 ): void {
   const egccGy = state.players[controller].zones.graveyard;
-  const egccExile = state.players[controller].zones.exile;
-  const egccBf = state.players[controller].zones.battlefield;
   let egccCandidates = egccGy.getAll().filter((c: any) => !CardEngine.isLand(c));
   if (effect.target === 'nonland_mv3_or_less') {
     egccCandidates = egccCandidates.filter((c: any) => (c.cmc || 0) <= 3);
@@ -2184,14 +2342,7 @@ export function handleExileGraveyardCastCopy(
   if (controller === 0 && state.players[0].isHuman && egccCandidates.length > 1) {
     GameState._setupGraveyardCastChoice(state, controller, egccCandidates, (picked: any) => {
       if (!picked) return;
-      egccGy.remove(picked._uid);
-      egccExile.add(picked);
-      egccBf.add(picked);
-      const etbEffects = CardEngine.getETBEffects(picked);
-      if (etbEffects.length > 0) {
-        effects.splice(ei + 1, 0, ...etbEffects);
-      }
-      log.push(`Exila ${picked.name} do cemiterio e joga copia de graca!`);
+      _placeGYCopyOnBattlefield(state, controller, picked, effects, ei, log);
     });
     log.push(`Escolha uma criatura do cemiterio para exilar e jogar.`);
     return;
@@ -2200,14 +2351,7 @@ export function handleExileGraveyardCastCopy(
   // AI or single option: auto-pick highest CMC
   egccCandidates.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
   const picked = egccCandidates[0];
-  egccGy.remove(picked._uid);
-  egccExile.add(picked);
-  egccBf.add(picked);
-  const etbEffects = CardEngine.getETBEffects(picked);
-  if (etbEffects.length > 0) {
-    effects.splice(ei + 1, 0, ...etbEffects);
-  }
-  log.push(`Exila ${picked.name} do cemiterio e joga copia de graca!`);
+  _placeGYCopyOnBattlefield(state, controller, picked, effects, ei, log);
 }
 
 // ============================================================
@@ -2441,6 +2585,8 @@ export function dispatch(
       return null;
     case 'look_top':
       return handleLookTop(state, effect, controller, log);
+    case 'look_top_botanist':
+      return handleLookTopBotanist(state, controller, log);
     case 'damage_all':
       handleDamageAll(state, effect, controller, resolveAmount, log);
       return null;
@@ -2455,9 +2601,31 @@ export function dispatch(
       return null;
     case 'shuffle_gy_to_library': {
       // Target player shuffles up to N cards from their GY into their library
-      // (Rite of Renewal: opponent shuffles up to 4)
       const shuffleAmount = effect.amount || 4;
-      const shuffleTargetPid = effect.target === 'self' ? controller : (controller === 0 ? 1 : 0); // Default: opponent
+
+      // Determine target player
+      let shuffleTargetPid: number;
+      if (effect.target === 'self') {
+        shuffleTargetPid = controller;
+      } else if (effect.target === 'choose_player') {
+        // Human: show player choice modal, then card selection
+        if (state.players[controller].isHuman) {
+          state._pendingShuffleGY = {
+            amount: shuffleAmount,
+            controller,
+            upTo: !!effect.up_to,
+            card,
+            remainingEffects: effects.slice(ei + 1),
+          };
+          state.waitingForInput = { type: 'shuffle_gy_choose_player', playerId: controller };
+          return log; // Pause for human choice
+        }
+        // AI: pick opponent (more disruptive)
+        shuffleTargetPid = controller === 0 ? 1 : 0;
+      } else {
+        shuffleTargetPid = controller === 0 ? 1 : 0; // Default: opponent
+      }
+
       const shuffleGY = state.players[shuffleTargetPid].zones.graveyard;
       const shuffleLib = state.players[shuffleTargetPid].zones.library;
       const gyAll = shuffleGY.getAll();

@@ -11,7 +11,7 @@ import {
   canBlock,
 } from './card-utils';
 import { vfxPlay } from './vfx-bridge';
-import { checkPreventDamageShield } from './game-state';
+import { checkPreventDamageShield, detectAndFireTapTriggers } from './game-state';
 
 // ============================================
 // Combat State Interface
@@ -557,8 +557,6 @@ export function resolveDamagePhase(
         : blockers;
 
       for (const { card: blocker } of orderedBlockers) {
-        if (remainingAttackPower <= 0) break;
-
         // Skip blockers removed from battlefield before damage (bounced, exiled, or killed by spells)
         const blockerOnBf = gameState.players[0].zones.battlefield.cards.some((c: any) => c._uid === blocker._uid) ||
                             gameState.players[1].zones.battlefield.cards.some((c: any) => c._uid === blocker._uid);
@@ -567,25 +565,29 @@ export function resolveDamagePhase(
         const blockerToughness = Math.max(0, getToughness(blocker) - blocker._damage);
         const blockerPower = getPower(blocker);
 
-        let dmgToBlocker = Math.min(remainingAttackPower, blockerToughness);
+        // Attacker assigns damage to this blocker (only if it still has power left)
+        let dmgToBlocker = 0;
+        if (remainingAttackPower > 0) {
+          dmgToBlocker = Math.min(remainingAttackPower, blockerToughness);
 
-        if (hasKeyword(attacker, 'Deathtouch', gameState) && remainingAttackPower > 0) {
-          dmgToBlocker = Math.min(remainingAttackPower, 1);
-        }
+          if (hasKeyword(attacker, 'Deathtouch', gameState) && remainingAttackPower > 0) {
+            dmgToBlocker = Math.min(remainingAttackPower, 1);
+          }
 
-        dealDamageToCreature(attacker, blocker, dmgToBlocker);
-        if (dmgToBlocker > 0) attacker._hasDealtDamage = true;
-        remainingAttackPower -= dmgToBlocker;
+          dealDamageToCreature(attacker, blocker, dmgToBlocker);
+          if (dmgToBlocker > 0) attacker._hasDealtDamage = true;
+          remainingAttackPower -= dmgToBlocker;
 
-        if (hasKeyword(attacker, 'Deathtouch', gameState) && dmgToBlocker > 0) {
-          if (hasKeyword(attacker, 'Wither', gameState)) {
-            // Wither+deathtouch: 1 -1/-1 counter kills via counters
-          } else {
-            blocker._damage = getToughness(blocker);
+          if (hasKeyword(attacker, 'Deathtouch', gameState) && dmgToBlocker > 0) {
+            if (hasKeyword(attacker, 'Wither', gameState)) {
+              // Wither+deathtouch: 1 -1/-1 counter kills via counters
+            } else {
+              blocker._damage = getToughness(blocker);
+            }
           }
         }
 
-        // Blocker deals damage to attacker.
+        // Blocker ALWAYS deals damage back to attacker (regardless of attacker's remaining power).
         // In FS phase: only FS/DS blockers deal damage.
         // In regular phase: FS-only blockers already dealt in the FS-blocker sub-phase; only non-FS or DS blockers deal here.
         const blockerDeals = isFirstStrike
@@ -715,22 +717,16 @@ export function resetCombatState(
     const combatCard = card as CombatGameCard;
     if (!hasKeyword(card, 'Vigilance')) {
       if (!combatCard._tappedByAttack) {
-        // AI attackers: tap now and fire triggers
-        const wasTapped = card._tapped;
+        // AI attackers: tap now (becomes_tapped triggers fire via centralized detection)
         card._tapped = true;
-        if (!wasTapped) {
-          const tapLogs = gameState.fireTrigger('becomes_tapped', {
-            cardUid: card._uid,
-            card: card,
-            controllerId: gameState.activePlayer,
-          });
-          if (tapLogs.length > 0) gameState.log.push(...tapLogs);
-        }
       }
     }
     delete combatCard._tappedByAttack;
     card._attacking = false;
   }
+
+  // Centralized becomes_tapped detection (fires for Rescue Leopard, etc.)
+  detectAndFireTapTriggers(gameState as any);
 
   // Reset blockers
   for (const blockers of Object.values(combatState.blockers)) {

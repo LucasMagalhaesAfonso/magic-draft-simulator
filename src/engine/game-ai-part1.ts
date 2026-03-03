@@ -1316,6 +1316,10 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
         const oppBF = state.players[oppId].zones.battlefield.cards;
         if (tgt === 'artifact_or_enchantment' || tgt === 'opponent_artifact_or_enchantment') {
           if (!oppBF.some((c: any) => CardEngine.isArtifact(c) || CardEngine.isEnchantment(c))) continue;
+        } else if (tgt === 'opponent_artifact_or_creature') {
+          if (!oppBF.some((c: any) => CardEngine.isArtifact(c) || CardEngine.isCreature(c))) continue;
+        } else if (tgt === 'opponent_nonland') {
+          if (!oppBF.some((c: any) => !CardEngine.isLand(c))) continue;
         } else if (tgt === 'artifact') {
           if (!oppBF.some((c: any) => CardEngine.isArtifact(c))) continue;
         } else if (tgt === 'enchantment') {
@@ -1940,10 +1944,6 @@ export function declareAttackers(state: any, playerId: number): void {
         if (!CardEngine.hasKeyword(atkCard, 'Vigilance') && !atkCard._tapped) {
           atkCard._tapped = true;
           atkCard._tappedByAttack = true;
-          const tapLogs = GameState.fireTrigger(state, 'becomes_tapped', {
-            cardUid: atkCard._uid, card: atkCard, controllerId: playerId
-          });
-          if (tapLogs.length > 0) state.log.push(...tapLogs);
         }
       });
       state.log.push(`Oponente ataca com ${state.combat.attackers.length} criatura(s) seguras (estabilizando).`);
@@ -1998,10 +1998,6 @@ export function declareAttackers(state: any, playerId: number): void {
           if (!CardEngine.hasKeyword(card, 'Vigilance') && !card._tapped) {
             card._tapped = true;
             card._tappedByAttack = true;
-            const tapLogs = GameState.fireTrigger(state, 'becomes_tapped', {
-              cardUid: card._uid, card: card, controllerId: playerId
-            });
-            if (tapLogs.length > 0) state.log.push(...tapLogs);
           }
         });
         if (!state._aiActions) state._aiActions = [];
@@ -2149,10 +2145,6 @@ export function declareAttackers(state: any, playerId: number): void {
       if (!CardEngine.hasKeyword(card, 'Vigilance') && !card._tapped) {
         card._tapped = true;
         card._tappedByAttack = true;
-        const tapLogs = GameState.fireTrigger(state, 'becomes_tapped', {
-          cardUid: card._uid, card: card, controllerId: playerId
-        });
-        if (tapLogs.length > 0) state.log.push(...tapLogs);
       }
     });
     state.log.push(`Oponente ataca com ${state.combat.attackers.length} criatura(s). (fallback)`);

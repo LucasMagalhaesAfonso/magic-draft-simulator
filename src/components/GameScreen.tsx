@@ -75,7 +75,6 @@ function BfToken({ card, power, toughness }: { card: any; power: number | null; 
         {TOKEN_ICONS[card.name] || TOKEN_ICONS[(card.name || '').split(' ')[0]] || '★'}
       </span>
       <span className="bf-token-name">{card.name}</span>
-      {power !== null && <span className="bf-token-pt">{power}/{toughness}</span>}
     </div>
   );
 }
@@ -189,7 +188,7 @@ export function GameScreen() {
   // Blocking: selected own creatures waiting to be assigned to an attacker (array = gang-block)
   const [blockingWith, setBlockingWith] = useState<string[]>([]);
   // Ability modal: double-click on creature/planeswalker
-  const [abilityModal, setAbilityModal] = useState<{ card: any; abilities: any[] } | null>(null);
+  const [abilityModal, setAbilityModal] = useState<{ card: any; abilities: any[]; isGranted?: boolean } | null>(null);
   // Equipment modal: double-click on equipment to pick which creature to attach
   const [equipModal, setEquipModal] = useState<{ equipUid: string; equipName: string; equipCost?: string } | null>(null);
   // Attack target picker: when declaring an attacker and opponent has planeswalkers
@@ -675,6 +674,12 @@ export function GameScreen() {
           const pool = tt === 'opponent_artifact_or_enchantment' ? snap!.players[1].battlefield : allBF;
           return (pool as any[]).some((c: any) => c.type_line?.includes('Artifact') || c.type_line?.includes('Enchantment'));
         }
+        if (tt === 'opponent_artifact_or_creature') {
+          return (snap!.players[1].battlefield as any[]).some((c: any) => c.type_line?.includes('Artifact') || c.type_line?.includes('Creature'));
+        }
+        if (tt === 'opponent_nonland') {
+          return (snap!.players[1].battlefield as any[]).some((c: any) => !c.type_line?.includes('Land'));
+        }
         if (tt === 'noncreature_artifact') return allBF.some((c: any) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
         if (tt === 'creature_or_artifact') return allBF.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Artifact'));
         if (tt === 'creature_or_enchantment') return allBF.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Enchantment'));
@@ -1024,7 +1029,8 @@ export function GameScreen() {
     // GY-return spells, optional_discard spells: targeting handled during resolution, not at cast time
     const db = getPreprocessedEffects(card as any);
     if (db && db.cast && db.cast.length > 0 && db.cast.every((e: any) =>
-      e.type === 'return_from_graveyard' || e.type === 'draw' ||
+      e.type === 'return_from_graveyard' || e.type === 'shuffle_gy_to_library' ||
+      e.type === 'draw' ||
       e.type === 'gain_life' || e.type === 'scry' || e.type === 'surveil' ||
       e.type === 'mill' || e.type === 'create_token' || e.type === 'counter_self' ||
       e.type === 'reveal_hand' || e.type === 'optional_discard' ||
@@ -1353,6 +1359,10 @@ export function GameScreen() {
       } else if (targetType === 'artifact_or_enchantment' || targetType === 'opponent_artifact_or_enchantment') {
         isValid = tl.includes('artifact') || tl.includes('enchantment');
         if (targetType === 'opponent_artifact_or_enchantment') isValid = isValid && pid === 1;
+      } else if (targetType === 'opponent_artifact_or_creature') {
+        isValid = (tl.includes('artifact') || tl.includes('creature')) && pid === 1;
+      } else if (targetType === 'opponent_nonland') {
+        isValid = !tl.includes('land') && pid === 1;
       } else if (targetType === 'noncreature_artifact') {
         isValid = tl.includes('artifact') && !tl.includes('creature');
       } else if (targetType === 'creature_or_artifact') {
@@ -1573,7 +1583,9 @@ export function GameScreen() {
     // Exiled playable cards (Breaching Dragonstorm, Riverwheel Sweep, Tersa, etc.)
     // Allow main phase for any card, or instant-speed during priority windows
     if (inExiledPlayable && (isMainPhase || ((isInstantPriority || isStackPriority) && isInstant))) {
-      if (spellNeedsTargeting(card)) {
+      if (isLand) {
+        actions.playLand(card._uid);
+      } else if (spellNeedsTargeting(card)) {
         setTargeting({ cardUid: card._uid, card });
       } else {
         showCastAnimation(card);
@@ -2340,6 +2352,8 @@ export function GameScreen() {
                   if (tt === 'enchantment') return tl.includes('enchantment');
                   if (tt === 'artifact') return tl.includes('artifact');
                   if (tt === 'artifact_or_enchantment' || tt === 'opponent_artifact_or_enchantment') return tl.includes('artifact') || tl.includes('enchantment');
+                  if (tt === 'opponent_artifact_or_creature') return tl.includes('artifact') || tl.includes('creature');
+                  if (tt === 'opponent_nonland') return !tl.includes('land');
                   if (tt === 'permanent') return !tl.includes('instant') && !tl.includes('sorcery');
                   if (tt === 'nonland_permanent') return !tl.includes('land');
                   if (tt === 'creature_with_flying') return tl.includes('creature') && ((card.keywords || []) as string[]).some(k => (k || '').toLowerCase() === 'flying');
@@ -2700,6 +2714,8 @@ export function GameScreen() {
                   if (tt === 'permanent') return !tl.includes('instant') && !tl.includes('sorcery');
                   if (tt === 'nonland_permanent') return !tl.includes('land');
                   if (tt === 'artifact_or_enchantment' || tt === 'opponent_artifact_or_enchantment') return tl.includes('artifact') || tl.includes('enchantment');
+                  if (tt === 'opponent_artifact_or_creature') return tl.includes('artifact') || tl.includes('creature');
+                  if (tt === 'opponent_nonland') return !tl.includes('land');
                   if (tt === 'creature_or_planeswalker') return tl.includes('creature') || tl.includes('planeswalker');
                   if (tt === 'creature_or_enchantment') return tl.includes('creature') || tl.includes('enchantment');
                   if (tt === 'creature_or_artifact') return tl.includes('creature') || tl.includes('artifact');
@@ -3232,6 +3248,8 @@ export function GameScreen() {
               'creature_power4+': 'a creature with power 4 or greater',
               artifact_or_enchantment: 'an artifact or enchantment',
               opponent_artifact_or_enchantment: "an opponent's artifact or enchantment",
+              opponent_artifact_or_creature: "an opponent's artifact or creature",
+              opponent_nonland: "an opponent's nonland permanent",
               noncreature_artifact: 'a non-creature artifact',
               creature_or_artifact: 'a creature or artifact',
               creature_or_enchantment: 'a creature or enchantment',
@@ -3256,6 +3274,12 @@ export function GameScreen() {
               if (tt === 'artifact_or_enchantment' || tt === 'opponent_artifact_or_enchantment') {
                 const pool = tt === 'opponent_artifact_or_enchantment' ? snap!.players[1].battlefield : allBFCards;
                 return (pool as any[]).some((c: any) => c.type_line?.includes('Artifact') || c.type_line?.includes('Enchantment'));
+              }
+              if (tt === 'opponent_artifact_or_creature') {
+                return (snap!.players[1].battlefield as any[]).some((c: any) => c.type_line?.includes('Artifact') || c.type_line?.includes('Creature'));
+              }
+              if (tt === 'opponent_nonland') {
+                return (snap!.players[1].battlefield as any[]).some((c: any) => !c.type_line?.includes('Land'));
               }
               if (tt === 'noncreature_artifact') return allBFCards.some((c: any) => c.type_line?.includes('Artifact') && !c.type_line?.includes('Creature'));
               if (tt === 'creature_or_artifact') return allBFCards.some((c: any) => c.type_line?.includes('Creature') || c.type_line?.includes('Artifact'));
@@ -3512,8 +3536,8 @@ export function GameScreen() {
             return (
               <CreatureChoiceOverlay
                 creatures={candidates}
-                title={`🛡 Grant ${kwNames} — Choose target (power 4+)`}
-                hint="Click a creature with power 4 or greater."
+                title={`🛡 Grant ${kwNames} — Choose a creature`}
+                hint="Click a creature to grant the keyword."
                 onConfirm={uid => uid && actions.resolveGrantTargetChoice(uid)}
               />
             );
@@ -3871,6 +3895,78 @@ export function GameScreen() {
                 discardLabel={ltDiscardLabel}
                 onConfirm={actions.resolveLookTop}
               />
+            );
+          }
+
+          // ── Bounce to library choice (Riverwalk Technique) ──────────────
+          case 'bounce_to_library_choice': {
+            const blPending = gs?._pendingBounceToLibrary;
+            if (!blPending) return null;
+            return (
+              <div className="overlay-backdrop" style={{zIndex: 10000}}>
+                <div className="overlay-panel" style={{maxWidth: 360, textAlign: 'center', padding: 20}}>
+                  <h3 style={{margin: '0 0 8px'}}>Topo ou Fundo?</h3>
+                  <p style={{fontSize: 13, color: '#aaa', margin: '0 0 12px'}}>
+                    {blPending.card.name} vai para o topo ou fundo do grimório?
+                  </p>
+                  <div style={{display: 'flex', justifyContent: 'center', marginBottom: 12}}>
+                    <img
+                      src={blPending.card.image_uris?.normal || blPending.card.image_uris?.small || ''}
+                      alt={blPending.card.name}
+                      style={{width: 180, borderRadius: 8}}
+                    />
+                  </div>
+                  <div style={{display: 'flex', gap: 8, justifyContent: 'center'}}>
+                    <button className="btn-primary" onClick={() => actions.resolveBounceToLibrary('top')}>
+                      📚 Topo
+                    </button>
+                    <button className="btn-secondary" onClick={() => actions.resolveBounceToLibrary('bottom')}>
+                      ⬇ Fundo
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ── Traveling Botanist look ─────────────────────────────────────
+          case 'botanist_look': {
+            const bPending = gs?._pendingBotanistLook;
+            if (!bPending) return null;
+            const bCard = bPending.card;
+            const bIsLand = bPending.isLand;
+            const bImgUrl = bCard.image_normal || bCard.image_small || bCard.image_uris?.normal || bCard.image_uris?.small || '';
+            return (
+              <div className="overlay-backdrop" style={{zIndex: 10000}}>
+                <div className="glass overlay-panel" style={{maxWidth: 420, padding: '24px 28px', textAlign: 'center'}}>
+                  <h3 style={{margin: '0 0 4px', fontSize: 16, color: '#fff'}}>Traveling Botanist</h3>
+                  <p style={{fontSize: 13, color: '#9aa', margin: '0 0 16px'}}>
+                    {bIsLand
+                      ? 'Terreno! Você pode colocar na mão.'
+                      : 'Não é terreno. Você pode colocar no cemitério ou deixar no topo.'}
+                  </p>
+                  <div style={{display: 'flex', justifyContent: 'center', marginBottom: 16}}>
+                    <img
+                      src={bImgUrl}
+                      alt={bCard.name}
+                      style={{width: 200, borderRadius: 10, boxShadow: '0 4px 20px rgba(0,0,0,0.6)', border: bIsLand ? '2px solid #4a4' : '2px solid #555'}}
+                    />
+                  </div>
+                  <div style={{display: 'flex', gap: 10, justifyContent: 'center'}}>
+                    {bIsLand && (
+                      <button className="btn-primary" style={{padding: '8px 20px', fontSize: 14}} onClick={() => actions.resolveBotanistLook('hand')}>
+                        Mão
+                      </button>
+                    )}
+                    <button className="btn-secondary" style={{padding: '8px 20px', fontSize: 14}} onClick={() => actions.resolveBotanistLook('graveyard')}>
+                      Cemitério
+                    </button>
+                    <button className="btn-secondary" style={{padding: '8px 20px', fontSize: 14}} onClick={() => actions.resolveBotanistLook('top')}>
+                      Topo do Grimório
+                    </button>
+                  </div>
+                </div>
+              </div>
             );
           }
 
@@ -4298,13 +4394,77 @@ export function GameScreen() {
           case 'choose_gy_return': {
             const pending = gs?._pendingGYReturn;
             const candidates = pending?.candidates || snap.players[0].graveyard;
-            return (
+            const gyReturnAmt = pending?.amount || 1;
+            return gyReturnAmt > 1 ? (
+              <GraveyardMultiSelectOverlay
+                cards={candidates}
+                amount={gyReturnAmt}
+                minAmount={0}
+                title={`⬆ Return from Graveyard (up to ${gyReturnAmt})`}
+                onConfirm={uids => actions.resolveGYReturn(uids)}
+              />
+            ) : (
               <SearchLibraryOverlay
                 candidates={candidates}
                 optional={(wi as any).optional}
                 title="⬆ Return from Graveyard"
                 hint="Choose a card to return to hand."
                 onConfirm={uid => actions.resolveGYReturn(uid ? [uid] : [])}
+              />
+            );
+          }
+
+          // ── Rite of Renewal: choose player ──────────────────────────────
+          case 'shuffle_gy_choose_player': {
+            return (
+              <div className="overlay-backdrop" style={{zIndex: 10000}}>
+                <div className="glass overlay-panel" style={{maxWidth: 380, padding: '24px 28px', textAlign: 'center'}}>
+                  <h3 style={{margin: '0 0 8px', fontSize: 16, color: '#fff'}}>Rite of Renewal</h3>
+                  <p style={{fontSize: 13, color: '#9aa', margin: '0 0 16px'}}>
+                    Escolha um jogador para embaralhar até 4 cartas do cemitério no grimório.
+                  </p>
+                  <div style={{display: 'flex', gap: 10, justifyContent: 'center'}}>
+                    <button className="btn-primary" style={{padding: '8px 20px', fontSize: 14}} onClick={() => actions.resolveShuffleGYChoosePlayer(0)}>
+                      Você
+                    </button>
+                    <button className="btn-secondary" style={{padding: '8px 20px', fontSize: 14}} onClick={() => actions.resolveShuffleGYChoosePlayer(1)}>
+                      Oponente
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // ── Rite of Renewal: choose cards from GY ────────────────────────
+          case 'shuffle_gy_choose_cards': {
+            const shPending = gs?._pendingShuffleGY;
+            const shCandidates = shPending?.candidates || [];
+            const shAmount = shPending?.amount || 4;
+            return (
+              <GraveyardMultiSelectOverlay
+                cards={shCandidates}
+                amount={shAmount}
+                minAmount={0}
+                title={`📚 Embaralhar no Grimório (até ${shAmount})`}
+                onConfirm={uids => actions.resolveShuffleGYChooseCards(uids)}
+              />
+            );
+          }
+
+          // ── GY ability: choose X opponent creatures for counters ────────
+          case 'gy_counter_targets': {
+            const gcPending = gs?._pendingGYCounterTargets;
+            if (!gcPending) return null;
+            const gcCandidates = gcPending.candidates || [];
+            const gcMax = gcPending.xCount || 1;
+            return (
+              <GraveyardMultiSelectOverlay
+                cards={gcCandidates}
+                amount={gcMax}
+                minAmount={0}
+                title={`💀 Escolha até ${gcMax} criaturas — 1 contador ${gcPending.effect?.counter || 'decayed'} em cada`}
+                onConfirm={uids => actions.resolveGYCounterTargets(uids)}
               />
             );
           }
@@ -4358,12 +4518,11 @@ export function GameScreen() {
               c.type_line?.includes('Creature') && pending.candidates?.includes(c._uid)
             );
             return (
-              <CreatureChoiceOverlay
-                creatures={candidates}
-                title={`💪 Buff up to ${pending.maxTargets || 1} Creature(s)`}
-                hint={`Choose a creature to receive the buff`}
-                optional
-                onConfirm={uid => actions.resolveMultiBuffChoiceAction(uid ? [uid] : [])}
+              <BounceMultiOverlay
+                permanents={candidates}
+                maxBounce={pending.maxTargets || 1}
+                title={`💪 Buff up to ${pending.maxTargets || 1} Creature(s) — +${pending.effect?.power || 0}/+${pending.effect?.toughness || 0}`}
+                onConfirm={uids => actions.resolveMultiBuffChoiceAction(uids)}
               />
             );
           }
@@ -5596,10 +5755,9 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
           alt={card.name}
         />
       )}
-      {/* Real cards always show badge; token-copies (image_normal set) also show badge
-          since their card image has base P/T but actual P/T may differ due to buffs.
-          Regular tokens (no image) use BfToken placeholder which shows P/T internally. */}
-      {isCreature && power !== null && (!card._isToken || !!(overrideArtUrl || card.image_normal || card.image_small)) && (
+      {/* Always show P/T badge for creatures (including tokens — BfToken's internal P/T
+          disappears when Scryfall image loads asynchronously, so badge must always be present). */}
+      {isCreature && power !== null && (
         <div className={`bf-pt${(card._powerMod || 0) > 0 || (card._toughnessMod || 0) > 0 ? ' buffed' : (card._powerMod || 0) < 0 || (card._toughnessMod || 0) < 0 ? ' debuffed' : ''}`}>
           {power}/{card._damage > 0
             ? <span className="toughness-damaged">{(toughness ?? 0) - (card._damage || 0)}</span>
@@ -5655,6 +5813,7 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
         if (has('Flash')) push('⚡', 'Flash');
         if (has('Defender')) push('🛡', 'Defender');
         if (has('Ward')) push('W', 'Ward');
+        if (has('Decayed')) push('💀', 'Decayed');
         if (badges.length === 0) return null;
         return (
           <div className="bf-keyword-badges">

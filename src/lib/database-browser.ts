@@ -10,6 +10,20 @@ const DB_VERSION = 1;
 
 let idb: IDBDatabase | null = null;
 
+export function closeDb(): void {
+  if (idb) { idb.close(); idb = null; }
+}
+
+export async function browserClearAllCards(): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction('cards', 'readwrite');
+  tx.objectStore('cards').clear();
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 function openDb(): Promise<IDBDatabase> {
   if (idb) return Promise.resolve(idb);
   return new Promise((resolve, reject) => {
@@ -173,6 +187,26 @@ export async function browserSetPref(key: string, value: string): Promise<void> 
   const db = await openDb();
   const transaction = db.transaction('user_prefs', 'readwrite');
   await idbPut(transaction.objectStore('user_prefs'), { key, value });
+}
+
+// ============================================
+// Delete Set
+// ============================================
+
+export async function browserDeleteSet(setCode: string): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction('cards', 'readwrite');
+  const store = tx.objectStore('cards');
+  const index = store.index('set_code');
+  const req = index.openCursor(IDBKeyRange.only(setCode));
+  await new Promise<void>((resolve, reject) => {
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (cursor) { cursor.delete(); cursor.continue(); }
+      else resolve();
+    };
+    req.onerror = () => reject(req.error);
+  });
 }
 
 // ============================================

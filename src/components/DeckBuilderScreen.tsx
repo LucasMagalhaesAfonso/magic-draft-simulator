@@ -556,7 +556,7 @@ export function DeckBuilderScreen() {
                   title={card.name + (inMain ? ' — click to remove from deck' : ' — click to add to deck')}
                 >
                   <img
-                    src={card.image_normal || card.image_small}
+                    src={card.image_normal || card.image_small || undefined}
                     alt={card.name}
                     loading="lazy"
                     onError={imgError}

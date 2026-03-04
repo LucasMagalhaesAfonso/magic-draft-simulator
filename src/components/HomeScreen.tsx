@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { getSetList, getCardCount, getCardsBySet } from '../lib/database';
+import { getSetList, getCardCount, getCardsBySet, clearAllCards } from '../lib/database';
 import { syncSingleSet, syncAllCards, type SyncProgress } from '../lib/scryfall';
 import { generateSealedPacks } from '../draft/draft-engine';
 import { buildDeck } from '../draft/bot-ai';
@@ -174,6 +174,7 @@ export function HomeScreen() {
           <button className="btn sync-all-btn" onClick={handleSyncAll} disabled={syncing}>
             Import ALL Cards (~300MB download)
           </button>
+
 
           {syncing && (
             <div className="sync-status">

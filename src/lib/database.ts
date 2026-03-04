@@ -1,6 +1,15 @@
 import type { Card, CardRow, CardEffectEntry } from './types';
 export { rowToCard } from './database-utils';
 
+export async function clearAllCards(): Promise<void> {
+  if (!isTauri()) {
+    const { browserClearAllCards } = await import('./database-browser');
+    return browserClearAllCards();
+  }
+  const db = await getTauriDb();
+  await db.execute('DELETE FROM cards');
+}
+
 // ============================================
 // Environment Detection
 // ============================================

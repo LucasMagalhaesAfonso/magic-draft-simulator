@@ -63,8 +63,11 @@ export type SyncProgress = {
 
 function scryfallToRow(card: ScryfallCard): CardRow | null {
   // Skip non-paper, non-English cards, and reversible_card duplicates
-  if (card.lang !== 'en') return null;
+  if (card.lang && card.lang !== 'en') return null;
   if (card.games && !card.games.includes('paper')) return null;
+  // Skip cards without any image
+  const hasImage = card.image_uris?.normal || card.image_uris?.small || card.card_faces?.[0]?.image_uris?.normal || card.card_faces?.[0]?.image_uris?.small;
+  if (!hasImage) return null;
   // Skip reversible_card UNLESS it's an adventure variant (back face is Instant/Sorcery)
   if (card.layout === 'reversible_card') {
     const backType = card.card_faces?.[1]?.type_line || '';
@@ -178,7 +181,7 @@ export async function syncSingleSet(
     onProgress?.({ phase: 'downloading', current: 0, total: 0, message: `Fetching ${setCode.toUpperCase()} from Scryfall...` });
 
     let allCards: ScryfallCard[] = [];
-    let url: string | null = `https://api.scryfall.com/cards/search?q=set:${setCode}&unique=prints`;
+    let url: string | null = `https://api.scryfall.com/cards/search?q=set:${setCode}&unique=cards`;
 
     while (url) {
       const res: Response = await fetch(url);
@@ -205,11 +208,78 @@ export async function syncSingleSet(
       onProgress?.({ phase: 'inserting', current: inserted, total, message: `Inserting card ${inserted}/${total}...` });
     });
 
+    onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `Done! ${rows.length} cards. Fetching alt art...` });
+
+    // Fetch alternate art variants (unique=prints) and store in localStorage
+    try {
+      await fetchAltArt(setCode, onProgress);
+    } catch (e) {
+      console.error('Alt art fetch failed (non-fatal):', e);
+    }
+
     onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `Done! ${rows.length} cards from ${setCode.toUpperCase()} imported.` });
 
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
     onProgress?.({ phase: 'error', current: 0, total: 0, message: `Sync failed: ${msg}` });
     throw error;
+  }
+}
+
+/**
+ * Fetch all prints for a set and store alternate art URLs in localStorage.
+ * Format: alt_art_{setCode} → Record<cardName, Array<{ small, normal }>>
+ */
+async function fetchAltArt(
+  setCode: string,
+  onProgress?: (progress: SyncProgress) => void
+): Promise<void> {
+  onProgress?.({ phase: 'processing', current: 0, total: 0, message: 'Fetching alternate art...' });
+
+  let allPrints: ScryfallCard[] = [];
+  let url: string | null = `https://api.scryfall.com/cards/search?q=set:${setCode}&unique=prints`;
+
+  while (url) {
+    const res = await fetch(url);
+    if (!res.ok) break;
+    const data: any = await res.json();
+    allPrints = allPrints.concat(data.data);
+    url = data.has_more ? data.next_page : null;
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  // Group by card name, collect alternate art URLs (skip cards without images)
+  const baseArts = new Map<string, string>();
+  const altMap: Record<string, Array<{ small: string; normal: string }>> = {};
+
+  // First pass: identify base art (purely numeric collector number)
+  for (const card of allPrints) {
+    if (card.lang && card.lang !== 'en') continue;
+    const name = (card.name || '').toLowerCase();
+    const img = card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal;
+    if (!img) continue;
+    const cn = card.collector_number || '';
+    if (/^\d+$/.test(cn) && !baseArts.has(name)) {
+      baseArts.set(name, img);
+    }
+  }
+
+  // Second pass: collect non-base art variants
+  for (const card of allPrints) {
+    if (card.lang && card.lang !== 'en') continue;
+    const name = (card.name || '').toLowerCase();
+    const imgNormal = card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal;
+    const imgSmall = card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small;
+    if (!imgNormal) continue;
+    if (imgNormal === baseArts.get(name)) continue;
+
+    if (!altMap[name]) altMap[name] = [];
+    altMap[name].push({ small: imgSmall || '', normal: imgNormal });
+  }
+
+  const altCount = Object.keys(altMap).length;
+  if (altCount > 0) {
+    localStorage.setItem(`alt_art_${setCode.toLowerCase()}`, JSON.stringify(altMap));
+    console.log(`[fetchAltArt] Stored ${altCount} cards with alternate art for ${setCode.toUpperCase()}`);
   }
 }

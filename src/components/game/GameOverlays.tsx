@@ -1753,3 +1753,37 @@ export function TriggerOrderOverlay({ triggers, onConfirm }: TriggerOrderProps) 
     </div>
   );
 }
+
+// ── Ugin Ultimate Overlay (search library exile cast) ──
+export function UginUltimateOverlay({ candidates, onConfirm }: { candidates: any[]; onConfirm: (uids: string[]) => void }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggle = (uid: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid); else next.add(uid);
+      return next;
+    });
+  };
+  return (
+    <div className="overlay-backdrop" style={{ zIndex: 9999 }}>
+      <div className="overlay-panel" style={{ padding: '20px', maxWidth: '700px' }}>
+        <h3 style={{ margin: '0 0 12px', color: '#ffd700' }}>Ugin Ultimate — Choose cards to cast for free</h3>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxHeight: 400, overflowY: 'auto', justifyContent: 'center' }}>
+          {candidates.map((c: any) => (
+            <div key={c._uid} onClick={() => toggle(c._uid)} style={{
+              border: selected.has(c._uid) ? '2px solid #ffd700' : '2px solid transparent',
+              borderRadius: 8, cursor: 'pointer', opacity: selected.has(c._uid) ? 1 : 0.6,
+              transition: 'all 0.15s',
+            }}>
+              <img src={c.image_normal || c.image_small} alt={c.name} style={{ width: 120, borderRadius: 6 }} />
+              <div style={{ textAlign: 'center', fontSize: 11, color: '#ccc', marginTop: 4 }}>{c.name}</div>
+            </div>
+          ))}
+        </div>
+        <button className="btn btn-gold" style={{ marginTop: 16 }} onClick={() => onConfirm(Array.from(selected))}>
+          Cast Selected ({selected.size})
+        </button>
+      </div>
+    </div>
+  );
+}

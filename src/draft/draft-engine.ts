@@ -59,7 +59,9 @@ export function start(cardPool: Card[]): DraftState {
   for (let r = 0; r < ROUNDS; r++) {
     const roundPacks: Card[][] = [];
     for (let p = 0; p < PLAYERS; p++) {
-      roundPacks.push(generate(cardPool));
+      const pack = generate(cardPool);
+      applyArtVariation(pack);
+      roundPacks.push(pack);
     }
     allPacks.push(roundPacks);
   }
@@ -279,11 +281,55 @@ export function generateSealedPool(cardPool: Card[]): Card[] {
  * Generate 6 sealed booster packs separately (for reveal animation).
  * Returns an array of 6 packs, each pack is an array of cards.
  */
+/**
+ * Randomly swap card images to scene art variants (50% chance per card).
+ * Scene art mapping stored in localStorage during set import.
+ */
+function applyArtVariation(cards: Card[]): void {
+  const setCode = cards[0]?.set_code?.toLowerCase();
+  if (!setCode) return;
+
+  // Try scene art (LTR style: single alt per card)
+  try {
+    const sceneRaw = localStorage.getItem(`scene_art_${setCode}`);
+    if (sceneRaw) {
+      const sceneMap: Record<string, { small: string; normal: string }> = JSON.parse(sceneRaw);
+      for (const card of cards) {
+        const name = (card.name || '').toLowerCase();
+        const scene = sceneMap[name];
+        if (scene && Math.random() < 0.5) {
+          if (scene.small) card.image_small = scene.small;
+          if (scene.normal) card.image_normal = scene.normal;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  // Try alt art (multiple variants per card)
+  try {
+    const altRaw = localStorage.getItem(`alt_art_${setCode}`);
+    if (altRaw) {
+      const altMap: Record<string, Array<{ small: string; normal: string }>> = JSON.parse(altRaw);
+      for (const card of cards) {
+        const name = (card.name || '').toLowerCase();
+        const alts = altMap[name];
+        if (alts && alts.length > 0 && Math.random() < 0.4) {
+          const pick = alts[Math.floor(Math.random() * alts.length)];
+          if (pick.small) card.image_small = pick.small;
+          if (pick.normal) card.image_normal = pick.normal;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+}
+
 export function generateSealedPacks(cardPool: Card[]): Card[][] {
   const SEALED_PACKS = 6;
   const packs: Card[][] = [];
   for (let i = 0; i < SEALED_PACKS; i++) {
-    packs.push(generate(cardPool));
+    const pack = generate(cardPool);
+    applyArtVariation(pack);
+    packs.push(pack);
   }
   return packs;
 }

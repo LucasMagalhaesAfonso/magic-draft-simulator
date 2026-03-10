@@ -394,6 +394,14 @@ export function SettingsScreen() {
               <span className="settings-info-label">Última atualização</span>
               <span className="settings-info-value">{formatLastTrained(aiStats.lastTrained)}</span>
             </div>
+            <div className="settings-info-item" style={{ gridColumn: '1 / -1' }}>
+              <span className="settings-info-label">🌐 Modelo global</span>
+              <span className="settings-info-value">
+                {aiStats.cloudGamesCount > 0
+                  ? `${aiStats.cloudGamesCount} partidas de todos os jogadores`
+                  : 'Sincronizando...'}
+              </span>
+            </div>
           </div>
           <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
             <button

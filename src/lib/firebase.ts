@@ -21,6 +21,7 @@ import {
   getDocs,
   deleteDoc,
   serverTimestamp,
+  runTransaction,
 } from 'firebase/firestore';
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -109,4 +110,53 @@ export async function saveSettings(uid: string, settings: Record<string, any>): 
 export async function loadSettings(uid: string): Promise<Record<string, any> | null> {
   const snap = await getDoc(doc(db, 'users', uid, 'settings', 'preferences'));
   return snap.exists() ? snap.data() : null;
+}
+
+// ── AI Brain (federated learning) ─────────────────────────────────────────────
+
+export interface GlobalBrainData {
+  weights: number[][];
+  shapes: number[][];
+  gamesCount: number;
+}
+
+/**
+ * Upload local model weights to Firestore, merged via FedAvg into the global model.
+ * Uses a transaction to safely merge concurrent contributions.
+ */
+export async function uploadBrainContribution(
+  weights: number[][],
+  shapes: number[][]
+): Promise<void> {
+  const globalRef = doc(db, 'ai_brain', 'global');
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(globalRef);
+    if (!snap.exists()) {
+      transaction.set(globalRef, { weights, shapes, gamesCount: 1, lastUpdated: serverTimestamp() });
+      return;
+    }
+    const data = snap.data() as GlobalBrainData & { lastUpdated: any };
+    const globalCount = data.gamesCount || 1;
+    // FedAvg: weighted average of global and new contribution
+    const merged = weights.map((layerW, li) => {
+      const globalW = data.weights[li] || layerW;
+      return layerW.map((w, j) => (globalW[j] * globalCount + w) / (globalCount + 1));
+    });
+    transaction.update(globalRef, {
+      weights: merged,
+      shapes,
+      gamesCount: globalCount + 1,
+      lastUpdated: serverTimestamp(),
+    });
+  });
+}
+
+export async function downloadGlobalBrain(): Promise<GlobalBrainData | null> {
+  try {
+    const snap = await getDoc(doc(db, 'ai_brain', 'global'));
+    if (!snap.exists()) return null;
+    return snap.data() as GlobalBrainData;
+  } catch {
+    return null;
+  }
 }

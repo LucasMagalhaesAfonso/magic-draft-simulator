@@ -35,6 +35,7 @@ export interface AiBrainStats {
   epsilon: number;
   lastTrained: string | null;
   recentRewards: number[];           // last BASELINE_WINDOW soft rewards
+  cloudGamesCount: number;           // global model game count (from last sync)
 }
 
 interface DecisionRecord {
@@ -71,7 +72,7 @@ class AiBrain {
         return s;
       }
     } catch {}
-    return { gamesPlayed: 0, wins: 0, epsilon: INITIAL_EPSILON, lastTrained: null, recentRewards: [] };
+    return { gamesPlayed: 0, wins: 0, epsilon: INITIAL_EPSILON, lastTrained: null, recentRewards: [], cloudGamesCount: 0 };
   }
 
   private _saveStats(): void {
@@ -163,6 +164,9 @@ class AiBrain {
           console.log('[AiBrain] Warmup pass complete — shaders compiled');
         } catch { /* non-fatal */ }
       }
+
+      // Sync from cloud (non-blocking, non-fatal)
+      this.syncFromCloud().catch(() => {});
 
       this._initialized = true;
     } catch (e) {
@@ -455,6 +459,9 @@ class AiBrain {
 
     this._updateStatsAfterGame(won, softReward);
     this.decisions = [];
+
+    // Upload to cloud (non-blocking, non-fatal)
+    this.syncToCloud().catch(() => {});
   }
 
   private _updateStatsAfterGame(won: boolean, softReward: number): void {
@@ -466,13 +473,74 @@ class AiBrain {
     this._saveStats();
   }
 
+  // ── Cloud sync (federated learning) ──────────────────────────────────────
+
+  /**
+   * Upload local weights to Firestore (FedAvg merge).
+   * Called after trainOnGame. Non-fatal if offline.
+   */
+  async syncToCloud(): Promise<void> {
+    if (!this.model) return;
+    try {
+      const { uploadBrainContribution } = await import('../lib/firebase');
+      const tfWeights = this.model.getWeights();
+      const weights = tfWeights.map((w) => Array.from(w.dataSync()));
+      const shapes  = tfWeights.map((w) => [...w.shape] as number[]);
+      tfWeights.forEach((w) => w.dispose());
+      await uploadBrainContribution(weights, shapes);
+      console.log('[AiBrain] Weights uploaded to cloud');
+    } catch (e) {
+      console.warn('[AiBrain] Cloud upload failed (non-fatal):', e);
+    }
+  }
+
+  /**
+   * Download global model from Firestore and blend with local model.
+   * Called on initialize(). Non-fatal if offline or no global model yet.
+   */
+  async syncFromCloud(): Promise<void> {
+    if (!this.model) return;
+    try {
+      const { downloadGlobalBrain } = await import('../lib/firebase');
+      const data = await downloadGlobalBrain();
+      if (!data?.weights?.length) return;
+
+      const currentWeights = this.model.getWeights();
+      const localCount  = Math.max(this.stats.gamesPlayed, 1);
+      const globalCount = data.gamesCount || 1;
+
+      // Blend: more weight to whichever has more games
+      const globalBlend = Math.min(globalCount / (globalCount + localCount), 0.9);
+
+      const newWeights = data.weights.map((globalW, i) => {
+        const shape  = [...currentWeights[i].shape] as number[];
+        const localW = Array.from(currentWeights[i].dataSync());
+        const blended = globalW.map((gw, j) =>
+          gw * globalBlend + (localW[j] ?? 0) * (1 - globalBlend)
+        );
+        return tf.tensor(blended, shape);
+      });
+
+      currentWeights.forEach((w) => w.dispose());
+      this.model.setWeights(newWeights);
+      newWeights.forEach((w) => w.dispose());
+
+      await this.model.save(MODEL_KEY);
+      this.stats.cloudGamesCount = globalCount;
+      this._saveStats();
+      console.log(`[AiBrain] Synced from cloud (${globalCount} global games, blend=${(globalBlend*100).toFixed(0)}%)`);
+    } catch (e) {
+      console.warn('[AiBrain] Cloud download failed (non-fatal):', e);
+    }
+  }
+
   // ── Reset ─────────────────────────────────────────────────────────────────
 
   async reset(): Promise<void> {
     try { await tf.io.removeModel(MODEL_KEY); } catch {}
 
     this.model = this._buildModel();
-    this.stats = { gamesPlayed: 0, wins: 0, epsilon: INITIAL_EPSILON, lastTrained: null, recentRewards: [] };
+    this.stats = { gamesPlayed: 0, wins: 0, epsilon: INITIAL_EPSILON, lastTrained: null, recentRewards: [], cloudGamesCount: 0 };
     this._saveStats();
     this.decisions = [];
 

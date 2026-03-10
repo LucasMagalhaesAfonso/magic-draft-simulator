@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAppStore } from '../store/useAppStore';
-import { getSetList, getCardCount, getCardsBySet, clearAllCards } from '../lib/database';
-import { syncSingleSet, syncAllCards, type SyncProgress } from '../lib/scryfall';
+import { getSetList, getCardCount, getCardsBySet } from '../lib/database';
 import { generateSealedPacks } from '../draft/draft-engine';
 import { buildDeck } from '../draft/bot-ai';
 import './HomeScreen.css';
@@ -19,8 +18,6 @@ export function HomeScreen() {
   }
 
   const [sets, setSets] = useState<{ set_code: string; set_name: string; card_count: number }[]>([]);
-  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
-  const [newSetCode, setNewSetCode] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -35,47 +32,6 @@ export function HomeScreen() {
       setTotalCards(count);
     } catch (e) {
       console.error('Failed to load sets:', e);
-    }
-  }
-
-  async function handleSyncSet() {
-    const code = newSetCode.trim().toLowerCase();
-    if (!code || syncing) return;
-
-    setSyncing(true, `Syncing ${code.toUpperCase()}...`);
-    try {
-      await syncSingleSet(code, (p) => {
-        setSyncProgress(p);
-        setSyncing(true, p.message);
-      });
-      setNewSetCode('');
-      await loadSets();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('Sync failed:', e);
-      setSyncProgress({ phase: 'error', current: 0, total: 0, message: `Error: ${msg}` });
-      // Keep error visible for 5 seconds
-      await new Promise(r => setTimeout(r, 5000));
-    } finally {
-      setSyncing(false);
-      setSyncProgress(null);
-    }
-  }
-
-  async function handleSyncAll() {
-    if (syncing) return;
-    setSyncing(true, 'Starting full sync...');
-    try {
-      await syncAllCards((p) => {
-        setSyncProgress(p);
-        setSyncing(true, p.message);
-      });
-      await loadSets();
-    } catch (e) {
-      console.error('Full sync failed:', e);
-    } finally {
-      setSyncing(false);
-      setSyncProgress(null);
     }
   }
 
@@ -174,45 +130,14 @@ export function HomeScreen() {
           )}
         </div>
 
-        {/* Import Cards Section */}
-        <div className="home-section glass">
-          <h2 className="section-title">Import Cards</h2>
-
-          <div className="sync-row">
-            <input
-              type="text"
-              className="sync-input"
-              placeholder="Set code (e.g. tdm, lrw, mkm)"
-              value={newSetCode}
-              onChange={(e) => setNewSetCode(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSyncSet()}
-              disabled={syncing}
-            />
-            <button className="btn btn-primary" onClick={handleSyncSet} disabled={syncing || !newSetCode.trim()}>
-              Import Set
-            </button>
-          </div>
-
-          <button className="btn sync-all-btn" onClick={handleSyncAll} disabled={syncing}>
-            Import ALL Cards (~300MB download)
-          </button>
-
-
-          {syncing && (
+        {syncing && (
+          <div className="home-section glass">
             <div className="sync-status">
               <div className="sync-spinner" />
               <span>{syncMessage}</span>
-              {syncProgress && syncProgress.total > 0 && (
-                <div className="sync-bar">
-                  <div
-                    className="sync-bar-fill"
-                    style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
-                  />
-                </div>
-              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Available Sets */}
         {sets.length > 0 && (

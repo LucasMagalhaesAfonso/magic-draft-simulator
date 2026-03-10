@@ -446,25 +446,6 @@ export function SettingsScreen() {
           </div>
         </div>
 
-        {/* Info */}
-        <div className="settings-section glass settings-info">
-          <h2 className="settings-title">ℹ️ About</h2>
-          <div className="settings-info-grid">
-            <div className="settings-info-item">
-              <span className="settings-info-label">Version</span>
-              <span className="settings-info-value">2.0.0 (Tauri + React)</span>
-            </div>
-            <div className="settings-info-item">
-              <span className="settings-info-label">Engine</span>
-              <span className="settings-info-value">Magic Draft Simulator</span>
-            </div>
-            <div className="settings-info-item">
-              <span className="settings-info-label">Card Data</span>
-              <span className="settings-info-value">Scryfall API</span>
-            </div>
-          </div>
-        </div>
-
         {/* Alt Art Styles (per set) */}
         {Object.keys(altArtBySet).length > 0 && (
           <div className="settings-section glass">

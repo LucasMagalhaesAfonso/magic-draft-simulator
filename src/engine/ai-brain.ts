@@ -12,18 +12,25 @@ import * as tf from '@tensorflow/tfjs';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MODEL_KEY       = 'indexeddb://magic-draft-ai-brain-v3';
-const STATS_KEY       = 'magic_draft_ai_stats_v3';
-const REPLAY_KEY      = 'magic_draft_ai_replay_v2';
-const EPSILON_DECAY   = 0.005;
-const MIN_EPSILON     = 0.05;
-const INITIAL_EPSILON = 0.30;
-const LEARNING_RATE   = 0.001;
-const INPUT_SIZE      = 45;           // 35 board + 10 action
-const DISCOUNT        = 0.97;         // temporal discount factor
-const REPLAY_MAX      = 300;          // max entries in replay buffer
-const REPLAY_SAMPLE   = 40;           // how many replay entries to mix in per training
-const BASELINE_WINDOW = 20;           // recent games used for baseline
+const MODEL_KEY           = 'indexeddb://magic-draft-ai-brain-v4'; // v4: new arch
+const FROZEN_KEY          = 'indexeddb://magic-draft-ai-frozen-v4';
+const FROZEN_KEY_PHASE    = (p: number) => `indexeddb://magic-draft-ai-frozen-v4-p${p}`;
+const STATS_KEY           = 'magic_draft_ai_stats_v4';
+const REPLAY_KEY          = 'magic_draft_ai_replay_v3';
+// Boltzmann temperature exploration (replaces epsilon-greedy)
+const TEMP_INITIAL        = 2.0;      // high = explore freely
+const TEMP_MIN            = 0.3;      // low = mostly exploit (but not hard argmax)
+const TEMP_DECAY          = 0.004;    // reaches TEMP_MIN in ~425 games
+const LEARNING_RATE       = 0.001;
+const INPUT_SIZE          = 45;
+const DISCOUNT            = 0.97;
+const REPLAY_MAX          = 1000;     // bigger buffer = less forgetting
+const REPLAY_SAMPLE       = 64;       // larger batch from replay
+const REPLAY_ALPHA        = 0.6;      // priority exponent for prioritized replay
+const REPLAY_EPS_P        = 0.01;     // small constant to avoid zero priority
+const BASELINE_WINDOW     = 20;
+const PHASE_WIN_THRESHOLD = 0.63;
+const PHASE_SAMPLE        = 100;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,26 +39,33 @@ export type ActionType = 'play' | 'attack' | 'block' | 'target' | 'instant';
 export interface AiBrainStats {
   gamesPlayed: number;
   wins: number;
-  epsilon: number;
+  temperature: number;               // Boltzmann exploration temperature (replaces epsilon)
   lastTrained: string | null;
-  recentRewards: number[];           // last BASELINE_WINDOW soft rewards
-  cloudGamesCount: number;           // global model game count (from last sync)
+  recentRewards: number[];
+  cloudGamesCount: number;
+  // Phase progression
+  phase: number;
+  phaseGames: number;
+  phaseRecentWins: boolean[];
 }
 
 interface DecisionRecord {
   boardFeatures: number[];
   actionFeatures: number[];
+  boardEval: number;   // board score at decision time (for intermediate rewards)
 }
 
 interface ReplayEntry {
-  input: number[];   // boardFeatures + actionFeatures (40 values)
-  target: number;    // the reward label [0.05, 0.95]
+  input: number[];
+  target: number;
+  priority: number;  // |target - 0.5| + REPLAY_EPS_P — for prioritized sampling
 }
 
 // ─── AiBrain class ────────────────────────────────────────────────────────────
 
 class AiBrain {
   private model: tf.LayersModel | null = null;
+  private frozenModel: tf.LayersModel | null = null;
   private decisions: DecisionRecord[] = [];
   private stats: AiBrainStats;
   private _initialized = false;
@@ -69,10 +83,15 @@ class AiBrain {
       if (raw) {
         const s = JSON.parse(raw);
         if (!s.recentRewards) s.recentRewards = [];
+        if (s.phase === undefined) s.phase = 0;
+        if (!s.phaseGames) s.phaseGames = 0;
+        if (!s.phaseRecentWins) s.phaseRecentWins = [];
+        // Migrate epsilon → temperature
+        if (s.temperature === undefined) s.temperature = TEMP_INITIAL;
         return s;
       }
     } catch {}
-    return { gamesPlayed: 0, wins: 0, epsilon: INITIAL_EPSILON, lastTrained: null, recentRewards: [], cloudGamesCount: 0 };
+    return { gamesPlayed: 0, wins: 0, temperature: TEMP_INITIAL, lastTrained: null, recentRewards: [], cloudGamesCount: 0, phase: 0, phaseGames: 0, phaseRecentWins: [] };
   }
 
   private _saveStats(): void {
@@ -107,8 +126,24 @@ class AiBrain {
 
   private _sampleReplay(buffer: ReplayEntry[], count: number): ReplayEntry[] {
     if (buffer.length <= count) return [...buffer];
+
+    // Prioritized sampling: P(i) ∝ priority^REPLAY_ALPHA
+    const prios = buffer.map(e => Math.pow((e.priority || REPLAY_EPS_P), REPLAY_ALPHA));
+    const total = prios.reduce((s, p) => s + p, 0);
+    const probs = prios.map(p => p / total);
+
     const result: ReplayEntry[] = [];
     const used = new Set<number>();
+    let attempts = 0;
+    while (result.length < count && attempts < count * 15) {
+      attempts++;
+      let r = Math.random();
+      for (let i = 0; i < probs.length; i++) {
+        r -= probs[i];
+        if (r <= 0 && !used.has(i)) { used.add(i); result.push(buffer[i]); break; }
+      }
+    }
+    // Fill any gaps with uniform random
     while (result.length < count) {
       const idx = Math.floor(Math.random() * buffer.length);
       if (!used.has(idx)) { used.add(idx); result.push(buffer[idx]); }
@@ -120,10 +155,12 @@ class AiBrain {
 
   private _buildModel(): tf.LayersModel {
     const model = tf.sequential();
-    // Input → Dense(64, relu)
-    model.add(tf.layers.dense({ inputShape: [INPUT_SIZE], units: 64, activation: 'relu' }));
-    // Dropout 30% — prevents overfitting when data is sparse (early games)
+    // Input → Dense(128, relu) — larger first layer for richer representations
+    model.add(tf.layers.dense({ inputShape: [INPUT_SIZE], units: 128, activation: 'relu' }));
     model.add(tf.layers.dropout({ rate: 0.3 }));
+    // Dense(64, relu)
+    model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
+    model.add(tf.layers.dropout({ rate: 0.2 }));
     // Dense(32, relu)
     model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
     // Output: Q-value [0,1]
@@ -149,8 +186,18 @@ class AiBrain {
         });
         console.log('[AiBrain] Loaded model from IndexedDB');
       } catch {
-        this.model = this._buildModel();
-        console.log('[AiBrain] Created fresh model');
+        // No local model — try bundled prebuilt first, then fresh
+        const loaded = await this._tryLoadPrebuilt();
+        if (!loaded) {
+          this.model = this._buildModel();
+          console.log('[AiBrain] Created fresh model');
+        }
+        if (this.model) {
+          this.model.compile({
+            optimizer: tf.train.adam(LEARNING_RATE),
+            loss: 'binaryCrossentropy',
+          });
+        }
       }
       // Warmup: run one forward pass to pre-compile WebGL shaders.
       // Without this, the FIRST call to scoreActionsSync blocks the main thread
@@ -165,6 +212,13 @@ class AiBrain {
         } catch { /* non-fatal */ }
       }
 
+      // Load frozen opponent model (phase 1+ self-play), non-fatal
+      try {
+        this.frozenModel = await tf.loadLayersModel(FROZEN_KEY);
+        this.frozenModel.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+        console.log('[AiBrain] Frozen model loaded for phase', this.stats.phase);
+      } catch { /* No frozen model yet — phase 0 */ }
+
       // Sync from cloud (non-blocking, non-fatal)
       this.syncFromCloud().catch(() => {});
 
@@ -174,6 +228,29 @@ class AiBrain {
       this.model = null;
     }
     this._initializing = false;
+  }
+
+  /** Try loading the bundled prebuilt model from /data/ai-brain-prebuilt.json */
+  private async _tryLoadPrebuilt(): Promise<boolean> {
+    try {
+      const res = await fetch('/data/ai-brain-prebuilt.json');
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (!data?.weights?.length) return false;
+
+      const model = this._buildModel();
+      const tensors = (data.weights as { shape: number[]; data: number[] }[])
+        .map(w => tf.tensor(w.data, w.shape));
+      model.setWeights(tensors);
+      tensors.forEach(t => t.dispose());
+
+      this.model = model;
+      await this.model.save(MODEL_KEY); // persist to IndexedDB for next session
+      console.log(`[AiBrain] Loaded prebuilt model (${data.gamesPlayed || 0} games bundled)`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   isReady(): boolean {
@@ -347,21 +424,10 @@ class AiBrain {
     actionType: ActionType,
   ): number[] {
     if (candidateCards.length <= 1) return candidateCards.map((_, i) => i);
-
-    // Epsilon-greedy exploration
-    if (Math.random() < this.stats.epsilon) {
-      const indices = candidateCards.map((_, i) => i);
-      for (let i = indices.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [indices[i], indices[j]] = [indices[j], indices[i]];
-      }
-      return indices;
-    }
-
     if (!this.model) return candidateCards.map((_, i) => i);
 
     try {
-      const scores = tf.tidy(() => {
+      const rawScores = tf.tidy(() => {
         const inputs = candidateCards.map((card) => [
           ...boardFeatures,
           ...this.extractActionFeatures(card, actionType),
@@ -371,10 +437,31 @@ class AiBrain {
         return Array.from(predictions.dataSync());
       });
 
-      return scores
-        .map((score, i) => ({ score, i }))
-        .sort((a, b) => b.score - a.score)
-        .map((x) => x.i);
+      // ── Boltzmann (softmax temperature) exploration ──────────────────────
+      // High temperature → explore (soft distribution)
+      // Low temperature  → exploit (near-deterministic argmax)
+      const T = Math.max(this.stats.temperature, 0.01);
+      const scaled = rawScores.map(s => s / T);
+      const maxS = Math.max(...scaled);
+      const exps = scaled.map(s => Math.exp(s - maxS)); // numerically stable
+      const sumExp = exps.reduce((a, b) => a + b, 0);
+      const probs = exps.map(p => p / sumExp);
+
+      // Sample one action from the Boltzmann distribution
+      let r = Math.random();
+      let sampledIdx = rawScores.length - 1;
+      for (let i = 0; i < probs.length; i++) {
+        r -= probs[i];
+        if (r <= 0) { sampledIdx = i; break; }
+      }
+
+      // Return: sampled first, rest sorted by raw score descending
+      const sortedIndices = rawScores
+        .map((s, i) => ({ s, i }))
+        .sort((a, b) => b.s - a.s)
+        .map(x => x.i);
+
+      return [sampledIdx, ...sortedIndices.filter(i => i !== sampledIdx)];
     } catch (e) {
       console.warn('[AiBrain] scoreActionsSync failed:', e);
       return candidateCards.map((_, i) => i);
@@ -385,7 +472,16 @@ class AiBrain {
 
   recordDecision(boardFeatures: number[], actionFeatures: number[]): void {
     if (this.decisions.length < 200) {
-      this.decisions.push({ boardFeatures: [...boardFeatures], actionFeatures: [...actionFeatures] });
+      // Compute board evaluation from features for intermediate reward calculation
+      // f[0]=myLife/20, f[1]=oppLife/20, f[2]=myCreatures/10, f[3]=oppCreatures/10
+      // f[4]=myPower/20, f[5]=oppPower/20, f[14]=myHand/7, f[15]=oppHand/7
+      const boardEval =
+        (boardFeatures[0] - boardFeatures[1]) * 3.0 +   // life diff
+        (boardFeatures[2] - boardFeatures[3]) * 1.0 +   // creature count
+        (boardFeatures[4] - boardFeatures[5]) * 1.5 +   // power diff
+        (boardFeatures[6] - boardFeatures[7]) * 0.5 +   // toughness
+        (boardFeatures[14] - boardFeatures[15]) * 0.5;  // hand size
+      this.decisions.push({ boardFeatures: [...boardFeatures], actionFeatures: [...actionFeatures], boardEval });
     }
   }
 
@@ -414,13 +510,21 @@ class AiBrain {
       return;
     }
 
-    // ── Temporal discounting ───────────────────────────────────────────────
+    // ── Temporal discounting + Intermediate rewards ────────────────────────
     const n = this.decisions.length;
-    const currentInputs  = this.decisions.map((d) => [...d.boardFeatures, ...d.actionFeatures]);
-    const currentTargets = this.decisions.map((_d, i) => {
-      // Later decisions (closer to game end) carry more weight
-      const decay  = Math.pow(DISCOUNT, n - 1 - i);
-      const target = 0.5 + advantage * decay * 0.5;
+    const currentInputs = this.decisions.map((d) => [...d.boardFeatures, ...d.actionFeatures]);
+    const currentTargets = this.decisions.map((d, i) => {
+      const decay = Math.pow(DISCOUNT, n - 1 - i);
+      let target  = 0.5 + advantage * decay * 0.5;
+
+      // Intermediate reward: did the board improve after this decision?
+      if (i < this.decisions.length - 1) {
+        const nextEval = this.decisions[i + 1].boardEval;
+        const delta = nextEval - d.boardEval;
+        const normDelta = Math.tanh(delta * 0.4); // clamp to [-1, 1]
+        target += normDelta * 0.15;               // small but meaningful signal
+      }
+
       return Math.max(0.05, Math.min(0.95, target));
     });
 
@@ -450,10 +554,11 @@ class AiBrain {
       console.warn('[AiBrain] Training failed:', e);
     }
 
-    // ── Save new decisions to replay buffer ────────────────────────────────
+    // ── Save new decisions to replay buffer (with priority) ───────────────
     const newReplayEntries: ReplayEntry[] = currentInputs.map((inp, i) => ({
       input: inp,
       target: currentTargets[i],
+      priority: Math.abs(currentTargets[i] - 0.5) + REPLAY_EPS_P,
     }));
     this._saveReplayBuffer(buffer, newReplayEntries);
 
@@ -467,26 +572,147 @@ class AiBrain {
   private _updateStatsAfterGame(won: boolean, softReward: number): void {
     this.stats.gamesPlayed++;
     if (won) this.stats.wins++;
-    this.stats.epsilon     = Math.max(MIN_EPSILON, this.stats.epsilon - EPSILON_DECAY);
+    this.stats.temperature = Math.max(TEMP_MIN, this.stats.temperature - TEMP_DECAY);
     this.stats.lastTrained = new Date().toISOString();
     this.stats.recentRewards = [...(this.stats.recentRewards || []), softReward];
+    // Phase tracking
+    this.stats.phaseGames++;
+    this.stats.phaseRecentWins = [...(this.stats.phaseRecentWins || []), won];
+    if (this.stats.phaseRecentWins.length > PHASE_SAMPLE * 2) {
+      this.stats.phaseRecentWins = this.stats.phaseRecentWins.slice(-PHASE_SAMPLE);
+    }
     this._saveStats();
+    // Auto-advance phase check (non-blocking)
+    this._checkPhaseAdvance().catch(() => {});
+  }
+
+  private async _checkPhaseAdvance(): Promise<void> {
+    const history = this.stats.phaseRecentWins;
+    if (history.length < PHASE_SAMPLE) return; // not enough data yet
+
+    const recent = history.slice(-PHASE_SAMPLE);
+    const winRate = recent.filter(w => w).length / PHASE_SAMPLE;
+    if (winRate < PHASE_WIN_THRESHOLD) return;
+
+    // Phase complete! Freeze current model and advance
+    console.log(`[AiBrain] Phase ${this.stats.phase} complete! Win rate ${(winRate * 100).toFixed(0)}% — advancing to phase ${this.stats.phase + 1}`);
+    await this.saveFrozenModel();
+    this.stats.phase++;
+    this.stats.phaseGames = 0;
+    this.stats.phaseRecentWins = [];
+    this.stats.temperature = TEMP_INITIAL; // Reset exploration for new phase
+    this._saveStats();
+  }
+
+  // ── Phase / Frozen model ──────────────────────────────────────────────────
+
+  getPhase(): { phase: number; phaseGames: number; winRateLast100: number; threshold: number; temperature: number } {
+    const history = this.stats.phaseRecentWins || [];
+    const recent = history.slice(-PHASE_SAMPLE);
+    const winRate = recent.length > 0 ? recent.filter(w => w).length / recent.length : 0;
+    return {
+      phase: this.stats.phase || 0,
+      phaseGames: this.stats.phaseGames || 0,
+      winRateLast100: winRate,
+      threshold: PHASE_WIN_THRESHOLD,
+      temperature: this.stats.temperature ?? TEMP_INITIAL,
+    };
+  }
+
+  hasFrozenModel(): boolean {
+    return this.frozenModel !== null;
+  }
+
+  async saveFrozenModel(): Promise<void> {
+    if (!this.model) return;
+    try {
+      const weights = this.model.getWeights();
+      if (!this.frozenModel) {
+        this.frozenModel = this._buildModel();
+        this.frozenModel.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+      }
+      this.frozenModel.setWeights(weights.map(w => w.clone()));
+      // Save to main FROZEN_KEY (current opponent) and phase-specific key (pool archive)
+      await this.frozenModel.save(FROZEN_KEY);
+      await this.frozenModel.save(FROZEN_KEY_PHASE(this.stats.phase));
+      console.log(`[AiBrain] Frozen model saved (phase ${this.stats.phase})`);
+    } catch (e) {
+      console.warn('[AiBrain] Failed to save frozen model:', e);
+    }
+  }
+
+  /** Load a random frozen model from the pool (phases 1..currentPhase). Used by self-play. */
+  async loadRandomFrozenModel(): Promise<void> {
+    const phase = this.stats.phase;
+    if (phase === 0) return; // No frozen models yet
+
+    // Pick a random phase from 1..phase
+    const targetPhase = Math.floor(Math.random() * phase) + 1;
+    try {
+      const m = await tf.loadLayersModel(FROZEN_KEY_PHASE(targetPhase));
+      m.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+      this.frozenModel = m;
+      console.log(`[AiBrain] Pool: loaded frozen model from phase ${targetPhase}/${phase}`);
+    } catch {
+      // Fall back to main frozen key
+      try {
+        const m = await tf.loadLayersModel(FROZEN_KEY);
+        m.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+        this.frozenModel = m;
+      } catch { /* ignore */ }
+    }
+  }
+
+  /** Score actions using the frozen model — for the opponent in phase 1+ self-play. Always exploits (no epsilon). */
+  scoreFrozenActionsSync(
+    boardFeatures: number[],
+    candidateCards: any[],
+    actionType: ActionType,
+  ): number[] {
+    if (candidateCards.length <= 1) return candidateCards.map((_, i) => i);
+    if (!this.frozenModel) return candidateCards.map((_, i) => i);
+
+    try {
+      const scores = tf.tidy(() => {
+        const inputs = candidateCards.map((card) => [
+          ...boardFeatures,
+          ...this.extractActionFeatures(card, actionType),
+        ]);
+        const inputTensor = tf.tensor2d(inputs);
+        const predictions = this.frozenModel!.predict(inputTensor) as tf.Tensor;
+        return Array.from(predictions.dataSync());
+      });
+      return scores
+        .map((score, i) => ({ score, i }))
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.i);
+    } catch {
+      return candidateCards.map((_, i) => i);
+    }
   }
 
   // ── Cloud sync (federated learning) ──────────────────────────────────────
 
+  private _lastCloudSync = 0;
+  private static CLOUD_SYNC_COOLDOWN_MS = 60_000; // max 1 upload per minute
+
   /**
    * Upload local weights to Firestore (FedAvg merge).
-   * Called after trainOnGame. Non-fatal if offline.
+   * Called after trainOnGame. Throttled to once per minute to avoid
+   * concurrent transaction conflicts during rapid self-play sessions.
    */
   async syncToCloud(): Promise<void> {
     if (!this.model) return;
+    const now = Date.now();
+    if (now - this._lastCloudSync < AiBrain.CLOUD_SYNC_COOLDOWN_MS) return;
+    this._lastCloudSync = now;
     try {
       const { uploadBrainContribution } = await import('../lib/firebase');
       const tfWeights = this.model.getWeights();
       const weights = tfWeights.map((w) => Array.from(w.dataSync()));
       const shapes  = tfWeights.map((w) => [...w.shape] as number[]);
-      tfWeights.forEach((w) => w.dispose());
+      // NOTE: do NOT dispose tfWeights — getWeights() returns the model's own
+      // LayerVariable tensors; disposing them destroys the model parameters.
       await uploadBrainContribution(weights, shapes);
       console.log('[AiBrain] Weights uploaded to cloud');
     } catch (e) {
@@ -521,8 +747,9 @@ class AiBrain {
         return tf.tensor(blended, shape);
       });
 
-      currentWeights.forEach((w) => w.dispose());
+      // currentWeights are the model's own LayerVariables — do NOT dispose them.
       this.model.setWeights(newWeights);
+      // newWeights are temporary tensors we created above — safe to dispose.
       newWeights.forEach((w) => w.dispose());
 
       await this.model.save(MODEL_KEY);
@@ -534,13 +761,43 @@ class AiBrain {
     }
   }
 
+  // ── Export for bundling ───────────────────────────────────────────────────
+
+  /**
+   * Serialize current model weights to a JSON string suitable for bundling.
+   * Save the result to public/data/ai-brain-prebuilt.json and commit it.
+   * New users will automatically load this model on first launch.
+   *
+   * Call syncFromCloud() first to include other players' training data.
+   */
+  async exportForBundling(): Promise<string> {
+    if (!this.model) throw new Error('Model not initialized');
+    const tfWeights = this.model.getWeights();
+    const weights = tfWeights.map(w => ({
+      shape: [...w.shape] as number[],
+      data: Array.from(w.dataSync()),
+    }));
+    // tfWeights are the model's own LayerVariables — do NOT dispose them.
+    return JSON.stringify({
+      version: 3,
+      gamesPlayed: this.stats.gamesPlayed,
+      cloudGamesCount: this.stats.cloudGamesCount,
+      exportedAt: new Date().toISOString(),
+      weights,
+    }, null, 2);
+  }
+
   // ── Reset ─────────────────────────────────────────────────────────────────
 
   async reset(): Promise<void> {
     try { await tf.io.removeModel(MODEL_KEY); } catch {}
 
     this.model = this._buildModel();
-    this.stats = { gamesPlayed: 0, wins: 0, epsilon: INITIAL_EPSILON, lastTrained: null, recentRewards: [], cloudGamesCount: 0 };
+    this.frozenModel = null;
+    try { await tf.io.removeModel(FROZEN_KEY); } catch {}
+    // Clean up per-phase frozen models (up to phase 20)
+    for (let p = 1; p <= 20; p++) { try { await tf.io.removeModel(FROZEN_KEY_PHASE(p)); } catch {} }
+    this.stats = { gamesPlayed: 0, wins: 0, temperature: TEMP_INITIAL, lastTrained: null, recentRewards: [], cloudGamesCount: 0, phase: 0, phaseGames: 0, phaseRecentWins: [] };
     this._saveStats();
     this.decisions = [];
 

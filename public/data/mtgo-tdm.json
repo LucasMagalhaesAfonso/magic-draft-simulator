@@ -1,0 +1,1676 @@
+{
+  "Arashin Sunshield": {
+    "appearances": 29,
+    "total_decks": 64,
+    "win_rate": 0.6483,
+    "appearance_rate": 0.4531
+  },
+  "Bearer of Glory": {
+    "appearances": 29,
+    "total_decks": 64,
+    "win_rate": 0.5845,
+    "appearance_rate": 0.4531
+  },
+  "Fortress Kin-Guard": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.5969,
+    "appearance_rate": 0.4219
+  },
+  "Mardu Devotee": {
+    "appearances": 20,
+    "total_decks": 64,
+    "win_rate": 0.6267,
+    "appearance_rate": 0.3125
+  },
+  "Osseous Exhale": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.5924,
+    "appearance_rate": 0.3438
+  },
+  "Rally the Monastery": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6274,
+    "appearance_rate": 0.2188
+  },
+  "Static Snare": {
+    "appearances": 18,
+    "total_decks": 64,
+    "win_rate": 0.6019,
+    "appearance_rate": 0.2813
+  },
+  "Stormplain Detainment": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.6114,
+    "appearance_rate": 0.3438
+  },
+  "Teeming Dragonstorm": {
+    "appearances": 16,
+    "total_decks": 64,
+    "win_rate": 0.6563,
+    "appearance_rate": 0.25
+  },
+  "Dirgur Island Dragon": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6326,
+    "appearance_rate": 0.3594
+  },
+  "Dragonstorm Forecaster": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.125
+  },
+  "Fresh Start": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5958,
+    "appearance_rate": 0.1875
+  },
+  "Highspire Bell-Ringer": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6264,
+    "appearance_rate": 0.375
+  },
+  "Unending Whisper": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6359,
+    "appearance_rate": 0.3594
+  },
+  "Wingspan Stride": {
+    "appearances": 29,
+    "total_decks": 64,
+    "win_rate": 0.6221,
+    "appearance_rate": 0.4531
+  },
+  "Abzan Devotee": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6424,
+    "appearance_rate": 0.3594
+  },
+  "Alesha's Legacy": {
+    "appearances": 37,
+    "total_decks": 64,
+    "win_rate": 0.5896,
+    "appearance_rate": 0.5781
+  },
+  "Avenger of the Fallen": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Caustic Exhale": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.592,
+    "appearance_rate": 0.3594
+  },
+  "Delta Bloodflies": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.5833,
+    "appearance_rate": 0.4375
+  },
+  "Desperate Measures": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5958,
+    "appearance_rate": 0.1875
+  },
+  "Hundred-Battle Veteran": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6375,
+    "appearance_rate": 0.1875
+  },
+  "Unrooted Ancestor": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.4479,
+    "appearance_rate": 0.125
+  },
+  "Equilibrium Adept": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.5812,
+    "appearance_rate": 0.125
+  },
+  "Iridescent Tiger": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.6341,
+    "appearance_rate": 0.1719
+  },
+  "Rescue Leopard": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.6339,
+    "appearance_rate": 0.4375
+  },
+  "Seize Opportunity": {
+    "appearances": 18,
+    "total_decks": 64,
+    "win_rate": 0.631,
+    "appearance_rate": 0.2813
+  },
+  "Stormshriek Feral": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6247,
+    "appearance_rate": 0.4063
+  },
+  "Twin Bolt": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.6237,
+    "appearance_rate": 0.3906
+  },
+  "Zurgo's Vanguard": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Ainok Wayfarer": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.6123,
+    "appearance_rate": 0.4219
+  },
+  "Champion of Dusan": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.6274,
+    "appearance_rate": 0.4375
+  },
+  "Encroaching Dragonstorm": {
+    "appearances": 16,
+    "total_decks": 64,
+    "win_rate": 0.6208,
+    "appearance_rate": 0.25
+  },
+  "Formation Breaker": {
+    "appearances": 16,
+    "total_decks": 64,
+    "win_rate": 0.6406,
+    "appearance_rate": 0.25
+  },
+  "Lasyd Prowler": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Sarkhan's Resolve": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.5657,
+    "appearance_rate": 0.4219
+  },
+  "Sultai Devotee": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.6077,
+    "appearance_rate": 0.4219
+  },
+  "Trade Route Envoy": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.6022,
+    "appearance_rate": 0.4219
+  },
+  "Undergrowth Leopard": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.6039,
+    "appearance_rate": 0.4375
+  },
+  "Armament Dragon": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5569,
+    "appearance_rate": 0.1875
+  },
+  "Call the Spirit Dragons": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.5708,
+    "appearance_rate": 0.0625
+  },
+  "Gurmag Nightwatch": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6286,
+    "appearance_rate": 0.3594
+  },
+  "Karakyk Guardian": {
+    "appearances": 16,
+    "total_decks": 64,
+    "win_rate": 0.6406,
+    "appearance_rate": 0.25
+  },
+  "Kin-Tree Severance": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.585,
+    "appearance_rate": 0.1563
+  },
+  "Monastery Messenger": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.6318,
+    "appearance_rate": 0.3438
+  },
+  "Neriv, Heart of the Storm": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6438,
+    "appearance_rate": 0.125
+  },
+  "Rakshasa's Bargain": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6393,
+    "appearance_rate": 0.2188
+  },
+  "Reigning Victor": {
+    "appearances": 21,
+    "total_decks": 64,
+    "win_rate": 0.6024,
+    "appearance_rate": 0.3281
+  },
+  "Reputable Merchant": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6061,
+    "appearance_rate": 0.4063
+  },
+  "Roar of Endless Song": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.6486,
+    "appearance_rate": 0.0938
+  },
+  "Temur Tawnyback": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6359,
+    "appearance_rate": 0.3594
+  },
+  "Abzan Monument": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1563
+  },
+  "Boulderborn Dragon": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6263,
+    "appearance_rate": 0.4063
+  },
+  "Dragonstorm Globe": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.6237,
+    "appearance_rate": 0.3906
+  },
+  "Jade-Cast Sentinel": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6301,
+    "appearance_rate": 0.4063
+  },
+  "Temur Monument": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6215,
+    "appearance_rate": 0.1875
+  },
+  "Watcher of the Wayside": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6203,
+    "appearance_rate": 0.3594
+  },
+  "Bloodfell Caves": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.6227,
+    "appearance_rate": 0.3906
+  },
+  "Dalkovan Encampment": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Evolving Wilds": {
+    "appearances": 33,
+    "total_decks": 64,
+    "win_rate": 0.6116,
+    "appearance_rate": 0.5156
+  },
+  "Great Arashin City": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Jungle Hollow": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6006,
+    "appearance_rate": 0.4063
+  },
+  "Mystic Monastery": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.6225,
+    "appearance_rate": 0.1563
+  },
+  "Nomad Outpost": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.6212,
+    "appearance_rate": 0.1719
+  },
+  "Rugged Highlands": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6358,
+    "appearance_rate": 0.375
+  },
+  "Sandsteppe Citadel": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5074,
+    "appearance_rate": 0.1406
+  },
+  "Thornwood Falls": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.6037,
+    "appearance_rate": 0.4219
+  },
+  "Warden of the Grove": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Swamp": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Coordinated Maneuver": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.642,
+    "appearance_rate": 0.4219
+  },
+  "Dalkovan Packbeasts": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6167,
+    "appearance_rate": 0.2188
+  },
+  "Dragonback Lancer": {
+    "appearances": 32,
+    "total_decks": 64,
+    "win_rate": 0.6292,
+    "appearance_rate": 0.5
+  },
+  "Smile at Death": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Stormbeacon Blade": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1719
+  },
+  "Bewildering Blizzard": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.625,
+    "appearance_rate": 0.1875
+  },
+  "Naga Fleshcrafter": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.575,
+    "appearance_rate": 0.1406
+  },
+  "Ringing Strike Mastery": {
+    "appearances": 29,
+    "total_decks": 64,
+    "win_rate": 0.6353,
+    "appearance_rate": 0.4531
+  },
+  "Riverwalk Technique": {
+    "appearances": 38,
+    "total_decks": 64,
+    "win_rate": 0.6338,
+    "appearance_rate": 0.5938
+  },
+  "Sibsig Appraiser": {
+    "appearances": 29,
+    "total_decks": 64,
+    "win_rate": 0.6264,
+    "appearance_rate": 0.4531
+  },
+  "Snowmelt Stag": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.642,
+    "appearance_rate": 0.3438
+  },
+  "Spectral Denial": {
+    "appearances": 17,
+    "total_decks": 64,
+    "win_rate": 0.5975,
+    "appearance_rate": 0.2656
+  },
+  "Temur Devotee": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6375,
+    "appearance_rate": 0.375
+  },
+  "Ureni's Rebuff": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.2188
+  },
+  "Adorned Crocodile": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.5949,
+    "appearance_rate": 0.4063
+  },
+  "Aggressive Negotiations": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.5728,
+    "appearance_rate": 0.4219
+  },
+  "Cruel Truths": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.6053,
+    "appearance_rate": 0.3906
+  },
+  "Dragon's Prey": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.5756,
+    "appearance_rate": 0.4375
+  },
+  "Scavenger Regent": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6104,
+    "appearance_rate": 0.125
+  },
+  "Sinkhole Surveyor": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Worthy Cost": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.5942,
+    "appearance_rate": 0.3594
+  },
+  "Jeskai Devotee": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.629,
+    "appearance_rate": 0.4219
+  },
+  "Shock Brigade": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.6201,
+    "appearance_rate": 0.4219
+  },
+  "Sunset Strikemaster": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6519,
+    "appearance_rate": 0.1406
+  },
+  "Dusyut Earthcarver": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.613,
+    "appearance_rate": 0.4219
+  },
+  "Heritage Reclamation": {
+    "appearances": 32,
+    "total_decks": 64,
+    "win_rate": 0.5799,
+    "appearance_rate": 0.5
+  },
+  "Krotiq Nestguard": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6108,
+    "appearance_rate": 0.375
+  },
+  "Nature's Rhythm": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Piercing Exhale": {
+    "appearances": 29,
+    "total_decks": 64,
+    "win_rate": 0.6388,
+    "appearance_rate": 0.4531
+  },
+  "Sage of the Fang": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.2031
+  },
+  "Snakeskin Veil": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.5939,
+    "appearance_rate": 0.4063
+  },
+  "Auroral Procession": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.5652,
+    "appearance_rate": 0.1719
+  },
+  "Barrensteppe Siege": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0781
+  },
+  "Defibrillating Current": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.5833,
+    "appearance_rate": 0.1094
+  },
+  "Effortless Master": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6208,
+    "appearance_rate": 0.2188
+  },
+  "Kishla Skimmer": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6104,
+    "appearance_rate": 0.125
+  },
+  "Marshal of the Lost": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6259,
+    "appearance_rate": 0.1406
+  },
+  "Purging Stormbrood": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6256,
+    "appearance_rate": 0.2344
+  },
+  "Songcrafter Mage": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.5333,
+    "appearance_rate": 0.1719
+  },
+  "Stalwart Successor": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.5345,
+    "appearance_rate": 0.2188
+  },
+  "Twinmaw Stormbrood": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6356,
+    "appearance_rate": 0.2344
+  },
+  "Whirlwing Stormbrood": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.6385,
+    "appearance_rate": 0.2031
+  },
+  "Zurgo, Thunder's Decree": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.5867,
+    "appearance_rate": 0.0781
+  },
+  "Embermouth Sentinel": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6097,
+    "appearance_rate": 0.375
+  },
+  "Mardu Monument": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1719
+  },
+  "Kishla Village": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "Scoured Barrens": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.5993,
+    "appearance_rate": 0.3906
+  },
+  "Wind-Scarred Crag": {
+    "appearances": 21,
+    "total_decks": 64,
+    "win_rate": 0.6405,
+    "appearance_rate": 0.3281
+  },
+  "Plains": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.6575,
+    "appearance_rate": 0.1563
+  },
+  "Lightfoot Technique": {
+    "appearances": 20,
+    "total_decks": 64,
+    "win_rate": 0.575,
+    "appearance_rate": 0.3125
+  },
+  "Riling Dawnbreaker": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.6226,
+    "appearance_rate": 0.4375
+  },
+  "Salt Road Packbeast": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6347,
+    "appearance_rate": 0.375
+  },
+  "Starry-Eyed Skyrider": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6231,
+    "appearance_rate": 0.1406
+  },
+  "Sunpearl Kirin": {
+    "appearances": 16,
+    "total_decks": 64,
+    "win_rate": 0.6365,
+    "appearance_rate": 0.25
+  },
+  "Humbling Elder": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.6183,
+    "appearance_rate": 0.3906
+  },
+  "Feral Deathgorger": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.621,
+    "appearance_rate": 0.3906
+  },
+  "Kin-Tree Nurturer": {
+    "appearances": 31,
+    "total_decks": 64,
+    "win_rate": 0.6231,
+    "appearance_rate": 0.4844
+  },
+  "Venerated Stormsinger": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.6462,
+    "appearance_rate": 0.2031
+  },
+  "Molten Exhale": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.633,
+    "appearance_rate": 0.3594
+  },
+  "Overwhelming Surge": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6327,
+    "appearance_rate": 0.2188
+  },
+  "Stadium Headliner": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.5958,
+    "appearance_rate": 0.0625
+  },
+  "Wild Ride": {
+    "appearances": 31,
+    "total_decks": 64,
+    "win_rate": 0.6183,
+    "appearance_rate": 0.4844
+  },
+  "Frontline Rush": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6119,
+    "appearance_rate": 0.2188
+  },
+  "Mardu Siegebreaker": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.675,
+    "appearance_rate": 0.0625
+  },
+  "Mountain": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5972,
+    "appearance_rate": 0.0938
+  },
+  "Elspeth, Storm Slayer": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Rebellious Strike": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6236,
+    "appearance_rate": 0.375
+  },
+  "Aegis Sculptor": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6271,
+    "appearance_rate": 0.1875
+  },
+  "Constrictor Sage": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6104,
+    "appearance_rate": 0.125
+  },
+  "Dispelling Exhale": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6378,
+    "appearance_rate": 0.4063
+  },
+  "Dragonologist": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.6464,
+    "appearance_rate": 0.1094
+  },
+  "Focus the Mind": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6212,
+    "appearance_rate": 0.4063
+  },
+  "Veteran Ice Climber": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Gurmag Rakshasa": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6104,
+    "appearance_rate": 0.125
+  },
+  "Krumar Initiate": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6078,
+    "appearance_rate": 0.2344
+  },
+  "Nightblade Brigade": {
+    "appearances": 19,
+    "total_decks": 64,
+    "win_rate": 0.6167,
+    "appearance_rate": 0.2969
+  },
+  "The Sibsig Ceremony": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.125
+  },
+  "Narset's Rebuke": {
+    "appearances": 36,
+    "total_decks": 64,
+    "win_rate": 0.6204,
+    "appearance_rate": 0.5625
+  },
+  "Summit Intimidator": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.6247,
+    "appearance_rate": 0.3906
+  },
+  "Unsparing Boltcaster": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6215,
+    "appearance_rate": 0.1875
+  },
+  "Dragon Sniper": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.6183,
+    "appearance_rate": 0.1563
+  },
+  "Rite of Renewal": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6272,
+    "appearance_rate": 0.2344
+  },
+  "Roamer's Routine": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.6076,
+    "appearance_rate": 0.3438
+  },
+  "Sagu Wildling": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6077,
+    "appearance_rate": 0.4063
+  },
+  "All-Out Assault": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Bone-Cairn Butcher": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.2031
+  },
+  "Disruptive Stormbrood": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.5644,
+    "appearance_rate": 0.2344
+  },
+  "Dragonclaw Strike": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.6183,
+    "appearance_rate": 0.1563
+  },
+  "Eshki Dragonclaw": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Hardened Tactician": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.5013,
+    "appearance_rate": 0.2031
+  },
+  "Severance Priest": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.5292,
+    "appearance_rate": 0.125
+  },
+  "Blossoming Sands": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.6107,
+    "appearance_rate": 0.4375
+  },
+  "Opulent Palace": {
+    "appearances": 17,
+    "total_decks": 64,
+    "win_rate": 0.5843,
+    "appearance_rate": 0.2656
+  },
+  "Sidisi, Regent of the Mire": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0781
+  },
+  "Jeskai Revelation": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0781
+  },
+  "Anafenza, Unyielding Lineage": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.5652,
+    "appearance_rate": 0.1719
+  },
+  "Tempest Hawk": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.5765,
+    "appearance_rate": 0.3438
+  },
+  "Alchemist's Assistant": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5972,
+    "appearance_rate": 0.1875
+  },
+  "Unburied Earthcarver": {
+    "appearances": 30,
+    "total_decks": 64,
+    "win_rate": 0.6156,
+    "appearance_rate": 0.4688
+  },
+  "Wail of War": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5259,
+    "appearance_rate": 0.1406
+  },
+  "Devoted Duelist": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6069,
+    "appearance_rate": 0.375
+  },
+  "Sonic Shrieker": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6167,
+    "appearance_rate": 0.2188
+  },
+  "Dragonfire Blade": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5796,
+    "appearance_rate": 0.1406
+  },
+  "Rot-Curse Rakshasa": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.556,
+    "appearance_rate": 0.1094
+  },
+  "Sandskitter Outrider": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.5708,
+    "appearance_rate": 0.4375
+  },
+  "Meticulous Artisan": {
+    "appearances": 21,
+    "total_decks": 64,
+    "win_rate": 0.6286,
+    "appearance_rate": 0.3281
+  },
+  "Shocking Sharpshooter": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6236,
+    "appearance_rate": 0.1875
+  },
+  "Sagu Pummeler": {
+    "appearances": 19,
+    "total_decks": 64,
+    "win_rate": 0.6088,
+    "appearance_rate": 0.2969
+  },
+  "Glacierwood Siege": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.5867,
+    "appearance_rate": 0.0781
+  },
+  "Host of the Hereafter": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.5292,
+    "appearance_rate": 0.125
+  },
+  "Mammoth Bellow": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.5917,
+    "appearance_rate": 0.125
+  },
+  "Runescale Stormbrood": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.594,
+    "appearance_rate": 0.2188
+  },
+  "Ureni, the Song Unending": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.4917,
+    "appearance_rate": 0.0313
+  },
+  "Frontier Bivouac": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6,
+    "appearance_rate": 0.1406
+  },
+  "Maelstrom of the Spirit Dragon": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.4917,
+    "appearance_rate": 0.0625
+  },
+  "Island": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5778,
+    "appearance_rate": 0.1406
+  },
+  "Furious Forebear": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.5533,
+    "appearance_rate": 0.1563
+  },
+  "Poised Practitioner": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.64,
+    "appearance_rate": 0.2344
+  },
+  "Iceridge Serpent": {
+    "appearances": 19,
+    "total_decks": 64,
+    "win_rate": 0.6474,
+    "appearance_rate": 0.2969
+  },
+  "Stillness in Motion": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Wingblade Disciple": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.6513,
+    "appearance_rate": 0.2031
+  },
+  "Salt Road Skirmish": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Dracogenesis": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.5361,
+    "appearance_rate": 0.0469
+  },
+  "Fire-Rim Form": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.616,
+    "appearance_rate": 0.4063
+  },
+  "Sarkhan, Dragon Ascendant": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "War Effort": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6056,
+    "appearance_rate": 0.1406
+  },
+  "Attuned Hunter": {
+    "appearances": 17,
+    "total_decks": 64,
+    "win_rate": 0.5917,
+    "appearance_rate": 0.2656
+  },
+  "Glacial Dragonhunt": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6271,
+    "appearance_rate": 0.1875
+  },
+  "Windcrag Siege": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Yathan Roadwatcher": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Dismal Backwater": {
+    "appearances": 21,
+    "total_decks": 64,
+    "win_rate": 0.5738,
+    "appearance_rate": 0.3281
+  },
+  "Swiftwater Cliffs": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.6392,
+    "appearance_rate": 0.375
+  },
+  "New Way Forward": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Misty Rainforest": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Loxodon Battle Priest": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6289,
+    "appearance_rate": 0.2344
+  },
+  "Essence Anchor": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6317,
+    "appearance_rate": 0.2344
+  },
+  "Corroding Dragonstorm": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.6227,
+    "appearance_rate": 0.1719
+  },
+  "Qarsi Revenant": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Channeled Dragonfire": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "Craterhoof Behemoth": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.6417,
+    "appearance_rate": 0.0469
+  },
+  "Inspirited Vanguard": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.6122,
+    "appearance_rate": 0.2031
+  },
+  "Knockout Maneuver": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6521,
+    "appearance_rate": 0.125
+  },
+  "Revival of the Ancestors": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5778,
+    "appearance_rate": 0.1406
+  },
+  "Sultai Monument": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1563
+  },
+  "Tranquil Cove": {
+    "appearances": 24,
+    "total_decks": 64,
+    "win_rate": 0.634,
+    "appearance_rate": 0.375
+  },
+  "Sage of the Skies": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.125
+  },
+  "Forest": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.5833,
+    "appearance_rate": 0.1094
+  },
+  "Duty Beyond Death": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "Fleeting Effigy": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1719
+  },
+  "Bloomvine Regent": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6352,
+    "appearance_rate": 0.1406
+  },
+  "Hollowmurk Siege": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.4889,
+    "appearance_rate": 0.0938
+  },
+  "Kheru Goldkeeper": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5938,
+    "appearance_rate": 0.1875
+  },
+  "Descendant of Storms": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.5909,
+    "appearance_rate": 0.1719
+  },
+  "Agent of Kotis": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6029,
+    "appearance_rate": 0.4063
+  },
+  "Ambling Stormshell": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0781
+  },
+  "Winternight Stories": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6333,
+    "appearance_rate": 0.1406
+  },
+  "Underfoot Underdogs": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6189,
+    "appearance_rate": 0.2344
+  },
+  "Rainveil Rejuvenator": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6483,
+    "appearance_rate": 0.2344
+  },
+  "Flamehold Grappler": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Rediscover the Way": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.6,
+    "appearance_rate": 0.0781
+  },
+  "Mox Jasper": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Jeskai Shrinekeeper": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.6321,
+    "appearance_rate": 0.2031
+  },
+  "Wayspeaker Bodyguard": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.5867,
+    "appearance_rate": 0.1563
+  },
+  "Yathan Tombguard": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6333,
+    "appearance_rate": 0.1406
+  },
+  "Reverberating Summons": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.6274,
+    "appearance_rate": 0.2188
+  },
+  "Death Begets Life": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Fangkeeper's Familiar": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6104,
+    "appearance_rate": 0.125
+  },
+  "Temur Battlecrier": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Cori Mountain Monastery": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.625,
+    "appearance_rate": 0.0938
+  },
+  "Ugin, Eye of the Storms": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Roiling Dragonstorm": {
+    "appearances": 17,
+    "total_decks": 64,
+    "win_rate": 0.651,
+    "appearance_rate": 0.2656
+  },
+  "Dragonbroods' Relic": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1875
+  },
+  "Inevitable Defeat": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "Felothar, Dawn of the Abzan": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.4567,
+    "appearance_rate": 0.0781
+  },
+  "Jeskai Brushmaster": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6493,
+    "appearance_rate": 0.1875
+  },
+  "Narset, Jeskai Waymaster": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.595,
+    "appearance_rate": 0.0781
+  },
+  "Cori-Steel Cutter": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.645,
+    "appearance_rate": 0.1563
+  },
+  "Lotuslight Dancers": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Riverwheel Sweep": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.587,
+    "appearance_rate": 0.1406
+  },
+  "Mistrise Village": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.6458,
+    "appearance_rate": 0.0938
+  },
+  "Traveling Botanist": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.5737,
+    "appearance_rate": 0.2031
+  },
+  "Awaken the Honored Dead": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.6125,
+    "appearance_rate": 0.0625
+  },
+  "Frostcliff Siege": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.5367,
+    "appearance_rate": 0.0781
+  },
+  "Clarion Conqueror": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.5708,
+    "appearance_rate": 0.0625
+  },
+  "Kishla Trawlers": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6472,
+    "appearance_rate": 0.1406
+  },
+  "Kotis, the Fangkeeper": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.4875,
+    "appearance_rate": 0.0625
+  },
+  "Taigam, Master Opportunist": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Magmatic Hellkite": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Lie in Wait": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.6364,
+    "appearance_rate": 0.1719
+  },
+  "Thunder of Unity": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "Skirmish Rhino": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Jeskai Monument": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.5783,
+    "appearance_rate": 0.1563
+  },
+  "Stormscale Scion": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.575,
+    "appearance_rate": 0.0313
+  },
+  "Strategic Betrayal": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.5769,
+    "appearance_rate": 0.2031
+  },
+  "Breaching Dragonstorm": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1563
+  },
+  "Surrak, Elusive Hunter": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.3556,
+    "appearance_rate": 0.0938
+  },
+  "Tersa Lightshatter": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.5567,
+    "appearance_rate": 0.0781
+  },
+  "Herd Heirloom": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.5233,
+    "appearance_rate": 0.0781
+  },
+  "Teval, Arbiter of Virtue": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Synchronized Charge": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.5867,
+    "appearance_rate": 0.1563
+  },
+  "Dragonback Assault": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.615,
+    "appearance_rate": 0.0781
+  },
+  "Cori Mountain Stalwart": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Marang River Regent": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Betor, Kin to All": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Ruinous Ultimatum": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Perennation": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Genesis Ultimatum": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "United Battlefront": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Voice of Victory": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Inspired Ultimatum": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  }
+}

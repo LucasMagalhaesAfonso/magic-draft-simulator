@@ -3,6 +3,8 @@ import { useAppStore, type ThemeId, type PlaymatId } from '../store/useAppStore'
 import { aiBrain, type AiBrainStats } from '../engine/ai-brain';
 import { getHumanLearnStats, resetHumanLearn } from '../draft/bot-ai';
 import { getSetList, deleteSet } from '../lib/database';
+import { getRatingsStats, hasRatingsData, preloadRatings } from '../lib/seventeen-lands';
+import * as SelfPlay from '../engine/self-play';
 import './SettingsScreen.css';
 
 const PLAYMATS: { id: PlaymatId; label: string; color: string; artUrl: string }[] = [
@@ -32,6 +34,15 @@ export function SettingsScreen() {
   // AI Brain stats
   const [aiStats, setAiStats] = useState<AiBrainStats>(() => aiBrain.getStats());
   const [aiResetting, setAiResetting] = useState(false);
+
+  // Self-play training
+  const [selfPlayStats, setSelfPlayStats] = useState<SelfPlay.SelfPlayStats>(() => SelfPlay.getStats());
+  const [selfPlayTarget, setSelfPlayTarget] = useState(20);
+  const [selfPlaySet, setSelfPlaySet] = useState<string>('all');
+  const [exportingModel, setExportingModel] = useState(false);
+
+  // 17lands ratings status
+  const [landsStats, setLandsStats] = useState(() => ({ loaded: hasRatingsData(), ...getRatingsStats() }));
 
   // Draft learning stats
   const [draftStats, setDraftStats] = useState(() => getHumanLearnStats());
@@ -84,8 +95,18 @@ export function SettingsScreen() {
 
   useEffect(() => {
     // Refresh stats every 5 seconds while on this screen
-    const id = setInterval(() => setAiStats(aiBrain.getStats()), 5000);
+    const id = setInterval(() => {
+      setAiStats(aiBrain.getStats());
+      if (SelfPlay.isRunning()) setSelfPlayStats(SelfPlay.getStats());
+    }, 2000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    // Load 17lands ratings and update status
+    preloadRatings().then(() => {
+      setLandsStats({ loaded: hasRatingsData(), ...getRatingsStats() });
+    });
   }, []);
 
   function handleResetBrain() {
@@ -94,6 +115,38 @@ export function SettingsScreen() {
       setAiStats(aiBrain.getStats());
       setAiResetting(false);
     });
+  }
+
+  async function handleExportModel() {
+    setExportingModel(true);
+    try {
+      // Sync from cloud first so the export includes global training data
+      await aiBrain.syncToCloud().catch(() => {});
+      await aiBrain.syncFromCloud().catch(() => {});
+      const json = await aiBrain.exportForBundling();
+      // Download file
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'ai-brain-prebuilt.json';
+      a.click();
+      URL.revokeObjectURL(url);
+      setAiStats(aiBrain.getStats());
+    } catch (e) {
+      console.error('Export failed:', e);
+    } finally {
+      setExportingModel(false);
+    }
+  }
+
+  function handleStartSelfPlay() {
+    if (SelfPlay.isRunning()) { SelfPlay.stop(); return; }
+    SelfPlay.run(selfPlayTarget, {
+      onProgress: (s) => setSelfPlayStats({ ...s }),
+      onDone: (s) => { setSelfPlayStats({ ...s }); setAiStats(aiBrain.getStats()); },
+    }, selfPlaySet);
+    setSelfPlayStats(SelfPlay.getStats());
   }
 
   function handleResetDraftLearn() {
@@ -385,9 +438,11 @@ export function SettingsScreen() {
               </span>
             </div>
             <div className="settings-info-item">
-              <span className="settings-info-label">Exploração atual</span>
+              <span className="settings-info-label">Exploração (temperatura)</span>
               <span className="settings-info-value ai-brain-epsilon">
-                {Math.round(aiStats.epsilon * 100)}%
+                {aiStats.temperature !== undefined
+                  ? `${aiStats.temperature.toFixed(2)} ${aiStats.temperature > 1.5 ? '🔥' : aiStats.temperature > 0.8 ? '🌡️' : '🎯'}`
+                  : '—'}
               </span>
             </div>
             <div className="settings-info-item">
@@ -403,7 +458,7 @@ export function SettingsScreen() {
               </span>
             </div>
           </div>
-          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button
               className="btn btn-muted"
               style={{ fontSize: 13 }}
@@ -412,10 +467,162 @@ export function SettingsScreen() {
             >
               {aiResetting ? 'Resetando...' : 'Resetar AI Brain'}
             </button>
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: 13 }}
+              onClick={handleExportModel}
+              disabled={exportingModel || aiStats.gamesPlayed === 0}
+              title="Sincroniza com a cloud, exporta os pesos e baixa o arquivo. Mova para public/data/ e commite antes do deploy."
+            >
+              {exportingModel ? 'Exportando...' : '💾 Exportar para Deploy'}
+            </button>
             {aiStats.gamesPlayed >= 5 && (
               <span className="ai-brain-badge">
                 {aiStats.gamesPlayed >= 30 ? '🔥 Treinada' : aiStats.gamesPlayed >= 10 ? '📈 Aprendendo' : '🌱 Iniciante'}
               </span>
+            )}
+          </div>
+        </div>
+
+        {/* Self-Play Training */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">⚔️ Auto-Treino (Self-Play)</h2>
+          <p className="settings-desc">
+            Treina a IA jogando partidas automáticas. Quanto mais jogos, mais forte ela fica.
+            Ao atingir 63% de vitória, avança de fase automaticamente.
+          </p>
+
+          {/* Phase indicator */}
+          <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#e8c97a' }}>
+                {selfPlayStats.phase === 0
+                  ? '🎯 Fase 1 — Aprendendo vs Heurística'
+                  : `🏆 Fase ${selfPlayStats.phase + 1} — vs IA v${selfPlayStats.phase}`}
+              </span>
+              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
+                {selfPlayStats.phaseGames} jogos nesta fase
+              </span>
+            </div>
+            {/* Phase win rate bar */}
+            <div style={{ position: 'relative', height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: `${Math.min(selfPlayStats.phaseWinRate * 100, 100)}%`,
+                background: selfPlayStats.phaseWinRate >= 0.63 ? '#4caf50' : selfPlayStats.phaseWinRate >= 0.5 ? '#e8c97a' : '#e57373',
+                transition: 'width 0.5s',
+                borderRadius: 4,
+              }} />
+              {/* Threshold marker at 63% */}
+              <div style={{ position: 'absolute', top: 0, left: '63%', width: 2, height: '100%', background: 'rgba(255,255,255,0.5)' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3, fontSize: 11, color: 'rgba(255,255,255,0.4)' }}>
+              <span>Win rate últimos 100: {selfPlayStats.phaseGames >= 10 ? `${Math.round(selfPlayStats.phaseWinRate * 100)}%` : '—'}</span>
+              <span>Meta: 63%</span>
+            </div>
+            {selfPlayStats.phaseJustAdvanced && (
+              <div style={{ marginTop: 6, padding: '4px 8px', borderRadius: 4, background: 'rgba(76,175,80,0.2)', color: '#4caf50', fontSize: 12, fontWeight: 600 }}>
+                🎉 Nova fase desbloqueada! Oponente ficou mais forte.
+              </div>
+            )}
+          </div>
+
+          <div className="settings-info-grid">
+            <div className="settings-info-item">
+              <span className="settings-info-label">Partidas concluídas</span>
+              <span className="settings-info-value">{selfPlayStats.gamesCompleted}</span>
+            </div>
+            <div className="settings-info-item">
+              <span className="settings-info-label">Média de turnos</span>
+              <span className="settings-info-value">
+                {selfPlayStats.gamesCompleted > 0 ? Math.round(selfPlayStats.avgTurns) : '—'}
+              </span>
+            </div>
+            {selfPlayStats.running && (
+              <div className="settings-info-item" style={{ gridColumn: '1 / -1' }}>
+                <span className="settings-info-label">Progresso</span>
+                <span className="settings-info-value">
+                  Jogo {selfPlayStats.currentGame}/{selfPlayStats.targetGames}
+                  {' · '}Treino: {selfPlayStats.p0Wins}W · Oponente: {selfPlayStats.p1Wins}W
+                </span>
+              </div>
+            )}
+            {selfPlayStats.running && (
+              <div className="settings-info-item" style={{ gridColumn: '1 / -1' }}>
+                <div style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${selfPlayStats.targetGames > 0 ? Math.round(selfPlayStats.gamesCompleted / selfPlayStats.targetGames * 100) : 0}%`,
+                    background: 'var(--accent)',
+                    transition: 'width 0.4s',
+                    borderRadius: 3,
+                  }} />
+                </div>
+              </div>
+            )}
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <select
+              value={selfPlaySet}
+              onChange={e => setSelfPlaySet(e.target.value)}
+              disabled={selfPlayStats.running}
+              style={{ background: 'rgba(255,255,255,0.08)', color: '#eee', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, padding: '5px 10px', fontSize: 13 }}
+            >
+              <option value="all">Todos os sets</option>
+              {importedSets.map(s => (
+                <option key={s.set_code} value={s.set_code}>{s.set_code.toUpperCase()} — {s.set_name}</option>
+              ))}
+            </select>
+            <select
+              value={selfPlayTarget}
+              onChange={e => setSelfPlayTarget(Number(e.target.value))}
+              disabled={selfPlayStats.running}
+              style={{ background: 'rgba(255,255,255,0.08)', color: '#eee', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, padding: '5px 10px', fontSize: 13 }}
+            >
+              {[10, 20, 50, 100, 200, 500].map(n => <option key={n} value={n}>{n} jogos</option>)}
+            </select>
+            <button
+              className={`btn ${selfPlayStats.running ? 'btn-muted' : 'btn-primary'}`}
+              style={{ fontSize: 13 }}
+              onClick={handleStartSelfPlay}
+            >
+              {selfPlayStats.running
+                ? '⏹ Parar'
+                : `▶ Treinar${selfPlaySet !== 'all' ? ' ' + selfPlaySet.toUpperCase() : ''}`}
+            </button>
+          </div>
+          {selfPlayStats.running && selfPlayStats.setCode !== 'all' && (
+            <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', margin: '6px 0 0' }}>
+              Treinando apenas com cartas do {selfPlayStats.setCode.toUpperCase()}
+            </p>
+          )}
+        </div>
+
+        {/* 17lands Data */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">📊 17lands (Draft AI)</h2>
+          <p className="settings-desc">
+            O draft bot usa dados reais de win-rate do 17lands para avaliar cartas melhor que o BREAD puro.
+            Baixe os dados com <code style={{ fontSize: 11, background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 3 }}>npx tsx tools/fetch-17lands.ts</code> e recompile.
+          </p>
+          <div className="settings-info-grid">
+            <div className="settings-info-item">
+              <span className="settings-info-label">Status</span>
+              <span className="settings-info-value" style={{ color: landsStats.loaded ? '#4ecdc4' : '#ff9966' }}>
+                {landsStats.loaded ? `✅ Carregado` : '⚠️ Não disponível (usando BREAD)'}
+              </span>
+            </div>
+            {landsStats.loaded && (
+              <>
+                <div className="settings-info-item">
+                  <span className="settings-info-label">Sets carregados</span>
+                  <span className="settings-info-value">{landsStats.sets.map(s => s.toUpperCase()).join(', ')}</span>
+                </div>
+                <div className="settings-info-item">
+                  <span className="settings-info-label">Total de cartas</span>
+                  <span className="settings-info-value">{landsStats.totalCards}</span>
+                </div>
+              </>
             )}
           </div>
         </div>

@@ -10,6 +10,8 @@ import { CardEffectsDB } from './card-effects';
 import * as GameState from './game-state';
 import * as GameAIPart2 from './game-ai-part2';
 import { aiBrain } from './ai-brain';
+import { getGameplayBonus, getPlayRate } from '../lib/seventeen-lands';
+import { getMtgoScore, getMtgoTrust } from '../lib/mtgo-stats';
 
 // Legacy name aliases
 const CardEngine = { ...Cards, ...CardUtils };
@@ -286,6 +288,17 @@ export function _threatScore(card: any): number {
   if (CardEngine.isPlaneswalker && CardEngine.isPlaneswalker(card)) score += 8;
   if (card._isToken) score -= 3;
 
+  // 17lands gameplay data: cards that overperform in real games are bigger threats
+  const _dwrBonus = getGameplayBonus(card.name || '');
+  if (_dwrBonus !== null) score += _dwrBonus * 0.8; // scaled down slightly for threat context
+
+  // MTGO data: cards that appear in winning decks are known threats
+  const _mtgoScore = getMtgoScore(card.name || '');
+  if (_mtgoScore !== null) {
+    const _mtgoTrust = getMtgoTrust(card.name || '');
+    score += (_mtgoScore - 5) * _mtgoTrust * 0.6; // bonus/penalty relative to 5.0 midpoint
+  }
+
   return score;
 }
 
@@ -368,6 +381,15 @@ export function playMainPhase(state: any, playerId: number): void {
     // Game phase context: early (≤3 lands), mid (4-6), late (7+)
     const gamePhase: 'early' | 'mid' | 'late' = landCount <= 3 ? 'early' : landCount <= 6 ? 'mid' : 'late';
     const boardScore_outer = _evaluateBoard(state, playerId);
+
+    // === GRAVEYARD RESOURCE ANALYSIS ===
+    // Track GY quality so recursion spells scale with available targets
+    const myGY = state.players[playerId].zones.graveyard.getAll();
+    const gyCreatures = myGY.filter((c: any) => CardEngine.isCreature(c));
+    const gyNonlands = myGY.filter((c: any) => !CardEngine.isLand(c));
+    const gyValue = gyCreatures.reduce((sum: number, c: any) =>
+      sum + CardEngine.getPower(c) + CardEngine.getToughness(c) +
+      (CardEngine.hasKeyword(c, 'Flying') || CardEngine.hasKeyword(c, 'Menace') ? 2 : 0), 0);
 
     const scored = playable.map((card: any) => {
       let score = 0;
@@ -862,6 +884,37 @@ export function playMainPhase(state: any, playerId: number): void {
         }
       }
 
+      // === MAIN2 PREFERENCE: Non-combat sorceries play after seeing combat results ===
+      // Playing draw/scry/lifegain in main1 gives up the ability to bluff mana open
+      // and wastes information — we don't know combat results yet.
+      if (state.phase === 'main1' &&
+          !(card.type_line || '').toLowerCase().includes('instant') &&
+          !CardEngine.hasKeyword(card, 'Flash')) {
+        const touchesCombat = effects.some((e: any) =>
+          e.type === 'destroy' || e.type === 'exile' || e.type === 'damage' ||
+          e.type === 'bounce' || e.type === 'tap' || e.type === 'buff' ||
+          e.type === 'fight' || e.type === 'destroy_all' || e.type === 'damage_all_creatures' ||
+          e.type === 'gain_control'
+        );
+        if (!touchesCombat && !CardEngine.isCreature(card) && !CardEngine.isAura(card) && !CardEngine.isEquipment(card)) {
+          // Pure utility sorcery with no combat impact — defer to main2
+          if (effects.some((e: any) => e.type === 'draw' || e.type === 'loot')) score -= 10;
+          else if (effects.some((e: any) => e.type === 'gainLife' || e.type === 'drain')) score -= 7;
+          else if (effects.some((e: any) => e.type === 'scry' || e.type === 'surveil')) score -= 5;
+          else score -= 4;
+        }
+      }
+
+      // === BLUFF / MANA DISCIPLINE: When clearly winning, don't tap out on low-impact spells ===
+      // Leaving mana open is a credible bluff even without an instant — opponent doesn't know.
+      // This also preserves mana for reactive plays if they surprise us.
+      if (state.phase === 'main1' && boardScore_outer > 18 && !hasValuableInstant && !losingRaceBadly) {
+        if (score < 14 && cmc >= 2) {
+          // Winning clearly + low-impact spell + no instants to hold for → small penalty
+          score -= 3;
+        }
+      }
+
       // === BOARD STALL: priorizar evasion + removal + card draw ===
       if (boardStalled) {
         if (effects.some((e: any) => e.type === 'draw')) score += 5;
@@ -881,6 +934,40 @@ export function playMainPhase(state: any, playerId: number): void {
           );
           if (grantsEvasion) score += 6; // Grant evasion to ground army
         }
+      }
+
+      // === GRAVEYARD AS RESOURCE: recursion value scales with GY content ===
+      if (effects.some((e: any) => e.type === 'return_from_graveyard')) {
+        if (gyCreatures.length >= 1) {
+          score += 4 + Math.min(Math.floor(gyValue / 2), 8); // Scale with creature quality in GY
+        } else if (gyNonlands.length >= 1) {
+          score += 3; // At least some nonland targets
+        } else {
+          score -= 6; // Recursion with empty GY is wasted — strongly defer
+        }
+      }
+
+      // === 17LANDS GAMEPLAY DATA (drawn_win_rate from real human games) ===
+      // Phase scaling: DWR matters MORE late game (top-decking the right card decides close games)
+      // and LESS early game (tempo/curve > card quality in turns 1-3).
+      const _gameplayBonus = getGameplayBonus(card.name || '');
+      if (_gameplayBonus !== null) {
+        const _phaseMultiplier = gamePhase === 'late' ? 1.5 : gamePhase === 'mid' ? 1.0 : 0.6;
+        score += _gameplayBonus * _phaseMultiplier;
+      }
+
+      // play_rate: if humans rarely play this card when drawn (<40%), it's situational.
+      const _playRate = getPlayRate(card.name || '');
+      if (_playRate !== null && _playRate < 0.4) score -= 2;
+
+      // === MTGO WINNING DECK DATA ===
+      // Cards that frequently appear in 3-1+ MTGO decks are proven performers.
+      // Phase scaling: same as DWR — late game card quality dominates.
+      const _mtgoCardScore = getMtgoScore(card.name || '');
+      if (_mtgoCardScore !== null) {
+        const _mtgoCardTrust = getMtgoTrust(card.name || '');
+        const _mtgoPhase = gamePhase === 'late' ? 1.4 : gamePhase === 'mid' ? 1.0 : 0.7;
+        score += (_mtgoCardScore - 5) * _mtgoCardTrust * _mtgoPhase;
       }
 
       // === GAME PLAN ADAPTATIVO ===
@@ -906,13 +993,29 @@ export function playMainPhase(state: any, playerId: number): void {
 
     if (scored.length > 0) {
       // AiBrain: re-rank top-3 heuristic candidates with neural network
+      // In self-play: player 0 = training (uses current model + records decisions)
+      //               player 1 = opponent (phase 0: pure heuristic; phase 1+: frozen model)
       const _nnTop = scored.slice(0, Math.min(3, scored.length));
       let card: any;
+      const _selfPlay = state._selfPlayMode as { trainingPlayer: number; phase: number } | undefined;
       if (_nnTop.length > 1 && aiBrain.isReady()) {
         const _nnBf = aiBrain.extractBoardFeatures(state, playerId);
-        const _nnRank = aiBrain.scoreActionsSync(_nnBf, _nnTop.map((s: any) => s.card), 'play');
-        card = _nnTop[_nnRank[0]].card;
-        aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(card, 'play'));
+        if (_selfPlay && playerId !== _selfPlay.trainingPlayer) {
+          // Opponent in self-play
+          if (_selfPlay.phase > 0 && aiBrain.hasFrozenModel()) {
+            // Phase 1+: frozen model, no epsilon, no recording
+            const _nnRank = aiBrain.scoreFrozenActionsSync(_nnBf, _nnTop.map((s: any) => s.card), 'play');
+            card = _nnTop[_nnRank[0]].card;
+          } else {
+            // Phase 0: pure heuristic — just use top scored card, no NN
+            card = scored[0].card;
+          }
+        } else {
+          // Training player (or normal game vs human): use current model + record decision
+          const _nnRank = aiBrain.scoreActionsSync(_nnBf, _nnTop.map((s: any) => s.card), 'play');
+          card = _nnTop[_nnRank[0]].card;
+          aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(card, 'play'));
+        }
       } else {
         card = scored[0].card;
       }
@@ -1766,7 +1869,20 @@ export function _computeGamePlan(state: any, playerId: number): string {
   const myCreatures = state.players[playerId].zones.battlefield.cards
     .filter((c: any) => CardEngine.isCreature(c));
 
+  // Evasion clock: how fast the opponent kills us through unblockable damage
+  const oppEvasionPower = oppCreatures.reduce((sum: number, c: any) => {
+    if (CardEngine.hasKeyword(c, 'Flying') || CardEngine.hasKeyword(c, 'Menace') ||
+        !myCreatures.some((b: any) => CardEngine.canBlock(b, c, state))) {
+      return sum + CardEngine.getPower(c);
+    }
+    return sum;
+  }, 0);
+  const evasionClock = oppEvasionPower > 0 ? Math.ceil(myLife / oppEvasionPower) : 99;
+
   if (myLife <= 4 || boardScore < -35) return 'stabilizing';
+  // Don't let life fall recklessly low: stabilize when evasion clock is <= 3 turns
+  if (myLife <= 8 && evasionClock <= 3) return 'stabilizing';
+  if (myLife <= 10 && evasionClock <= 2) return 'stabilizing';
   if (boardScore < -8 && oppCreatures.length >= 2) return 'reactive';
   if (boardScore > 12 || (myCreatures.length >= 3 && oppCreatures.length === 0)) return 'proactive';
 
@@ -1803,28 +1919,45 @@ export function _turnsToLethal(state: any, playerId: number): { mine: number; op
   const oppAttackers = state.players[oppId].zones.battlefield.cards
     .filter((c: any) => CardEngine.isCreature(c) && CardEngine.canAttack(c));
 
-  // My clock: evasion power — count creatures that can reliably deal damage
+  // My clock: guaranteed damage per turn (evasion or unblockable) — conservative clock
   let myEvasionPower = 0;
+  // My full attack power: sum of all attackers minus the best blocks opponent can assign
+  let myTotalAttackPower = 0;
+  let myAbsorbedByBlocks = 0;
   for (const c of myCreatures.filter((c: any) => CardEngine.canAttack(c))) {
     const pwr = CardEngine.getPower(c);
-    if (CardEngine.hasKeyword(c, 'Vigilance') || CardEngine.hasIndestructible(c) ||
-        CardEngine.hasKeyword(c, 'Flying') || CardEngine.hasKeyword(c, 'Menace') ||
-        !oppCreatures.some((b: any) => CardEngine.canBlock(b, c, state))) {
-      myEvasionPower += pwr;
+    myTotalAttackPower += pwr;
+    const validBlockers = oppCreatures.filter((b: any) => CardEngine.canBlock(b, c, state));
+    if (validBlockers.length === 0) {
+      myEvasionPower += pwr; // Truly unblockable
+    } else {
+      // Best blocker absorbs some damage (toughness-limited)
+      const bestTough = Math.max(...validBlockers.map((b: any) => CardEngine.getToughness(b)));
+      myAbsorbedByBlocks += Math.min(pwr, bestTough);
     }
   }
+  const myNetPower = Math.max(myEvasionPower, myTotalAttackPower - myAbsorbedByBlocks);
 
-  // Opp clock: power that can't be blocked
+  // Opp clock: their damage that gets through
   let oppEffPower = 0;
+  let oppTotalAttack = 0;
+  let oppAbsorbed = 0;
   for (const c of oppAttackers) {
-    if (!myCreatures.some((b: any) => CardEngine.canBlock(b, c, state))) {
-      oppEffPower += CardEngine.getPower(c);
+    const pwr = CardEngine.getPower(c);
+    oppTotalAttack += pwr;
+    const myBlockers = myCreatures.filter((b: any) => CardEngine.canBlock(b, c, state));
+    if (myBlockers.length === 0) {
+      oppEffPower += pwr;
+    } else {
+      const bestTough = Math.max(...myBlockers.map((b: any) => CardEngine.getToughness(b)));
+      oppAbsorbed += Math.min(pwr, bestTough);
     }
   }
+  const oppNetPower = Math.max(oppEffPower, oppTotalAttack - oppAbsorbed);
 
   return {
-    mine: myEvasionPower > 0 ? Math.ceil(oppLife / myEvasionPower) : 99,
-    opp: oppEffPower > 0 ? Math.ceil(myLife / oppEffPower) : 99,
+    mine: myNetPower > 0 ? Math.ceil(oppLife / myNetPower) : 99,
+    opp: oppNetPower > 0 ? Math.ceil(myLife / oppNetPower) : 99,
   };
 }
 
@@ -2027,14 +2160,16 @@ export function declareAttackers(state: any, playerId: number): void {
       if (state.combat.attackers.length > 0) {
         state.log.push(`Oponente ataca com ${state.combat.attackers.length} criatura(s).`);
         // AiBrain: use NN to identify the most strategically significant attacker to record
-        if (aiBrain.isReady()) {
+        // Only record decisions for the training player (not frozen opponent)
+        const _spAtk = state._selfPlayMode as { trainingPlayer: number } | undefined;
+        const _isTrainingPlayer = !_spAtk || playerId === _spAtk.trainingPlayer;
+        if (aiBrain.isReady() && _isTrainingPlayer) {
           try {
             const _atkBf = aiBrain.extractBoardFeatures(state, playerId);
             const _allAtkCards = state.combat.attackers
               .map((a: any) => a.card ?? a)
               .filter(Boolean);
             if (_allAtkCards.length > 1) {
-              // Re-rank attackers by NN: record the one the NN deems most impactful
               const _nnRank = aiBrain.scoreActionsSync(_atkBf, _allAtkCards, 'attack');
               const _bestAtk = _allAtkCards[_nnRank[0]];
               if (_bestAtk) aiBrain.recordDecision(_atkBf, aiBrain.extractActionFeatures(_bestAtk, 'attack'));

@@ -817,9 +817,22 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
           if (targeting) { setTargeting(null); break; }
           if (blockingWith.length > 0) { setBlockingWith([]); break; }
           {
-            // Block Space from skipping mandatory-input states
-            const blockingInputTypes = ['discard', 'sacrifice', 'scry', 'surveil', 'search_library', 'modal', 'order_blockers', 'order_library_top'];
+            // Block Space from skipping mandatory-input states (including trigger choices)
+            const blockingInputTypes = [
+              // Original
+              'discard', 'sacrifice', 'scry', 'surveil', 'search_library',
+              'modal', 'order_blockers', 'order_library_top',
+              // Trigger target choices — can't skip
+              'damage_creature_target', 'move_counters_target',
+              'etb_any_damage_target', 'etb_remove_counters_target',
+              // Other mandatory trigger choices
+              'choose_gy_bottom_library', 'choose_creature_type',
+              'choose_spared_creatures', 'trigger_cost',
+              'choose_opponent_discard',
+            ];
             const wiType = snap?.waitingForInput?.type;
+            // Also block choose_gy_return when NOT optional
+            if (wiType === 'choose_gy_return' && !snap?.waitingForInput?.optional && snap?.waitingForInput?.playerId === 0) break;
             if (wiType && blockingInputTypes.includes(wiType) && snap?.waitingForInput?.playerId === 0) break;
           }
           if (snap?.waitingForInput?.type === 'declare_blockers' && snap.waitingForInput.playerId === 0) {
@@ -2323,14 +2336,22 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   // ── Game over ────────────────────────────────────────────────────────────────
 
   if (displayWinner !== null) {
+    const opponentLabel = multiplayerMode ? (mpOpponentName || 'Oponente') : 'AI';
+    const winnerMsg = displayWinner === 0 ? 'You win! 🎉' : `${opponentLabel} wins!`;
     return (
       <div className="game-over animate-fade-in">
         <div className="game-over-card glass">
-          <h2 className={displayWinner === 0 ? 'win' : 'lose'}>{displayWinner === 0 ? 'You win! 🎉' : 'AI wins!'}</h2>
+          <h2 className={displayWinner === 0 ? 'win' : 'lose'}>{winnerMsg}</h2>
           <p>Turn {turn} · {p0.life} vs {p1.life} life</p>
           <div className="game-over-actions">
-            <button className="btn btn-gold" onClick={() => actions.restartGame()}>Play Again</button>
-            <button className="btn" onClick={() => setScreen('deckbuilder')}>Back to Deck</button>
+            {multiplayerMode ? (
+              <button className="btn btn-gold" onClick={() => setScreen('online_lobby')}>Voltar ao Lobby</button>
+            ) : (
+              <button className="btn btn-gold" onClick={() => actions.restartGame()}>Play Again</button>
+            )}
+            <button className="btn" onClick={() => setScreen(multiplayerMode ? 'online_lobby' : 'deckbuilder')}>
+              {multiplayerMode ? 'Trocar Deck' : 'Back to Deck'}
+            </button>
             <button className="btn btn-muted" onClick={() => setScreen('home')}>Home</button>
           </div>
         </div>

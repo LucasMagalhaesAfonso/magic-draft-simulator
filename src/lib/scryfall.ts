@@ -310,9 +310,11 @@ export async function fetchAltArt(
 const BUNDLED_SETS = ['tdm', 'ltr'];
 
 export async function seedBundledSets(
-  onProgress?: (progress: SyncProgress) => void
+  onProgress?: (progress: SyncProgress) => void,
+  setsToSeed?: string[]
 ): Promise<void> {
-  for (const setCode of BUNDLED_SETS) {
+  const sets = setsToSeed ?? BUNDLED_SETS;
+  for (const setCode of sets) {
     try {
       onProgress?.({ phase: 'downloading', current: 0, total: 0, message: `Loading ${setCode.toUpperCase()}...` });
       const res = await fetch(`/data/scryfall-${setCode}.json`);

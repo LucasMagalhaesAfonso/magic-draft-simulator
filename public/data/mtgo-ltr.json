@@ -1,0 +1,1394 @@
+{
+  "Eagles of the North": {
+    "appearances": 20,
+    "total_decks": 64,
+    "win_rate": 0.5881,
+    "appearance_rate": 0.3125
+  },
+  "Éowyn, Lady of Rohan": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.575,
+    "appearance_rate": 0.0313
+  },
+  "Errand-Rider of Gondor": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5732,
+    "appearance_rate": 0.1875
+  },
+  "Lembas": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.6125,
+    "appearance_rate": 0.0625
+  },
+  "Saruman the White": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5259,
+    "appearance_rate": 0.1406
+  },
+  "Elrond, Lord of Rivendell": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6403,
+    "appearance_rate": 0.1875
+  },
+  "Nazgûl": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6,
+    "appearance_rate": 0.125
+  },
+  "The Bath Song": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6093,
+    "appearance_rate": 0.1406
+  },
+  "Wizard's Rockets": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5722,
+    "appearance_rate": 0.0938
+  },
+  "Scroll of Isildur": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.575,
+    "appearance_rate": 0.0313
+  },
+  "Prince Imrahil the Fair": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.6,
+    "appearance_rate": 0.0469
+  },
+  "Saruman's Trickery": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.6125,
+    "appearance_rate": 0.0625
+  },
+  "Gwaihir the Windlord": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.6,
+    "appearance_rate": 0.0469
+  },
+  "Lórien Revealed": {
+    "appearances": 16,
+    "total_decks": 64,
+    "win_rate": 0.6115,
+    "appearance_rate": 0.25
+  },
+  "The Mouth of Sauron": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6313,
+    "appearance_rate": 0.125
+  },
+  "Slip On the Ring": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.6119,
+    "appearance_rate": 0.0938
+  },
+  "Pelargir Survivor": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.6033,
+    "appearance_rate": 0.1563
+  },
+  "Banish from Edoras": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6375,
+    "appearance_rate": 0.1875
+  },
+  "Deceive the Messenger": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.5381,
+    "appearance_rate": 0.1094
+  },
+  "Knights of Dol Amroth": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.25,
+    "appearance_rate": 0.0313
+  },
+  "Fog on the Barrow-Downs": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.4267,
+    "appearance_rate": 0.0781
+  },
+  "Great Hall of the Citadel": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.6481,
+    "appearance_rate": 0.1719
+  },
+  "Shire Terrace": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6125,
+    "appearance_rate": 0.125
+  },
+  "Plains": {
+    "appearances": 27,
+    "total_decks": 64,
+    "win_rate": 0.5986,
+    "appearance_rate": 0.4219
+  },
+  "Island": {
+    "appearances": 28,
+    "total_decks": 64,
+    "win_rate": 0.597,
+    "appearance_rate": 0.4375
+  },
+  "Swamp": {
+    "appearances": 49,
+    "total_decks": 64,
+    "win_rate": 0.5895,
+    "appearance_rate": 0.7656
+  },
+  "Troll of Khazad-dûm": {
+    "appearances": 25,
+    "total_decks": 64,
+    "win_rate": 0.5887,
+    "appearance_rate": 0.3906
+  },
+  "Claim the Precious": {
+    "appearances": 30,
+    "total_decks": 64,
+    "win_rate": 0.5772,
+    "appearance_rate": 0.4688
+  },
+  "Old Man Willow": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Inherited Envelope": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.125
+  },
+  "Éowyn, Fearless Knight": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.5867,
+    "appearance_rate": 0.0781
+  },
+  "Lash of the Balrog": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6362,
+    "appearance_rate": 0.3594
+  },
+  "Sam's Desperate Rescue": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.6242,
+    "appearance_rate": 0.3438
+  },
+  "Easterling Vanguard": {
+    "appearances": 26,
+    "total_decks": 64,
+    "win_rate": 0.6006,
+    "appearance_rate": 0.4063
+  },
+  "Orcish Bowmasters": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6292,
+    "appearance_rate": 0.1875
+  },
+  "Frodo Baggins": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5702,
+    "appearance_rate": 0.0938
+  },
+  "Stalwarts of Osgiliath": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6446,
+    "appearance_rate": 0.125
+  },
+  "Generous Ent": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.4333,
+    "appearance_rate": 0.0938
+  },
+  "Enraged Huorn": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.4333,
+    "appearance_rate": 0.0469
+  },
+  "King of the Oathbreakers": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Barad-dûr": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Mountain": {
+    "appearances": 41,
+    "total_decks": 64,
+    "win_rate": 0.5934,
+    "appearance_rate": 0.6406
+  },
+  "Forest": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.4071,
+    "appearance_rate": 0.1563
+  },
+  "Faramir, Field Commander": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.47,
+    "appearance_rate": 0.0781
+  },
+  "Many Partings": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.525,
+    "appearance_rate": 0.0313
+  },
+  "Mirkwood Spider": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.525,
+    "appearance_rate": 0.0313
+  },
+  "Haunt of the Dead Marshes": {
+    "appearances": 21,
+    "total_decks": 64,
+    "win_rate": 0.5468,
+    "appearance_rate": 0.3281
+  },
+  "Gollum, Patient Plotter": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1719
+  },
+  "Dunland Crebain": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.6087,
+    "appearance_rate": 0.3594
+  },
+  "Uruk-hai Berserker": {
+    "appearances": 18,
+    "total_decks": 64,
+    "win_rate": 0.5435,
+    "appearance_rate": 0.2813
+  },
+  "Bitter Downfall": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5208,
+    "appearance_rate": 0.1875
+  },
+  "Sauron, the Necromancer": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "One Ring to Rule Them All": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.325,
+    "appearance_rate": 0.0313
+  },
+  "The Torment of Gollum": {
+    "appearances": 22,
+    "total_decks": 64,
+    "win_rate": 0.5773,
+    "appearance_rate": 0.3438
+  },
+  "Cast into the Fire": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0781
+  },
+  "Erebor Flamesmith": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.5214,
+    "appearance_rate": 0.1094
+  },
+  "Horn of Gondor": {
+    "appearances": 10,
+    "total_decks": 64,
+    "win_rate": 0.6421,
+    "appearance_rate": 0.1563
+  },
+  "Smite the Deathless": {
+    "appearances": 21,
+    "total_decks": 64,
+    "win_rate": 0.5897,
+    "appearance_rate": 0.3281
+  },
+  "Mauhúr, Uruk-hai Captain": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Spiteful Banditry": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.7018,
+    "appearance_rate": 0.0625
+  },
+  "Warbeast of Gorgoroth": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.6346,
+    "appearance_rate": 0.2031
+  },
+  "Relentless Rohirrim": {
+    "appearances": 20,
+    "total_decks": 64,
+    "win_rate": 0.597,
+    "appearance_rate": 0.3125
+  },
+  "Shelob's Ambush": {
+    "appearances": 20,
+    "total_decks": 64,
+    "win_rate": 0.59,
+    "appearance_rate": 0.3125
+  },
+  "Rush the Room": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Éomer of the Riddermark": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.6048,
+    "appearance_rate": 0.1094
+  },
+  "Éomer, Marshal of Rohan": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.6914,
+    "appearance_rate": 0.0781
+  },
+  "Improvised Club": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6122,
+    "appearance_rate": 0.2344
+  },
+  "Mordor Muster": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.5571,
+    "appearance_rate": 0.2188
+  },
+  "Goblin Fireleaper": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6146,
+    "appearance_rate": 0.125
+  },
+  "Rohirrim Lancer": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.6492,
+    "appearance_rate": 0.1875
+  },
+  "Gimli's Axe": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Oliphaunt": {
+    "appearances": 23,
+    "total_decks": 64,
+    "win_rate": 0.5766,
+    "appearance_rate": 0.3594
+  },
+  "Book of Mazarbul": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6938,
+    "appearance_rate": 0.125
+  },
+  "Oath of the Grey Host": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.6143,
+    "appearance_rate": 0.1094
+  },
+  "Sauron, the Dark Lord": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.6107,
+    "appearance_rate": 0.0313
+  },
+  "Gandalf the Grey": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.6548,
+    "appearance_rate": 0.1094
+  },
+  "Gríma Wormtongue": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1719
+  },
+  "March from the Black Gate": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.6148,
+    "appearance_rate": 0.1406
+  },
+  "Gorbag of Minas Morgul": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.5867,
+    "appearance_rate": 0.0781
+  },
+  "Fear, Fire, Foes!": {
+    "appearances": 17,
+    "total_decks": 64,
+    "win_rate": 0.6343,
+    "appearance_rate": 0.2656
+  },
+  "Soothing of Sméagol": {
+    "appearances": 13,
+    "total_decks": 64,
+    "win_rate": 0.591,
+    "appearance_rate": 0.2031
+  },
+  "Birthday Escape": {
+    "appearances": 17,
+    "total_decks": 64,
+    "win_rate": 0.6333,
+    "appearance_rate": 0.2656
+  },
+  "Isolation at Orthanc": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5796,
+    "appearance_rate": 0.1406
+  },
+  "Cirith Ungol Patrol": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.5922,
+    "appearance_rate": 0.2344
+  },
+  "Foray of Orcs": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5972,
+    "appearance_rate": 0.0938
+  },
+  "Glorious Gale": {
+    "appearances": 12,
+    "total_decks": 64,
+    "win_rate": 0.5569,
+    "appearance_rate": 0.1875
+  },
+  "Gandalf, Friend of the Shire": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5889,
+    "appearance_rate": 0.1406
+  },
+  "Horses of the Bruinen": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Press the Enemy": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.5444,
+    "appearance_rate": 0.0469
+  },
+  "Gollum's Bite": {
+    "appearances": 15,
+    "total_decks": 64,
+    "win_rate": 0.6289,
+    "appearance_rate": 0.2344
+  },
+  "Dreadful as the Storm": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5444,
+    "appearance_rate": 0.0938
+  },
+  "Gothmog, Morgul Lieutenant": {
+    "appearances": 14,
+    "total_decks": 64,
+    "win_rate": 0.5571,
+    "appearance_rate": 0.2188
+  },
+  "Voracious Fell Beast": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "Lotho, Corrupt Shirriff": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.3333,
+    "appearance_rate": 0.0156
+  },
+  "Took Reaper": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.4758,
+    "appearance_rate": 0.0938
+  },
+  "Nasty End": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.4889,
+    "appearance_rate": 0.0938
+  },
+  "Denethor, Ruling Steward": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5656,
+    "appearance_rate": 0.1406
+  },
+  "Protector of Gondor": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5841,
+    "appearance_rate": 0.0938
+  },
+  "Lost to Legend": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5841,
+    "appearance_rate": 0.0938
+  },
+  "Palantír of Orthanc": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6104,
+    "appearance_rate": 0.125
+  },
+  "Rally at the Hornburg": {
+    "appearances": 16,
+    "total_decks": 64,
+    "win_rate": 0.6125,
+    "appearance_rate": 0.25
+  },
+  "Uglúk of the White Hand": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5972,
+    "appearance_rate": 0.0938
+  },
+  "Mirkwood Bats": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6208,
+    "appearance_rate": 0.125
+  },
+  "Haradrim Spearmaster": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.6143,
+    "appearance_rate": 0.1094
+  },
+  "Morgul-Knife Wound": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.4917,
+    "appearance_rate": 0.0938
+  },
+  "The Black Breath": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.6143,
+    "appearance_rate": 0.1094
+  },
+  "Ithilien Kingfisher": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6542,
+    "appearance_rate": 0.125
+  },
+  "Bewitching Leechcraft": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.4333,
+    "appearance_rate": 0.0469
+  },
+  "Captain of Umbar": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.52,
+    "appearance_rate": 0.0781
+  },
+  "Rangers of Ithilien": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Grishnákh, Brash Instigator": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.5792,
+    "appearance_rate": 0.125
+  },
+  "Breaking of the Fellowship": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1406
+  },
+  "Mount Doom": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Flame of Anor": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.825,
+    "appearance_rate": 0.0313
+  },
+  "Treason of Isengard": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.825,
+    "appearance_rate": 0.0313
+  },
+  "Grey Havens Navigator": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.5375,
+    "appearance_rate": 0.0625
+  },
+  "Meneldor, Swift Savior": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.6028,
+    "appearance_rate": 0.0938
+  },
+  "Moria Marauder": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.72,
+    "appearance_rate": 0.0781
+  },
+  "Gimli, Counter of Kills": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.6667,
+    "appearance_rate": 0.0938
+  },
+  "Battle-Scarred Goblin": {
+    "appearances": 11,
+    "total_decks": 64,
+    "win_rate": 0.6303,
+    "appearance_rate": 0.1719
+  },
+  "War of the Last Alliance": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.6304,
+    "appearance_rate": 0.0625
+  },
+  "Eastfarthing Farmer": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.6369,
+    "appearance_rate": 0.0938
+  },
+  "Samwise the Stouthearted": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0938
+  },
+  "Arwen's Gift": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.6188,
+    "appearance_rate": 0.125
+  },
+  "Shadow Summoning": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Entish Restoration": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "Wose Pathfinder": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.3959,
+    "appearance_rate": 0.1094
+  },
+  "Galadhrim Bow": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "Rise of the Witch-king": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "Mirrormere Guardian": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.1905,
+    "appearance_rate": 0.0469
+  },
+  "Dúnedain Rangers": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.2,
+    "appearance_rate": 0.0313
+  },
+  "Bag End Porter": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.4071,
+    "appearance_rate": 0.0469
+  },
+  "Stew the Coneys": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.2875,
+    "appearance_rate": 0.0625
+  },
+  "Fangorn, Tree Shepherd": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "Horn of the Mark": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Faramir, Prince of Ithilien": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.6125,
+    "appearance_rate": 0.0625
+  },
+  "Bilbo, Retired Burglar": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.4083,
+    "appearance_rate": 0.0625
+  },
+  "Swarming of Moria": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5519,
+    "appearance_rate": 0.1406
+  },
+  "Hithlain Knots": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.5833,
+    "appearance_rate": 0.1094
+  },
+  "Council's Deliberation": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Snarling Warg": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.425,
+    "appearance_rate": 0.0625
+  },
+  "Willow-Wind": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.45,
+    "appearance_rate": 0.0625
+  },
+  "Ioreth of the Healing House": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.4083,
+    "appearance_rate": 0.0625
+  },
+  "Rivendell": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.325,
+    "appearance_rate": 0.0313
+  },
+  "The Shire": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.1333,
+    "appearance_rate": 0.0469
+  },
+  "Mushroom Watchdogs": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.2,
+    "appearance_rate": 0.0313
+  },
+  "Ent's Fury": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.3,
+    "appearance_rate": 0.0469
+  },
+  "Hobbit's Sting": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.5277,
+    "appearance_rate": 0.125
+  },
+  "Reprieve": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.6357,
+    "appearance_rate": 0.0469
+  },
+  "Quickbeam, Upstart Ent": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.2,
+    "appearance_rate": 0.0313
+  },
+  "Dawn of a New Age": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.525,
+    "appearance_rate": 0.0313
+  },
+  "Meriadoc Brandybuck": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.525,
+    "appearance_rate": 0.0313
+  },
+  "Quarrel's End": {
+    "appearances": 9,
+    "total_decks": 64,
+    "win_rate": 0.5815,
+    "appearance_rate": 0.1406
+  },
+  "Fiery Inscription": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.4917,
+    "appearance_rate": 0.0625
+  },
+  "Gandalf's Sanction": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.4389,
+    "appearance_rate": 0.0469
+  },
+  "Boromir, Warden of the Tower": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.6929,
+    "appearance_rate": 0.0469
+  },
+  "Pippin, Guard of the Citadel": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.6304,
+    "appearance_rate": 0.0625
+  },
+  "Bombadil's Song": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.5714,
+    "appearance_rate": 0.0156
+  },
+  "Call of the Ring": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Bill the Pony": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0781
+  },
+  "Shire Shirriff": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Frodo, Sauron's Bane": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Rosie Cotton of South Lane": {
+    "appearances": 7,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.1094
+  },
+  "Landroval, Horizon Witness": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "The Battle of Bywater": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Saruman of Many Colors": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Nimrodel Watcher": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.6,
+    "appearance_rate": 0.0469
+  },
+  "Flowering of the White Tree": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0781
+  },
+  "Westfold Rider": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5417,
+    "appearance_rate": 0.0938
+  },
+  "Esquire of the King": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "East-Mark Cavalier": {
+    "appearances": 8,
+    "total_decks": 64,
+    "win_rate": 0.5946,
+    "appearance_rate": 0.125
+  },
+  "Sauron's Ransom": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Witch-king of Angmar": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Mordor Trebuchet": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.6111,
+    "appearance_rate": 0.0938
+  },
+  "The Balrog, Durin's Bane": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0625
+  },
+  "Gimli's Fury": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Erkenbrand, Lord of Westfold": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Fire of Orthanc": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Ranger's Firebrand": {
+    "appearances": 6,
+    "total_decks": 64,
+    "win_rate": 0.5417,
+    "appearance_rate": 0.0938
+  },
+  "Andúril, Flame of the West": {
+    "appearances": 4,
+    "total_decks": 64,
+    "win_rate": 0.5708,
+    "appearance_rate": 0.0625
+  },
+  "Olog-hai Crusher": {
+    "appearances": 5,
+    "total_decks": 64,
+    "win_rate": 0.6533,
+    "appearance_rate": 0.0781
+  },
+  "Lobelia Sackville-Baggins": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.6667,
+    "appearance_rate": 0.0156
+  },
+  "Orcish Medicine": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.6583,
+    "appearance_rate": 0.0313
+  },
+  "Mines of Moria": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.6667,
+    "appearance_rate": 0.0156
+  },
+  "There and Back Again": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Phial of Galadriel": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.5444,
+    "appearance_rate": 0.0469
+  },
+  "The One Ring": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.325,
+    "appearance_rate": 0.0313
+  },
+  "Fall of Cair Andros": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.4333,
+    "appearance_rate": 0.0469
+  },
+  "Doors of Durin": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "Friendly Rivalry": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.325,
+    "appearance_rate": 0.0313
+  },
+  "Peregrin Took": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.325,
+    "appearance_rate": 0.0313
+  },
+  "Strider, Ranger of the North": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "You Cannot Pass!": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Samwise Gamgee": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Minas Tirith": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0469
+  },
+  "Goldberry, River-Daughter": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Bill Ferny, Bree Swindler": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Théoden, King of Rohan": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.7536,
+    "appearance_rate": 0.0313
+  },
+  "Tale of Tinúviel": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.7536,
+    "appearance_rate": 0.0313
+  },
+  "Escape from Orthanc": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.8571,
+    "appearance_rate": 0.0156
+  },
+  "Aragorn, the Uniter": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.8571,
+    "appearance_rate": 0.0156
+  },
+  "Merry, Esquire of Rohan": {
+    "appearances": 3,
+    "total_decks": 64,
+    "win_rate": 0.719,
+    "appearance_rate": 0.0469
+  },
+  "Aragorn, Company Leader": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Soldier of the Grey Host": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Nimble Hobbit": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Pippin's Bravery": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Gimli, Mournful Avenger": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Celeborn the Wise": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.575,
+    "appearance_rate": 0.0313
+  },
+  "Fall of Gil-galad": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.575,
+    "appearance_rate": 0.0313
+  },
+  "Revive the Shire": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0313
+  },
+  "Barrow-Blade": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Glóin, Dwarf Emissary": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Shelob, Child of Ungoliant": {
+    "appearances": 2,
+    "total_decks": 64,
+    "win_rate": 0.325,
+    "appearance_rate": 0.0313
+  },
+  "Delighted Halfling": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Lothlórien Lookout": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Galadhrim Guide": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Shire Scarecrow": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "Sméagol, Helpful Guide": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0,
+    "appearance_rate": 0.0156
+  },
+  "Stern Scolding": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.3333,
+    "appearance_rate": 0.0156
+  },
+  "Borne Upon a Wind": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.3333,
+    "appearance_rate": 0.0156
+  },
+  "Shadowfax, Lord of Horses": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Butterbur, Bree Innkeeper": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Isildur's Fateful Strike": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Elrond, Master of Healing": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.5,
+    "appearance_rate": 0.0156
+  },
+  "Elven Farsight": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.5,
+    "appearance_rate": 0.0156
+  },
+  "Glorfindel, Dauntless Rescuer": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.5,
+    "appearance_rate": 0.0156
+  },
+  "Arwen Undómiel": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.5,
+    "appearance_rate": 0.0156
+  },
+  "Gift of Strands": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.5,
+    "appearance_rate": 0.0156
+  },
+  "Rising of the Day": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Now for Wrath, Now for Ruin!": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Mithril Coat": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  },
+  "Ent-Draught Basin": {
+    "appearances": 1,
+    "total_decks": 64,
+    "win_rate": 0.65,
+    "appearance_rate": 0.0156
+  }
+}

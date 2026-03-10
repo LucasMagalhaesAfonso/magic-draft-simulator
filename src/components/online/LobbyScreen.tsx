@@ -236,13 +236,18 @@ export function LobbyScreen() {
           </div>
 
           {mpRole === 'host' && (
-            <button
-              className="btn btn-gold lobby-start-btn"
-              onClick={handleStartGame}
-              disabled={!mpConnected || (!onlineDeck && !deck)}
-            >
-              🚀 Iniciar Partida
-            </button>
+            <>
+              {!mpConnected && (
+                <p className="lobby-waiting-label">⏳ Aguardando oponente humano entrar na sala...</p>
+              )}
+              <button
+                className="btn btn-gold lobby-start-btn"
+                onClick={handleStartGame}
+                disabled={!mpConnected || (!onlineDeck && !deck)}
+              >
+                🚀 Iniciar Partida
+              </button>
+            </>
           )}
           {mpRole === 'guest' && (
             <p className="lobby-waiting-label">⏳ Aguardando host iniciar...</p>

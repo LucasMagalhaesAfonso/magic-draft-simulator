@@ -11,7 +11,12 @@ export function HomeScreen() {
     setScreen, selectedSet, setSelectedSet,
     setTotalCards, syncing, syncMessage, setSyncing,
     setDraftPool, setDeck, setSealedPacks,
+    currentUser,
   } = useAppStore();
+
+  function handlePlayOnline() {
+    setScreen(currentUser ? 'online_lobby' : 'login');
+  }
 
   const [sets, setSets] = useState<{ set_code: string; set_name: string; card_count: number }[]>([]);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
@@ -149,6 +154,23 @@ export function HomeScreen() {
               <p>No card sets loaded yet.</p>
               <p className="text-muted">Import a set below to get started.</p>
             </div>
+          )}
+        </div>
+
+        {/* Online Play */}
+        <div className="home-section glass">
+          <h2 className="section-title">Online</h2>
+          <div className="home-mode-buttons">
+            <div className="home-mode-card" onClick={handlePlayOnline}>
+              <div className="home-mode-icon">🌐</div>
+              <div className="home-mode-name">Jogar Online</div>
+              <div className="home-mode-desc">1v1 com amigos · draft ou sealed</div>
+            </div>
+          </div>
+          {currentUser && (
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
+              Logado como <strong>{currentUser.displayName}</strong>
+            </p>
           )}
         </div>
 

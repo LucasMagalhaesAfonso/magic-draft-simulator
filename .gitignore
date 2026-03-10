@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 legacy-pure-js/node_modules/
+server/node_modules/
 
 # Build output
 dist/
@@ -33,6 +34,9 @@ pnpm-debug.log*
 
 # Local env
 *.local
+.env
+.env.*
+!.env.example
 
 # Test output
 test-results/

@@ -8,6 +8,9 @@ import { DeckBuilderScreen } from './components/DeckBuilderScreen';
 import { GameScreen } from './components/GameScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { SealedRevealScreen } from './components/SealedRevealScreen';
+import { LoginScreen } from './components/online/LoginScreen';
+import { LobbyScreen } from './components/online/LobbyScreen';
+import { onAuthChange } from './lib/firebase';
 import './styles/global.css';
 import './components/shared/Header.css';
 
@@ -51,10 +54,23 @@ class ErrorBoundary extends Component<
 }
 
 function App() {
-  const { screen, setDbReady, setTotalCards } = useAppStore();
+  const { screen, setDbReady, setTotalCards, setCurrentUser } = useAppStore();
 
   useEffect(() => {
     initDatabase();
+    // Restore Firebase session if user was already logged in
+    const unsub = onAuthChange((user) => {
+      if (user) {
+        setCurrentUser({
+          uid: user.uid,
+          email: user.email || '',
+          displayName: user.displayName || user.email?.split('@')[0] || 'Player',
+        });
+      } else {
+        setCurrentUser(null);
+      }
+    });
+    return () => unsub();
   }, []);
 
   async function initDatabase() {
@@ -83,6 +99,12 @@ function App() {
         return <SettingsScreen />;
       case 'sealed':
         return <SealedRevealScreen />;
+      case 'login':
+        return <LoginScreen />;
+      case 'online_lobby':
+        return <LobbyScreen />;
+      case 'online_game':
+        return <GameScreen multiplayerMode />;
       default:
         return <HomeScreen />;
     }

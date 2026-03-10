@@ -1,0 +1,230 @@
+.lobby-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 32px 24px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.lobby-header {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lobby-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.lobby-user-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lobby-username {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.lobby-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lobby-connection-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.lobby-connection-dot.connected { background: #27ae60; box-shadow: 0 0 6px #27ae60; }
+.lobby-connection-dot.disconnected { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
+
+.lobby-connection-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.lobby-error {
+  width: 100%;
+  max-width: 520px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(231, 76, 60, 0.15);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  color: #e74c3c;
+  font-size: 13px;
+  text-align: center;
+}
+
+.lobby-body {
+  width: 100%;
+  max-width: 520px;
+  padding: 28px 24px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.lobby-tabs {
+  display: flex;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.lobby-tab {
+  flex: 1;
+  padding: 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.2s, color 0.2s;
+}
+
+.lobby-tab.active {
+  background: rgba(255,200,50,0.15);
+  color: var(--gold, #ffc832);
+}
+
+.lobby-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.lobby-hint {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0;
+}
+
+.lobby-action-btn {
+  width: 100%;
+  padding: 14px;
+  font-size: 16px;
+}
+
+.lobby-code-input-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.lobby-code-input {
+  flex: 1;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+}
+
+.lobby-code-input:focus { border-color: var(--gold, #ffc832); }
+
+/* Room code display */
+.lobby-room-code {
+  font-size: 48px;
+  font-weight: 900;
+  letter-spacing: 10px;
+  color: var(--gold, #ffc832);
+  text-align: center;
+  font-family: monospace;
+  text-shadow: 0 0 20px rgba(255,200,50,0.4);
+}
+
+.lobby-waiting-label {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0;
+}
+
+/* Players panel */
+.lobby-players {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  justify-content: center;
+}
+
+.lobby-player-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  min-width: 140px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lobby-player-icon { font-size: 24px; }
+.lobby-player-you { font-size: 11px; color: var(--gold, #ffc832); }
+.lobby-player-connected { font-size: 11px; color: #27ae60; }
+.lobby-player-disconnected { font-size: 11px; color: #e74c3c; }
+.lobby-vs { font-size: 18px; font-weight: 700; color: var(--text-muted); }
+
+/* Deck select */
+.lobby-deck-select {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.lobby-deck-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 10px 20px;
+  border-radius: 8px;
+  background: rgba(255,200,50,0.1);
+  border: 1px solid rgba(255,200,50,0.2);
+}
+
+.lobby-no-deck {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.lobby-start-btn { width: 100%; padding: 14px; font-size: 16px; }
+.lobby-leave-btn { width: 100%; }
+
+.lobby-back-home {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px;
+  transition: color 0.2s;
+}
+.lobby-back-home:hover { color: var(--text-primary); }

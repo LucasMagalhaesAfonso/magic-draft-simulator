@@ -1,0 +1,112 @@
+// Firebase configuration
+// Fill in your Firebase project config here (or use .env variables)
+// To get these values: Firebase Console → Project Settings → Your apps → Web app → Config
+
+import { initializeApp, getApp, type FirebaseApp } from 'firebase/app';
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  updateProfile,
+  type User,
+} from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  collection,
+  getDocs,
+  deleteDoc,
+  serverTimestamp,
+} from 'firebase/firestore';
+
+// ── Config ────────────────────────────────────────────────────────────────────
+// Replace these with your actual Firebase config values
+const firebaseConfig = {
+  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY            || 'YOUR_API_KEY',
+  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN        || 'YOUR_AUTH_DOMAIN',
+  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID         || 'YOUR_PROJECT_ID',
+  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET     || 'YOUR_STORAGE_BUCKET',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || 'YOUR_SENDER_ID',
+  appId:             import.meta.env.VITE_FIREBASE_APP_ID             || 'YOUR_APP_ID',
+};
+
+// ── Initialization ────────────────────────────────────────────────────────────
+let app: FirebaseApp;
+try {
+  app = initializeApp(firebaseConfig);
+} catch (e: any) {
+  // Already initialized (HMR)
+  if (e.code === 'app/duplicate-app') {
+    app = getApp();
+  } else {
+    throw e;
+  }
+}
+
+export const auth = getAuth(app!);
+export const db = getFirestore(app!);
+
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+export async function registerUser(email: string, password: string, displayName: string): Promise<User> {
+  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  await updateProfile(cred.user, { displayName });
+  // Create user doc in Firestore
+  await setDoc(doc(db, 'users', cred.user.uid), {
+    displayName,
+    email,
+    createdAt: serverTimestamp(),
+  });
+  return cred.user;
+}
+
+export async function loginUser(email: string, password: string): Promise<User> {
+  const cred = await signInWithEmailAndPassword(auth, email, password);
+  return cred.user;
+}
+
+export async function logoutUser(): Promise<void> {
+  await signOut(auth);
+}
+
+export function onAuthChange(callback: (user: User | null) => void) {
+  return onAuthStateChanged(auth, callback);
+}
+
+// ── Deck storage ──────────────────────────────────────────────────────────────
+export interface SavedDeck {
+  id: string;
+  name: string;
+  set: string;
+  mainboard: any[];
+  lands: Record<string, number>;
+  createdAt: any;
+}
+
+export async function saveDeck(uid: string, deck: Omit<SavedDeck, 'id'>): Promise<string> {
+  const ref = doc(collection(db, 'users', uid, 'savedDecks'));
+  await setDoc(ref, { ...deck, createdAt: serverTimestamp() });
+  return ref.id;
+}
+
+export async function loadDecks(uid: string): Promise<SavedDeck[]> {
+  const snap = await getDocs(collection(db, 'users', uid, 'savedDecks'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() } as SavedDeck));
+}
+
+export async function deleteDeck(uid: string, deckId: string): Promise<void> {
+  await deleteDoc(doc(db, 'users', uid, 'savedDecks', deckId));
+}
+
+// ── Settings storage ──────────────────────────────────────────────────────────
+export async function saveSettings(uid: string, settings: Record<string, any>): Promise<void> {
+  await setDoc(doc(db, 'users', uid, 'settings', 'preferences'), settings, { merge: true });
+}
+
+export async function loadSettings(uid: string): Promise<Record<string, any> | null> {
+  const snap = await getDoc(doc(db, 'users', uid, 'settings', 'preferences'));
+  return snap.exists() ? snap.data() : null;
+}

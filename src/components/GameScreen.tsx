@@ -638,7 +638,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
     const queue = snap.triggerToastQueue || [];
     if (!queue.length) return;
     const lastId = lastSeenTriggerIdRef.current;
-    const newToasts = queue.filter(t => t.id > lastId);
+    const newToasts = queue.filter((t: any) => t.id > lastId);
     if (!newToasts.length) return;
     lastSeenTriggerIdRef.current = newToasts[newToasts.length - 1].id;
     // Add new items to the panel (keep up to 8 visible)
@@ -4731,7 +4731,6 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                 hint={ltHint}
                 keepLabel={ltKeepLabel}
                 discardLabel={ltDiscardLabel}
-                validUids={ltValidUids}
                 onConfirm={actions.resolveLookTop}
               />
             );

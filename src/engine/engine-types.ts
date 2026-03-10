@@ -202,4 +202,6 @@ export interface EnginePlayer {
     graveyard: { cards: GameCard[] };
     exile: { cards: GameCard[] };
   };
+  _protectionFromEverything?: boolean;
+  [key: string]: any;
 }

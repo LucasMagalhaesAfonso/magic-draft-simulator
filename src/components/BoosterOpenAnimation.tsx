@@ -1,9 +1,21 @@
 import { useState } from 'react';
-import boosterImg from '../assets/tdm-booster-pack.png';
+import tdmBooster from '../assets/tdm-booster-pack.png';
+import ltrBooster from '../assets/ltr-booster-pack.png';
 import './BoosterOpenAnimation.css';
+
+const BOOSTER_IMAGES: Record<string, string> = {
+  tdm: tdmBooster,
+  ltr: ltrBooster,
+};
+
+const SET_NAMES: Record<string, string> = {
+  tdm: 'Tarkir: Dragonstorm',
+  ltr: 'Lord of the Rings: Tales of Middle-earth',
+};
 
 interface Props {
   onFinish: () => void;
+  setCode?: string;
 }
 
 import cardBackImg from '../assets/mtg-card-back.jpg';
@@ -17,10 +29,11 @@ const BACK_CARDS = Array.from({ length: 14 }, (_, i) => {
 
 // ─── Shared sub-components ────────────────────────────────────────────────────
 
-function SetLabel() {
+function SetLabel({ setCode }: { setCode?: string }) {
+  const name = (setCode && SET_NAMES[setCode]) || SET_NAMES.tdm;
   return (
     <div className="booster-set-label">
-      <span className="booster-set-name">Tarkir: Dragonstorm</span>
+      <span className="booster-set-name">{name}</span>
       <span className="booster-set-sub">Play Booster</span>
     </div>
   );
@@ -48,7 +61,8 @@ function SkipBtn({ onSkip }: { onSkip: () => void }) {
 
 // ─── Main animation: Cut + Burst + Flip ───────────────────────────────────────
 
-export function BoosterOpenAnimation({ onFinish }: Props) {
+export function BoosterOpenAnimation({ onFinish, setCode }: Props) {
+  const boosterImg = (setCode && BOOSTER_IMAGES[setCode]) || BOOSTER_IMAGES.tdm;
   const [phase, setPhase] = useState<'idle' | 'shake' | 'cut' | 'flash' | 'burst' | 'flip' | 'done'>('idle');
   const [clicked, setClicked] = useState(false);
 
@@ -69,7 +83,7 @@ export function BoosterOpenAnimation({ onFinish }: Props) {
   return (
     <div className={`booster-anim-overlay phase-${phase}`}>
       <Particles count={20} />
-      <SetLabel />
+      <SetLabel setCode={setCode} />
 
       {/* Burst of card backs */}
       {(phase === 'burst' || phase === 'flip') && (

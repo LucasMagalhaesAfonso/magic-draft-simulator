@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore, type ThemeId, type PlaymatId } from '../store/useAppStore';
 import { aiBrain, type AiBrainStats } from '../engine/ai-brain';
 import { getHumanLearnStats, resetHumanLearn } from '../draft/bot-ai';
+import { getSetList, deleteSet } from '../lib/database';
 import './SettingsScreen.css';
 
 const PLAYMATS: { id: PlaymatId; label: string; color: string; artUrl: string }[] = [
@@ -35,6 +36,51 @@ export function SettingsScreen() {
   // Draft learning stats
   const [draftStats, setDraftStats] = useState(() => getHumanLearnStats());
   const [draftResetting, setDraftResetting] = useState(false);
+
+  // Imported sets
+  const [importedSets, setImportedSets] = useState<{ set_code: string; set_name: string; card_count: number }[]>([]);
+  const [deletingSet, setDeletingSet] = useState<string | null>(null);
+
+  // Alt art style filters (per-set)
+  const [altArtBySet, setAltArtBySet] = useState<Record<string, { style: string; count: number; samples: string[] }[]>>({});
+  const [disabledBySet, setDisabledBySet] = useState<Record<string, string[]>>(() => {
+    try { return JSON.parse(localStorage.getItem('alt_art_disabled_styles') || '{}'); } catch { return {}; }
+  });
+
+  useEffect(() => {
+    getSetList().then(setImportedSets).catch(() => {});
+    // Scan alt art keys for per-set style counts
+    const bySet: Record<string, Record<string, { count: number; samples: string[] }>> = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('alt_art_') && key !== 'alt_art_disabled_styles') {
+        const setCode = key.replace('alt_art_', '');
+        try {
+          const map = JSON.parse(localStorage.getItem(key)!);
+          if (!bySet[setCode]) bySet[setCode] = {};
+          for (const [cardName, alts] of Object.entries(map) as Array<[string, Array<{ style?: string; small?: string; normal?: string }>]>) {
+            // Only pick one sample per card name per style
+            const usedStyleForCard = new Set<string>();
+            for (const a of alts) {
+              const s = a.style || 'Alternate';
+              if (!bySet[setCode][s]) bySet[setCode][s] = { count: 0, samples: [] };
+              bySet[setCode][s].count++;
+              const img = a.small || a.normal || '';
+              if (img && bySet[setCode][s].samples.length < 4 && !usedStyleForCard.has(s)) {
+                bySet[setCode][s].samples.push(img);
+                usedStyleForCard.add(s);
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    const result: Record<string, { style: string; count: number; samples: string[] }[]> = {};
+    for (const [sc, styles] of Object.entries(bySet)) {
+      result[sc] = Object.entries(styles).map(([style, { count, samples }]) => ({ style, count, samples })).sort((a, b) => b.count - a.count);
+    }
+    setAltArtBySet(result);
+  }, []);
 
   useEffect(() => {
     // Refresh stats every 5 seconds while on this screen
@@ -418,6 +464,89 @@ export function SettingsScreen() {
             </div>
           </div>
         </div>
+
+        {/* Alt Art Styles (per set) */}
+        {Object.keys(altArtBySet).length > 0 && (
+          <div className="settings-section glass">
+            <h2 className="settings-title">🖼️ Alt Art Styles</h2>
+            <p className="settings-desc">Escolha quais estilos de arte aparecem nos boosters de cada set. Re-importe o set para as tags funcionarem.</p>
+            {Object.entries(altArtBySet).map(([setCode, styles]) => {
+              const disabled = disabledBySet[setCode] || [];
+              return (
+                <div key={setCode} style={{ marginBottom: 12 }}>
+                  <h3 style={{ fontSize: 13, color: '#ccc', margin: '8px 0 4px', textTransform: 'uppercase' }}>{setCode}</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {styles.map(({ style, count, samples }) => {
+                      const enabled = !disabled.includes(style);
+                      return (
+                        <div key={style} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 8, background: enabled ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.2)', opacity: enabled ? 1 : 0.5, transition: 'all 0.2s' }}>
+                          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                            {samples.map((src, i) => (
+                              <img key={i} src={src} alt="" style={{ width: 40, height: 56, borderRadius: 3, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }} />
+                            ))}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: '#eee' }}>{style}</div>
+                            <div style={{ fontSize: 11, color: '#888' }}>{count} variants</div>
+                          </div>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>
+                            <input
+                              type="checkbox"
+                              checked={enabled}
+                              onChange={() => {
+                                const next = enabled
+                                  ? [...disabled, style]
+                                  : disabled.filter(s => s !== style);
+                                const updated = { ...disabledBySet, [setCode]: next };
+                                if (next.length === 0) delete updated[setCode];
+                                setDisabledBySet(updated);
+                                localStorage.setItem('alt_art_disabled_styles', JSON.stringify(updated));
+                              }}
+                            />
+                            <span style={{ fontSize: 12, color: enabled ? '#4ecdc4' : '#666' }}>{enabled ? 'On' : 'Off'}</span>
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Card Database */}
+        {importedSets.length > 0 && (
+          <div className="settings-section glass">
+            <h2 className="settings-title">📦 Card Database</h2>
+            <p className="settings-desc">Sets importados. Delete um set para reimportá-lo.</p>
+            <div className="settings-info-grid">
+              {importedSets.map(s => (
+                <div key={s.set_code} className="settings-info-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <span className="settings-info-label">{s.set_code.toUpperCase()}</span>
+                    <span className="settings-info-value" style={{ fontSize: 11 }}>{s.set_name} ({s.card_count} cards)</span>
+                  </div>
+                  <button
+                    className="btn btn-muted"
+                    style={{ fontSize: 11, padding: '3px 10px', color: '#ff6b6b' }}
+                    disabled={deletingSet === s.set_code}
+                    onClick={async () => {
+                      if (!confirm(`Delete ${s.set_code.toUpperCase()} (${s.card_count} cards)? You can reimport from the home screen.`)) return;
+                      setDeletingSet(s.set_code);
+                      await deleteSet(s.set_code);
+                      localStorage.removeItem(`alt_art_${s.set_code.toLowerCase()}`);
+                      setImportedSets(prev => prev.filter(x => x.set_code !== s.set_code));
+                      setDeletingSet(null);
+                    }}
+                  >
+                    {deletingSet === s.set_code ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

@@ -264,7 +264,19 @@ export interface DeckList {
 // App Navigation
 // ============================================
 
-export type Screen = 'home' | 'draft' | 'deckbuilder' | 'game' | 'settings' | 'sealed';
+export type Screen = 'home' | 'draft' | 'deckbuilder' | 'game' | 'settings' | 'sealed' | 'login' | 'online_lobby' | 'online_game';
+
+// ============================================
+// Multiplayer Types
+// ============================================
+
+export type MultiplayerRole = 'host' | 'guest' | null;
+
+export interface OnlineUser {
+  uid: string;
+  email: string;
+  displayName: string;
+}
 
 // ============================================
 // Database Row Types (from SQLite)

@@ -11,6 +11,28 @@ import {
   canBlock,
 } from './card-utils';
 import { vfxPlay } from './vfx-bridge';
+
+// Apply life gain with Phial of Galadriel replacement: doubles gain when at 5 or less life
+function applyLifelinkGain(player: any, amount: number): void {
+  let gain = amount;
+  if (player.zones?.battlefield?.cards && player.life <= 5) {
+    for (const perm of player.zones.battlefield.cards) {
+      if ((perm.name || '').toLowerCase() === 'phial of galadriel') {
+        gain *= 2;
+        break;
+      }
+    }
+  }
+  player.life += gain;
+}
+
+// Get combat damage value — uses toughness if creature has assign_damage_by_toughness
+function getCombatDamage(card: any): number {
+  if (hasKeyword(card, 'assign_damage_by_toughness')) {
+    return getToughness(card);
+  }
+  return getPower(card);
+}
 import { checkPreventDamageShield, detectAndFireTapTriggers } from './game-state';
 
 // ============================================
@@ -78,7 +100,8 @@ interface CombatGameState extends EngineGameState {
 export function dealDamageToCreature(
   source: GameCard,
   target: CombatGameCard,
-  amount: number
+  amount: number,
+  gameState?: any
 ): void {
   if (amount <= 0) return;
 
@@ -92,6 +115,35 @@ export function dealDamageToCreature(
 
   // Mark creature as damaged this turn (for Unsparing Boltcaster, etc.)
   target._damagedThisTurn = true;
+  // Track who dealt damage (for Shelob: "if damage was dealt to it by a source you controlled")
+  let srcController = (source as any)._controller ?? (source as any)._owner ?? (source as any)._ownerId;
+  // Fallback: look up source controller from battlefield (prepareForBattlefield doesn't set _controller)
+  if (srcController === undefined && gameState) {
+    for (let pid = 0; pid < gameState.players.length; pid++) {
+      if (gameState.players[pid].zones.battlefield.get?.((source as any)._uid)) {
+        srcController = pid;
+        break;
+      }
+    }
+  }
+  if (srcController !== undefined) {
+    (target as any)._damagedByPlayer = srcController;
+    // Track Spider damage specifically (for Shelob's triggered ability)
+    if ((source as any).type_line?.toLowerCase().includes('spider') || ((source as any).keywords || []).some((k: any) => (typeof k === 'string' ? k : k?.keyword || '').toLowerCase() === 'spider')) {
+      (target as any)._damagedBySpider = srcController;
+    }
+  }
+
+  // Fire deals_damage_to_creature trigger (East-Mark Cavalier, etc.)
+  if (gameState?.fireTrigger) {
+    gameState.fireTrigger('deals_damage_to_creature', {
+      cardUid: (source as any)._uid,
+      card: source,
+      playerId: srcController,
+      damagedCreature: target,
+      amount,
+    });
+  }
 }
 
 // ============================================
@@ -262,6 +314,10 @@ export function fireAttackTriggers(
   const attackersSnapshot = [...combatState.attackers];
   const initialCount = attackersSnapshot.length;
 
+  // Track attacker count for "attacked with N+ creatures" conditions (e.g. Minas Tirith)
+  if (!gameState._attackerCountThisTurn) (gameState as any)._attackerCountThisTurn = {};
+  (gameState as any)._attackerCountThisTurn[attackingPlayerId] = initialCount;
+
   // Batch mode: collect all attack triggers across all attackers,
   // then resolve them together (allows trigger ordering overlay to show ALL triggers)
   (gameState as any)._batchAttackTriggers = true;
@@ -281,7 +337,7 @@ export function fireAttackTriggers(
       playerId: attackingPlayerId,
     });
 
-    if (attacker._attachments && attacker._attachments.length > 0) {
+    if (attacker && attacker._attachments && attacker._attachments.length > 0) {
       const hasEquip = attacker._attachments.some(aUid => {
         const att = gameState.players[attackingPlayerId].zones.battlefield.cards.find(
           (c: GameCard) => c._uid === aUid
@@ -308,6 +364,50 @@ export function fireAttackTriggers(
     log.push(...flushLogs);
   }
 
+  // Ring-bearer Level 2+: when ring-bearer attacks, loot (draw 1, discard 1)
+  // Guard: only fire once per combat (prevents double-loot if triggers cause re-entry)
+  const gs = gameState as any;
+  if (gs._ringLevel && gs._ringBearer && gs._ringLevel[attackingPlayerId] >= 2 && !gs._ringBearerLootFiredThisCombat) {
+    const bearerUid = gs._ringBearer[attackingPlayerId];
+    if (bearerUid) {
+      const isAttacking = attackersSnapshot.some(a => a.uid === bearerUid);
+      if (isAttacking) {
+        gs._ringBearerLootFiredThisCombat = true;
+        // Loot: draw 1, discard 1
+        const lib = gs.players[attackingPlayerId].zones.library;
+        const hand = gs.players[attackingPlayerId].zones.hand;
+        const drawn = lib.drawFromTop?.();
+        if (drawn) {
+          hand.add?.(drawn);
+          log.push(`Ring-bearer attacks: draw 1, discard 1 (loot).`);
+          // Track draw count for second_draw triggers (Knights of Dol Amroth etc.)
+          if (!gs._cardsDrawnThisTurn) gs._cardsDrawnThisTurn = {};
+          const prevDrawn = gs._cardsDrawnThisTurn[attackingPlayerId] || 0;
+          gs._cardsDrawnThisTurn[attackingPlayerId] = prevDrawn + 1;
+          if (prevDrawn < 2 && prevDrawn + 1 >= 2) {
+            const sdLogs = gs.fireTrigger?.('second_draw', { playerId: attackingPlayerId }) || [];
+            log.push(...sdLogs);
+          }
+          // AI auto-discards worst card; human gets discard overlay via existing loot flow
+          if (!gs.players[attackingPlayerId].isHuman) {
+            const worst = hand.cards.reduce((w: any, c: any) => {
+              return (!w || (c.cmc || 0) < (w.cmc || 0)) ? c : w;
+            }, null);
+            if (worst) {
+              hand.remove?.(worst._uid);
+              gs.players[attackingPlayerId].zones.graveyard.add?.(worst);
+              log.push(`AI discards ${worst.name}.`);
+            }
+          } else {
+            // Set up loot for human
+            gs._pendingLoot = { playerId: attackingPlayerId, drawCount: 0, discardCount: 1, drawn: [] };
+            gs.waitingForInput = { type: 'discard', playerId: attackingPlayerId, amount: 1, prompt: 'Ring-bearer loot: discard 1 card' };
+          }
+        }
+      }
+    }
+  }
+
   return log;
 }
 
@@ -322,6 +422,9 @@ export function resolveCombatDamage(
   gameState: CombatGameState
 ): string[] {
   const log: string[] = [];
+
+  // Guard: filter out any invalid attacker entries (e.g. from UID-only pushes)
+  combatState.attackers = combatState.attackers.filter((a: any) => a && typeof a === 'object' && a.card);
 
   // First strike damage phase (attackers AND blockers with First/Double Strike)
   const firstStrikers = combatState.attackers.filter(a =>
@@ -354,14 +457,14 @@ export function resolveCombatDamage(
       for (const { card: blocker } of blockers) {
         if (!hasKeyword(blocker, 'First Strike', gameState) && !hasKeyword(blocker, 'Double Strike', gameState)) continue;
         if (blocker._damage >= getToughness(blocker)) continue;
-        const bPower = getPower(blocker);
+        const bPower = getCombatDamage(blocker);
         if (bPower <= 0) continue;
-        dealDamageToCreature(blocker, attackEntry.card, bPower);
+        dealDamageToCreature(blocker, attackEntry.card, bPower, gameState);
         if (hasKeyword(blocker, 'Deathtouch', gameState) && bPower > 0 && !hasKeyword(blocker, 'Wither', gameState)) {
           attackEntry.card._damage = getToughness(attackEntry.card);
         }
         if (hasKeyword(blocker, 'Lifelink') && bPower > 0) {
-          defendingPlayer.life += bPower;
+          applyLifelinkGain(defendingPlayer, bPower);
         }
         log.push(`${blocker.name} (first strike) causa ${bPower} de dano a ${attackEntry.card.name}.`);
       }
@@ -404,17 +507,17 @@ export function resolveCombatDamage(
       ) {
         continue; // Dead blockers or first-strike blockers already dealt in phase 1
       }
-      const blockerPower = getPower(blocker);
+      const blockerPower = getCombatDamage(blocker);
       if (blockerPower <= 0) continue;
 
-      dealDamageToCreature(blocker, attackEntry.card, blockerPower);
+      dealDamageToCreature(blocker, attackEntry.card, blockerPower, gameState);
       if (hasKeyword(blocker, 'Deathtouch', gameState)) {
         if (!hasKeyword(blocker, 'Wither', gameState)) {
           attackEntry.card._damage = getToughness(attackEntry.card);
         }
       }
       if (hasKeyword(blocker, 'Lifelink') && blockerPower > 0) {
-        defendingPlayer.life += blockerPower;
+        applyLifelinkGain(defendingPlayer, blockerPower);
       }
       log.push(`${blocker.name} causa ${blockerPower} de dano a ${attackEntry.card.name} (golpe normal).`);
     }
@@ -450,7 +553,7 @@ export function resolveDamagePhase(
                          gameState.players[1].zones.battlefield.cards.some((c: any) => c._uid === uid);
     if (!attackerOnBf) continue;
 
-    const attackPower = getPower(attacker);
+    const attackPower = getCombatDamage(attacker);
 
     if (blockers.length === 0) {
       // Unblocked — check if attacking a planeswalker
@@ -468,7 +571,7 @@ export function resolveDamagePhase(
 
             // Lifelink
             if (hasKeyword(attacker, 'Lifelink')) {
-              attackingPlayer.life += pwDmg;
+              applyLifelinkGain(attackingPlayer, pwDmg);
               log.push(`${attacker.name} tem lifelink. +${pwDmg} vida. (Vida: ${attackingPlayer.life})`);
               vfxPlay('heal', 'p' + attackingPlayer.id);
             }
@@ -507,6 +610,10 @@ export function resolveDamagePhase(
         }
 
         if (dmg > 0) {
+          // Protection from everything (The One Ring): block all damage this turn
+          if (gameState.players[defendingPlayer.id]._protectionFromEverything) {
+            log.push(`${attacker.name}'s damage prevented (protection from everything).`);
+          } else
           // Check New Way Forward shield
           if (checkPreventDamageShield(gameState, defendingPlayer.id, dmg, attackingPlayer.id, attacker._uid)) {
             log.push(`${attacker.name} combat damage prevented by New Way Forward!`);
@@ -526,7 +633,7 @@ export function resolveDamagePhase(
 
           // Lifelink
           if (hasKeyword(attacker, 'Lifelink')) {
-            attackingPlayer.life += dmg;
+            applyLifelinkGain(attackingPlayer, dmg);
             log.push(
               `${attacker.name} tem lifelink. +${dmg} vida. (Vida: ${attackingPlayer.life})`
             );
@@ -542,11 +649,32 @@ export function resolveDamagePhase(
             controllerId: attackingPlayer.id,
           });
           log.push(...cbtLogs);
+
+          // Ring-bearer Level 4: when ring-bearer deals combat damage to player, opponent loses 3 life
+          if ((gameState as any)._ringLevel && (gameState as any)._ringBearer &&
+              (gameState as any)._ringLevel[attackingPlayer.id] >= 4 &&
+              (gameState as any)._ringBearer[attackingPlayer.id] === uid) {
+            defendingPlayer.life -= 3;
+            log.push(`Ring-bearer deals combat damage: opponent loses 3 additional life. (Life: ${defendingPlayer.life})`);
+          }
           } // end else (no shield)
         }
       }
       } // end attacking player
     } else {
+      // Ring-bearer Level 3+: when ring-bearer becomes blocked, destroy blocking creature
+      const gs3 = gameState as any;
+      if (gs3._ringLevel && gs3._ringBearer) {
+        const attackerPid = attacker._controller ?? attacker._owner ?? attackingPlayer.id;
+        if (gs3._ringLevel[attackerPid] >= 3 && gs3._ringBearer[attackerPid] === uid) {
+          for (const { card: bl } of blockers) {
+            const blPid = bl._controller ?? bl._owner ?? defendingPlayer.id;
+            log.push(`Ring-bearer is blocked: ${bl.name} is destroyed.`);
+            gs3.creatureDies?.(bl, blPid);
+          }
+        }
+      }
+
       // Blocked - use blocker order if set, otherwise default order
       let remainingAttackPower = applyDamageModifiers(gameState, uid, attackPower);
       const order = combatState.blockerOrder[uid];
@@ -563,7 +691,7 @@ export function resolveDamagePhase(
         if (!blockerOnBf) continue; // Attacker stays "blocked" but no damage exchanged
 
         const blockerToughness = Math.max(0, getToughness(blocker) - blocker._damage);
-        const blockerPower = getPower(blocker);
+        const blockerPower = getCombatDamage(blocker);
 
         // Attacker assigns damage to this blocker (only if it still has power left)
         let dmgToBlocker = 0;
@@ -574,7 +702,7 @@ export function resolveDamagePhase(
             dmgToBlocker = Math.min(remainingAttackPower, 1);
           }
 
-          dealDamageToCreature(attacker, blocker, dmgToBlocker);
+          dealDamageToCreature(attacker, blocker, dmgToBlocker, gameState);
           if (dmgToBlocker > 0) attacker._hasDealtDamage = true;
           remainingAttackPower -= dmgToBlocker;
 
@@ -594,7 +722,7 @@ export function resolveDamagePhase(
           ? (hasKeyword(blocker, 'First Strike', gameState) || hasKeyword(blocker, 'Double Strike', gameState))
           : (!hasKeyword(blocker, 'First Strike', gameState) || hasKeyword(blocker, 'Double Strike', gameState));
         if (blockerDeals) {
-          dealDamageToCreature(blocker, attacker, blockerPower);
+          dealDamageToCreature(blocker, attacker, blockerPower, gameState);
           if (blockerPower > 0) blocker._hasDealtDamage = true;
           if (hasKeyword(blocker, 'Deathtouch', gameState) && blockerPower > 0) {
             if (!hasKeyword(blocker, 'Wither', gameState)) {
@@ -671,7 +799,7 @@ export function resolveDamagePhase(
       // Attacker lifelink on damage dealt (uses POWER, not actual damage dealt)
       // Magic rules: lifelink gains life equal to power when creature deals combat damage
       if (hasKeyword(attacker, 'Lifelink') && attackPower > 0) {
-        attackingPlayer.life += attackPower;
+        applyLifelinkGain(attackingPlayer, attackPower);
       }
     }
   }

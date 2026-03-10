@@ -181,6 +181,11 @@ export interface FullGameState {
   _temporaryExiles: Record<string, TemporaryExileInfo>;
   _permanentExiles: Record<string, PermanentExileEntry[]>;
 
+  // Ring (LTR)
+  _ringLevel: [number, number];
+  _ringBearer: [string | null, string | null];
+  _pendingRingBearer: unknown;
+
   // Misc
   _damageShield: Record<number, number> | null;
   _extraCombat: boolean;

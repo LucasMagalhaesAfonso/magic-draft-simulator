@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Screen, Card, DeckList } from '../lib/types';
+import type { Screen, Card, DeckList, MultiplayerRole, OnlineUser } from '../lib/types';
 
 export type ThemeId = 'spark' | 'nyx' | 'phyrexian' | 'kamigawa' | 'obscura';
 export type PlaymatId = 'default' | 'forest' | 'ocean' | 'mountain' | 'plains' | 'swamp' | 'nyx' | 'custom';
@@ -93,6 +93,22 @@ interface AppState {
   // Sleeve / card back art
   sleeveArt: string;
   setSleeveArt: (artUrl: string) => void;
+
+  // ── Online / Multiplayer ──────────────────────────────────────────────────
+  currentUser: OnlineUser | null;
+  setCurrentUser: (user: OnlineUser | null) => void;
+
+  mpRole: MultiplayerRole;
+  mpRoomCode: string | null;
+  mpOpponentName: string | null;
+  mpConnected: boolean;
+  setMpRoom: (role: MultiplayerRole, code: string | null, opponentName?: string | null) => void;
+  setMpConnected: (connected: boolean) => void;
+  clearMp: () => void;
+
+  // Deck selected for online play
+  onlineDeck: DeckList | null;
+  setOnlineDeck: (deck: DeckList | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -164,4 +180,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     else localStorage.removeItem(SLEEVE_ART_KEY);
     set({ sleeveArt: artUrl });
   },
+
+  // ── Online / Multiplayer ──────────────────────────────────────────────────
+  currentUser: null,
+  setCurrentUser: (currentUser) => set({ currentUser }),
+
+  mpRole: null,
+  mpRoomCode: null,
+  mpOpponentName: null,
+  mpConnected: false,
+  setMpRoom: (mpRole, mpRoomCode, mpOpponentName = null) => set({ mpRole, mpRoomCode, mpOpponentName }),
+  setMpConnected: (mpConnected) => set({ mpConnected }),
+  clearMp: () => set({ mpRole: null, mpRoomCode: null, mpOpponentName: null, mpConnected: false }),
+
+  onlineDeck: null,
+  setOnlineDeck: (onlineDeck) => set({ onlineDeck }),
 }));

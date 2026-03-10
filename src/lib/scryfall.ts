@@ -38,6 +38,9 @@ interface ScryfallCard {
   card_faces?: ScryfallCardFace[];
   lang: string;
   games?: string[];
+  frame_effects?: string[];
+  border_color?: string;
+  promo_types?: string[];
 }
 
 interface ScryfallCardFace {
@@ -181,7 +184,7 @@ export async function syncSingleSet(
     onProgress?.({ phase: 'downloading', current: 0, total: 0, message: `Fetching ${setCode.toUpperCase()} from Scryfall...` });
 
     let allCards: ScryfallCard[] = [];
-    let url: string | null = `https://api.scryfall.com/cards/search?q=set:${setCode}&unique=cards`;
+    let url: string | null = `https://api.scryfall.com/cards/search?q=set:${setCode}+is:booster&unique=cards`;
 
     while (url) {
       const res: Response = await fetch(url);
@@ -250,7 +253,7 @@ async function fetchAltArt(
 
   // Group by card name, collect alternate art URLs (skip cards without images)
   const baseArts = new Map<string, string>();
-  const altMap: Record<string, Array<{ small: string; normal: string }>> = {};
+  const altMap: Record<string, Array<{ small: string; normal: string; style: string }>> = {};
 
   // First pass: identify base art (purely numeric collector number)
   for (const card of allPrints) {
@@ -273,8 +276,25 @@ async function fetchAltArt(
     if (!imgNormal) continue;
     if (imgNormal === baseArts.get(name)) continue;
 
+    // Skip starter deck / jumpstart reprints (same art, different CN)
+    const promos = card.promo_types || [];
+    if (promos.includes('starterdeck')) continue;
+
+    // Classify by VISUAL treatment (ignore foil types — same art, different finish)
+    const frames = card.frame_effects || [];
+    let style = 'Alternate';
+    if (frames.includes('showcase') && promos.includes('scroll')) style = 'Scroll Showcase';
+    else if (frames.includes('showcase') && card.border_color === 'borderless') style = 'Borderless Showcase';
+    else if (frames.includes('showcase')) style = 'Showcase';
+    else if (frames.includes('inverted') && card.border_color === 'borderless') style = 'Borderless Poster';
+    else if (card.border_color === 'borderless') style = 'Borderless';
+    else if (frames.includes('extendedart')) style = 'Extended Art';
+    else if (frames.includes('fullart')) style = 'Full Art';
+
+    // Skip if same card+style already exists (foil variants have same art)
     if (!altMap[name]) altMap[name] = [];
-    altMap[name].push({ small: imgSmall || '', normal: imgNormal });
+    if (altMap[name].some(a => a.style === style)) continue;
+    altMap[name].push({ small: imgSmall || '', normal: imgNormal, style });
   }
 
   const altCount = Object.keys(altMap).length;

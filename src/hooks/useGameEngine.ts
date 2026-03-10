@@ -169,6 +169,7 @@ function snapshot(gs: any) {
       imageSmall: item.card?.image_small || '',
       typeLine: item.card?.type_line || '',
       card: item.card || null,
+      modeLabel: item.card?._stackModeLabel || '',
     })),
     pendingCastCard: (gs as any)._pendingCastOnStack?.card || null,
 
@@ -261,6 +262,11 @@ function snapshot(gs: any) {
 
     // Trigger queue items for persistent panel
     gameQueueItems: [],  // populated by UI from triggerToastQueue
+
+    // Ring state (The One Ring / LTR)
+    ringLevel: (gs._ringLevel || [0, 0]) as [number, number],
+    ringBearer: (gs._ringBearer || [null, null]) as [string | null, string | null],
+    pendingRingBearer: (gs._pendingRingBearer as { controller: number; creatures: any[] } | null) ?? null,
 
     // Pre-computed set of UIDs for cards the human player can currently play.
     // Uses the engine's getPlayableCards which accounts for cost reductions
@@ -364,6 +370,9 @@ export interface GameActions {
   resolveBuffChoiceAction(creatureUid: string): void;
   resolveWardChoice(choice: 'pay' | 'decline' | 'repick'): void;
   resolveGrantTargetChoice(creatureUid: string): void;
+  resolveEowynGrantChoice(creatureUid: string, keyword: string): void;
+  resolveChooseOpponentDiscard(cardUid: string): void;
+  resolveRingBearerChoice(creatureUid: string): void;
   resolveDistributeCountersAction(distribution: Record<string, number>): void;
   resolveHandExile(cardUid: string): void;
   resolveGraveyardCastChoice(cardUid: string): void;
@@ -372,6 +381,8 @@ export interface GameActions {
   resolveTriggerCostAction(choice: string): void;
   resolveUnlessPayAction(shouldPay: boolean): void;
   resolveMillTargetChoice(targetSelf: boolean): void;
+  resolveWatcherTentacleUntap(krakenUid: string | null): void;
+  resolveWatcherTentacleStun(targetUid: string | null): void;
 
   // Special card effects
   resolveTravelingBotanist(toHand: boolean): void;
@@ -405,11 +416,12 @@ export interface GameActions {
   // ETB destroy target choice
   resolveETBDestroyTarget(targetUids: string | string[] | null): void;
 
-  // Move counters target choice (Host of the Hereafter)
-  resolveMoveCountersTarget(targetUid: string | null): void;
+  // Move counters target choice (Host of the Hereafter / dying creature counters)
+  resolveCounterInheritance(targetUid: string | null): void;
 
   // Exile GY creature cost (Great Arashin City etc.)
   resolveExileGYCreatureCost(cardUid: string | null): void;
+  resolveExileGYCardsCost(uids: string[]): void;
 
   // Graveyard trigger pay choice (e.g. Furious Forebear)
   resolveGraveyardTrigger(accepted: boolean): void;
@@ -423,6 +435,18 @@ export interface GameActions {
 
   // ETB exile target choice
   resolveETBExileTarget(targetUids: string[]): void;
+
+  // Shire Shirriff: choose which token to sacrifice before exiling
+  resolveSacrificeTokenChoice(tokenUid: string | null): void;
+
+  // Grishnákh steal target choice
+  resolveGrishnakhSteal(targetUid: string | null): void;
+
+  // Gain control target (Rangers of Ithilien etc.)
+  resolveGainControlTarget(targetUid: string | null): void;
+
+  // Mount Doom: choose creatures to spare then destroy rest
+  resolveChooseSparedCreatures(sparedUids: string[]): void;
 
   // ETB counter target choice (Sage of the Fang etc.)
   resolveETBCounterTarget(targetUid: string | null): void;
@@ -477,11 +501,30 @@ export interface GameActions {
   // Multi-buff choice
   resolveMultiBuffChoiceAction(creatureUids: string[]): void;
 
+  // Put creatures from hand (Last March of the Ents)
+  resolvePutCreaturesFromHand(uids: string[]): void;
+
   // Sacrifice choice
   resolveSacrifice(cardUid: string | null): void;
 
+  // Crew vehicle
+  resolveCrew(selectedUids: string[] | null): void;
+
   // GY return choice
   resolveGYReturn(cardUids: string[]): void;
+  resolveFriendlyRivalryChoice(uid: string | null): void;
+  resolveMultiUntap(uids: string[]): void;
+  resolveTapOrUntap(uid: string | null): void;
+  resolveFightTarget(uid: string | null): void;
+  resolveFreeCastFromHand(uid: string | null): void;
+  resolveFreeCastFromExile(uid: string | null): void;
+  resolveSauronsRansomChoice(pileIndex: number): void;
+  resolveMultiTapChoice(selectedUids: string[]): void;
+  resolveAttachEquipmentChoice(uid: string | null): void;
+  resolveAttachOwnCreature(uid: string | null): void;
+  resolveDamageCreatureTarget(uid: string | null): void;
+  resolveMoveCountersTarget(uid: string | null): void;
+  resolveMoveCountersAmount(amounts: Record<string, number>): void;
   resolveLibraryOrder(orderedUids: string[]): void;
 
   resolveShuffleGYChoosePlayer(targetPid: number): void;
@@ -509,6 +552,15 @@ export interface GameActions {
 
   // Stop at specific phases during human's own turn
   setMyStopPhases(phases: string[]): void;
+
+  // Long List of the Ents: confirm noted creature type
+  resolveNoteCreatureType(type: string): void;
+  resolveProtectionTypeChoice(cardType: string): void;
+  resolveProtectionCreatureChoice(uid: string): void;
+  resolveUnlessExile(doExile: boolean): void;
+
+  // Graveyard → top of library (Treason of Isengard)
+  resolveGraveyardToTop(cardUid: string | null): void;
 }
 
 function _describeEffect(e: any): string {
@@ -753,6 +805,38 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
     return () => clearTimeout(timer);
   }, [snap?.waitingForInput?.type, snap?.waitingForInput?.playerId]);
 
+  // Smart auto-pass for trigger priority: if human has nothing to cast at instant speed,
+  // resolve the trigger automatically after a short visual delay (Arena-style).
+  // If full control mode OR has playable instants/flash: wait for player input.
+  useEffect(() => {
+    const wi = snap?.waitingForInput;
+    if (wi?.type !== 'trigger_priority' || wi?.playerId !== 0) return;
+    const gs = gsRef.current;
+    if (!gs) return;
+    // Full control: always wait for player input
+    if ((gs as any)._fullControl) return;
+    // Check if human has any instant-speed options in hand
+    const hand: any[] = gs.players[0]?.zones?.hand?.getAll?.() || [];
+    const hasInstant = hand.some((c: any) => {
+      const tl = (c.type_line || '').toLowerCase();
+      return tl.includes('instant') || (c.oracle_text || '').toLowerCase().startsWith('flash');
+    });
+    if (hasInstant) return; // Player can respond — wait for their input
+    // No instants available: auto-resolve after brief visual delay
+    const timer = setTimeout(() => {
+      if (!gsRef.current || gsRef.current.waitingForInput?.type !== 'trigger_priority') return;
+      gsRef.current.waitingForInput = null;
+      if (_GS) {
+        _GS.processGameQueue(gsRef.current);
+        if (!gsRef.current.waitingForInput && !gsRef.current._gameQueue?.length) {
+          _GS.reprocessCurrentPhase(gsRef.current);
+        }
+      }
+      refresh();
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [snap?.waitingForInput?.type, snap?.waitingForInput?.playerId, refresh]);
+
   // Safety valve: reset _processingPhases if stuck for >3s (prevents Space from being blocked)
   useEffect(() => {
     const timer = setInterval(() => {
@@ -848,7 +932,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             const attacker = (entry as any).card || entry;
             if (!attacker) continue;
             const hasVigilance = (attacker.keywords || []).some((k: string) => k?.toLowerCase() === 'vigilance') ||
-              (attacker.oracle_text || '').toLowerCase().includes('vigilance');
+              (attacker._tempKeywords || []).some((t: any) => (typeof t === 'string' ? t : t?.keyword || '').toLowerCase() === 'vigilance');
             if (!hasVigilance && !attacker._tapped) {
               attacker._tapped = true;
             }
@@ -887,14 +971,27 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           if (pending) {
             // Pop the temporary stack item (pushed during priority gate check)
             if ((gs as any).stack?.items?.length > 0) (gs as any).stack.items.pop();
-            delete (gs as any)._pendingCastOnStack;
 
             if (pending.card._countered) {
+              delete (gs as any)._pendingCastOnStack;
               // Spell was countered by human — send to graveyard without resolving
               delete pending.card._countered;
               gs.players[pending.playerId].zones.graveyard.add(pending.card);
               gs.log.push(`${pending.card.name} vai para o cemiterio (anulado).`);
             } else {
+              // Before resolving the spell, flush any pending spell_targets triggers
+              // (e.g. King of the Oathbreakers phases out before Isolation at Orthanc resolves)
+              if ((gs as any)._gameQueue?.length > 0) {
+                _GS.processGameQueue(gs);
+                if (gs.waitingForInput) {
+                  // trigger_priority is now active — delay spell resolution
+                  // Leave _pendingCastOnStack so it resolves after triggers clear
+                  refresh();
+                  return;
+                }
+              }
+
+              delete (gs as any)._pendingCastOnStack;
               // Spell not countered — resume the cast (skips cost checks)
               (gs as any)._resumingFromStackPriority = true;
               // Temporarily put card back in hand so castSpell can find and remove it
@@ -925,7 +1022,19 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             _GS.reprocessCurrentPhase(gs);
           }
         } else {
-          _GS.advancePhase(gs);
+          // Always drain trigger queue before advancing phase.
+          // Catches cases where triggers fired but processGameQueue wasn't called yet
+          // (e.g. activated ability fired a trigger that sat in _gameQueue unreached).
+          const queueLen = (gs as any)._gameQueue?.length ?? 0;
+          if (queueLen > 0) {
+            _GS.processGameQueue(gs);
+            // If processGameQueue set a WFI (e.g. trigger_priority), stop here — don't advance
+            if (!gs.waitingForInput) {
+              _GS.advancePhase(gs);
+            }
+          } else {
+            _GS.advancePhase(gs);
+          }
         }
         // Safety: clear stale stack items when no _pendingCastOnStack exists
         // This prevents orphaned stack items from blocking instant_priority forever
@@ -1528,7 +1637,37 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const card = gs.players[0].zones.battlefield.get(cardUid);
         if (!card || card._tapped) return;
 
-        const colors = _Mana.getLandManaColors(card);
+        let colors = _Mana.getLandManaColors(card);
+        // Filter conditional add_mana abilities (e.g. Grey Havens: any-color only if legendary in GY)
+        if (colors.length > 1 && _Cards) {
+          const db = (_Cards as any).getPreprocessedEffects(card);
+          if (db?.activated) {
+            const condAny = db.activated.find((a: any) =>
+              a.effects?.some((e: any) => e.type === 'add_mana' && e.color === 'any' && e.condition)
+            );
+            if (condAny) {
+              const cond = condAny.effects.find((e: any) => e.type === 'add_mana' && e.color === 'any')?.condition;
+              let conditionMet = false;
+              if (cond === 'legendary_creature_in_gy') {
+                conditionMet = gs.players[0].zones.graveyard.getAll().some(
+                  (c: any) => _Cards.isCreature(c) && (c.type_line || '').toLowerCase().includes('legendary')
+                );
+              }
+              if (!conditionMet) {
+                // Remove the 'any' ability's colors — keep only colors from unconditional abilities
+                const safeColors: string[] = [];
+                for (const ab of db.activated) {
+                  const addManaEff = ab.effects?.find((e: any) => e.type === 'add_mana' && !e.condition);
+                  if (addManaEff) {
+                    if (addManaEff.color && addManaEff.color !== 'any') safeColors.push(addManaEff.color);
+                    else if (addManaEff.colors) safeColors.push(...addManaEff.colors);
+                  }
+                }
+                if (safeColors.length > 0) colors = safeColors;
+              }
+            }
+          }
+        }
         if (colors.length > 1) {
           // Dual/multi-color land — show color picker overlay
           gs._pendingManaChoice = { colors, controllerId: 0, cardUid, tapLand: true };
@@ -1684,6 +1823,16 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveScry] error:', e); }
     },
 
+    resolveGraveyardToTop(cardUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveGraveyardToTop(gs, cardUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGraveyardToTop] error:', e); }
+    },
+
     resolveModal(modeIndices: number[]) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
@@ -1702,6 +1851,26 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveMillTargetChoice] error:', e); }
+    },
+
+    resolveWatcherTentacleUntap(krakenUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveWatcherTentacleUntap(gs, krakenUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveWatcherTentacleUntap] error:', e); }
+    },
+
+    resolveWatcherTentacleStun(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveWatcherTentacleStun(gs, targetUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveWatcherTentacleStun] error:', e); }
     },
 
     resolveChooseTarget(targets: any[]) {
@@ -1792,6 +1961,29 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const land = typeof bf.get === 'function' ? bf.get(cardUid) : null;
         if (!land) return;
 
+        // If this land's activated ability has a mana cost (e.g. Shire Terrace: {1}, {T}, Sacrifice)
+        // validate and pay it before sacrificing.
+        if (_Cards && _Mana && _GS) {
+          const abilities = _Cards.getActivatedAbilities(land);
+          const sacAbility = abilities.find((a: any) => a.cost?.sacrifice === true);
+          if (sacAbility?.cost?.mana) {
+            const costStr = _Mana.formatManaCost(sacAbility.cost.mana);
+            const parsed = _Mana.parseCost(costStr);
+            const cmc = parsed.total || 0;
+            const canAfford = _Mana.canAfford(gs, 0, { mana_cost: costStr, cmc } as any, costStr, cmc);
+            if (!canAfford) {
+              gs.log.push(`${land.name}: insufficient mana — need ${costStr}.`);
+              if (typeof (window as any).__gameToast === 'function') {
+                (window as any).__gameToast(`Insufficient mana to activate ${land.name}.`, 'warning');
+              }
+              refresh();
+              return;
+            }
+            _GS.autoTapForSpell(gs, 0, costStr, cmc);
+            gs.manaPool[0] = _Mana.payMana(gs.manaPool[0], costStr, cmc);
+          }
+        }
+
         // Sacrifice: remove from battlefield, add to graveyard
         if (typeof bf.remove === 'function') bf.remove(cardUid);
         if (typeof gy.add === 'function') gy.add(land);
@@ -1848,6 +2040,16 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         );
       }
 
+      // Can't be blocked by more than one creature (e.g. Glorfindel mode 2)
+      const attacker = gs.players[1].zones.battlefield.getAll().find((c: any) => c._uid === attackerUid);
+      if (attacker && (attacker.keywords || []).some((k: string) => k.toLowerCase().includes('cant be blocked by more than one'))) {
+        if (!gs.combat.blockers[attackerUid]) gs.combat.blockers[attackerUid] = [];
+        if (gs.combat.blockers[attackerUid].length >= 1) {
+          // Already has a blocker — reject this assignment
+          return;
+        }
+      }
+
       // Check Menace: attacker with Menace needs 2+ blockers — allow assignment but warn later
       blocker._blocking = attackerUid;
       if (!gs.combat.blockers[attackerUid]) gs.combat.blockers[attackerUid] = [];
@@ -1881,18 +2083,35 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       // If exactly 1 blocker assigned to a Menace attacker, remove that block (it's illegal).
       if (gs.combat?.blockers && _Cards) {
         const attackersBf = gs.players[gs.activePlayer].zones.battlefield.getAll();
+        const defenderBf = gs.players[1 - gs.activePlayer].zones.battlefield.getAll();
         for (const entry of (gs.combat.attackers || [])) {
           const attackerCard = attackersBf.find((c: any) => c._uid === (entry.uid || entry));
           if (!attackerCard) continue;
           const hasMenace = (_Cards.hasKeyword as any)(attackerCard, 'Menace');
-          if (!hasMenace) continue;
-          const blockerList = gs.combat.blockers[attackerCard._uid] || [];
-          if (blockerList.length === 1) {
-            // Illegal: menace requires 2+ blockers. Remove the single blocker.
-            const singleBlocker = blockerList[0]?.card;
-            if (singleBlocker) singleBlocker._blocking = null;
-            gs.combat.blockers[attackerCard._uid] = [];
-            gs.log.push(`Blqueio invalido! ${attackerCard.name} tem Menace e precisa de 2+ bloqueadores. Bloqueio removido.`);
+          if (hasMenace) {
+            const blockerList = gs.combat.blockers[attackerCard._uid] || [];
+            if (blockerList.length === 1) {
+              const singleBlocker = blockerList[0]?.card;
+              if (singleBlocker) singleBlocker._blocking = null;
+              gs.combat.blockers[attackerCard._uid] = [];
+              gs.log.push(`Blqueio invalido! ${attackerCard.name} tem Menace e precisa de 2+ bloqueadores. Bloqueio removido.`);
+            }
+          }
+          // must_be_blocked: at least one creature must block this attacker if able
+          const mustBlock = (attackerCard.keywords || []).some((k: string) => k?.toLowerCase() === 'must be blocked') ||
+            (attackerCard._tempKeywords || []).some((t: any) => (typeof t === 'string' ? t : t.keyword)?.toLowerCase() === 'must be blocked');
+          if (mustBlock) {
+            const assigned = gs.combat.blockers[attackerCard._uid] || [];
+            if (assigned.length === 0) {
+              const canBlockIt = defenderBf.some((b: any) =>
+                _Cards.isCreature(b) && !b._tapped && _Cards.canBlock(b, attackerCard, gs)
+              );
+              if (canBlockIt) {
+                gs.log.push(`${attackerCard.name} deve ser bloqueado! Atribua pelo menos um bloqueador.`);
+                refresh();
+                return; // Prevent advancing — force player to assign blockers
+              }
+            }
           }
         }
       }
@@ -2017,9 +2236,13 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         const tapCardUid = pendingChoice?.cardUid;
 
         _GS.resolveManaChoice(gs, color);
-        // Only clear if engine didn't set a new overlay (e.g. trigger from tapped creature)
-        if (!gs.waitingForInput || gs.waitingForInput.type === 'mana_color_choice') {
-          gs.waitingForInput = null;
+        // Only clear WFI if the engine fully resolved the mana choice (no more pending picks).
+        // If _pendingManaChoice is still set, we're mid-combination (Wizard's Rockets "any combination")
+        // and must keep the overlay open for the remaining picks.
+        if (!gs._pendingManaChoice) {
+          if (!gs.waitingForInput || gs.waitingForInput.type === 'mana_color_choice') {
+            gs.waitingForInput = null;
+          }
         }
 
         // Track undo entry for land taps and mana abilities (Dragonstorm Globe etc.)
@@ -2098,6 +2321,36 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveGrantTargetChoice] error:', e); }
+    },
+
+    resolveEowynGrantChoice(creatureUid: string, keyword: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveEowynGrant(gs, creatureUid, keyword);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveEowynGrantChoice] error:', e); }
+    },
+
+    resolveChooseOpponentDiscard(cardUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveChooseOpponentDiscard(gs, cardUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveChooseOpponentDiscard] error:', e); }
+    },
+
+    resolveRingBearerChoice(creatureUid: string) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        _GS.resolveRingBearerChoice(gs, creatureUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveRingBearerChoice] error:', e); }
     },
 
     resolveDistributeCountersAction(distribution: Record<string, number>) {
@@ -2345,16 +2598,9 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
           }
         }
 
-        // Auto-tap for the base spell cost, then re-cast
-        const tapCost = spellCard.mana_cost;
-        let tapCmc = spellCard.cmc ?? 0;
-        if (_Mana && tapCost) {
-          const parsed = _Mana.parseCost(tapCost);
-          if (parsed?.hybrids?.length > 0) tapCmc = parsed.total;
-        }
-        if (tapCost && tapCmc > 0) {
-          _GS.autoTapForSpell(gs, 0, tapCost, tapCmc);
-        }
+        // Base spell cost was already paid in the first castSpell call (before behold overlay paused).
+        // Skip re-tapping for base cost; just flag engine to skip the mana check on second cast.
+        gs._beholdManaAlreadyPaid = true;
 
         // Re-cast (behold block will be skipped via _beholdPaid/_beholdDeclined flags)
         // Restore original targets (e.g. counterspell target that was passed when first cast)
@@ -2410,6 +2656,50 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       try {
         const hand = gs.players[0].zones.hand;
         const gy = gs.players[0].zones.graveyard;
+
+        // Handle activated ability discard cost (e.g. Witch-king of Angmar)
+        const activationPending = gs._pendingActivationDiscard;
+        if (activationPending) {
+          cardUids.forEach((uid: string) => {
+            const card = hand.getAll().find((c: any) => c._uid === uid);
+            if (card) {
+              hand.remove(card._uid);
+              gy.add(card);
+              gs.log.push(`Voce descarta ${card.name}.`);
+            }
+          });
+          gs._pendingActivationDiscard = null;
+          gs.waitingForInput = null;
+          gs._skipDiscardCost = true;
+          _GS?.activateBattlefieldAbility(gs, activationPending.pid, activationPending.creatureUid, activationPending.abilityIdx);
+          delete gs._skipDiscardCost;
+          afterResolve(gs);
+          refresh();
+          return;
+        }
+
+        // Handle additional cast cost discard (e.g. Quarrel's End)
+        const castPending = gs._pendingCastDiscard;
+        if (castPending) {
+          cardUids.forEach((uid: string) => {
+            const card = hand.getAll().find((c: any) => c._uid === uid);
+            if (card) {
+              hand.remove(card._uid);
+              gy.add(card);
+              gs.log.push(`Voce descarta ${card.name}.`);
+            }
+          });
+          gs._pendingCastDiscard = null;
+          gs.waitingForInput = null;
+          gs._skipAdditionalCostCheck = true;
+          _GS?.castSpell(gs, castPending.playerId, castPending.cardUid, castPending.targets,
+            castPending.isAdventure, castPending.isEvoke);
+          delete gs._skipAdditionalCostCheck;
+          afterResolve(gs);
+          refresh();
+          return;
+        }
+
         const pending = gs._pendingOptionalDiscard;
         const drawOnDiscard = pending?.drawOnDiscard;
         const returnFromGY = pending?.returnFromGY;
@@ -2563,18 +2853,18 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
 
     // ── Graveyard trigger pay choice (e.g. Furious Forebear) ──────────────────
 
-    resolveMoveCountersTarget(targetUid: string | null) {
+    resolveCounterInheritance(targetUid: string | null) {
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
-        if (typeof _GS.resolveMoveCountersTarget === 'function') {
-          _GS.resolveMoveCountersTarget(gs, targetUid);
+        if (typeof _GS.resolveCounterInheritance === 'function') {
+          _GS.resolveCounterInheritance(gs, targetUid);
         } else {
           gs.waitingForInput = null;
         }
         afterResolve(gs);
         refresh();
-      } catch (e) { console.warn('[resolveMoveCountersTarget]', e); }
+      } catch (e) { console.warn('[resolveCounterInheritance]', e); }
     },
 
     resolveExileGYCreatureCost(cardUid: string | null) {
@@ -2589,6 +2879,20 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveExileGYCreatureCost]', e); }
+    },
+
+    resolveExileGYCardsCost(uids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveExileGYCardsCost === 'function') {
+          _GS.resolveExileGYCardsCost(gs, uids);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveExileGYCardsCost]', e); }
     },
 
     resolveGraveyardTrigger(accepted: boolean) {
@@ -2680,6 +2984,54 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveETBExileTarget]', e); }
+    },
+
+    resolveSacrificeTokenChoice(tokenUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof (_GS as any).resolveSacrificeTokenChoice === 'function') {
+          (_GS as any).resolveSacrificeTokenChoice(gs, tokenUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveSacrificeTokenChoice]', e); }
+    },
+
+    resolveGrishnakhSteal(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof (_GS as any).resolveGrishnakhSteal === 'function') {
+          (_GS as any).resolveGrishnakhSteal(gs, targetUid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGrishnakhSteal]', e); }
+    },
+
+    resolveGainControlTarget(targetUid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        (_GS as any).resolveGainControlTarget(gs, targetUid);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveGainControlTarget]', e); gs.waitingForInput = null; refresh(); }
+    },
+
+    resolveChooseSparedCreatures(sparedUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        (_GS as any).resolveChooseSparedCreatures(gs, sparedUids);
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveChooseSparedCreatures]', e); gs.waitingForInput = null; refresh(); }
     },
 
     // ── ETB counter target (human chose which creature to buff with counter) ──
@@ -3189,6 +3541,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveMultiBuffChoice]', e); }
     },
 
+    // ── Put creatures from hand (Last March of the Ents) ────────────────────
+
+    resolvePutCreaturesFromHand(uids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolvePutCreaturesFromHand === 'function') {
+          _GS.resolvePutCreaturesFromHand(gs, uids);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolvePutCreaturesFromHand]', e); }
+    },
+
     // ── Sacrifice choice ────────────────────────────────────────────────────
 
     resolveSacrifice(cardUid: string | null) {
@@ -3205,6 +3573,22 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
       } catch (e) { console.warn('[resolveSacrifice]', e); }
     },
 
+    // ── Crew vehicle ─────────────────────────────────────────────────────────
+
+    resolveCrew(selectedUids: string[] | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveCrew === 'function') {
+          _GS.resolveCrew(gs, selectedUids);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveCrew]', e); }
+    },
+
     // ── GY return choice ────────────────────────────────────────────────────
 
     resolveGYReturn(cardUids: string[]) {
@@ -3219,6 +3603,188 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveGYReturn]', e); }
+    },
+
+    resolveFriendlyRivalryChoice(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveFriendlyRivalryChoice === 'function') {
+          _GS.resolveFriendlyRivalryChoice(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveFriendlyRivalryChoice]', e); }
+    },
+
+    resolveMultiUntap(uids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof (_GS as any).resolveMultiUntap === 'function') {
+          (_GS as any).resolveMultiUntap(gs, uids);
+        } else { gs.waitingForInput = null; }
+        afterResolve(gs); refresh();
+      } catch (e) { console.warn('[resolveMultiUntap]', e); }
+    },
+
+    resolveTapOrUntap(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveTapOrUntap === 'function') {
+          _GS.resolveTapOrUntap(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveTapOrUntap]', e); }
+    },
+
+    resolveFightTarget(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveFightTarget === 'function') {
+          _GS.resolveFightTarget(gs, uid);
+          afterResolve(gs);
+          refresh();
+        } else {
+          gs.waitingForInput = null;
+          afterResolve(gs);
+          refresh();
+        }
+      } catch (e) { console.warn('[resolveFightTarget]', e); }
+    },
+
+    resolveFreeCastFromHand(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveFreeCastFromHand === 'function') {
+          _GS.resolveFreeCastFromHand(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+          afterResolve(gs);
+          refresh();
+        }
+        refresh();
+      } catch (e) { console.warn('[resolveFreeCastFromHand]', e); }
+    },
+
+    resolveFreeCastFromExile(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveFreeCastFromExile === 'function') {
+          _GS.resolveFreeCastFromExile(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+          afterResolve(gs);
+        }
+        refresh();
+      } catch (e) { console.warn('[resolveFreeCastFromExile]', e); }
+    },
+
+    resolveSauronsRansomChoice(pileIndex: number) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveSauronsRansomChoice === 'function') {
+          _GS.resolveSauronsRansomChoice(gs, pileIndex);
+        } else {
+          gs.waitingForInput = null;
+          afterResolve(gs);
+        }
+        refresh();
+      } catch (e) { console.warn('[resolveSauronsRansomChoice]', e); }
+    },
+
+    resolveMultiTapChoice(selectedUids: string[]) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveMultiTapChoice === 'function') {
+          _GS.resolveMultiTapChoice(gs, selectedUids);
+        } else {
+          gs.waitingForInput = null;
+          afterResolve(gs);
+        }
+        refresh();
+      } catch (e) { console.warn('[resolveMultiTapChoice]', e); }
+    },
+
+    resolveAttachEquipmentChoice(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveAttachEquipmentChoice === 'function') {
+          _GS.resolveAttachEquipmentChoice(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+          afterResolve(gs);
+        }
+        refresh();
+      } catch (e) { console.warn('[resolveAttachEquipmentChoice]', e); }
+    },
+
+    resolveAttachOwnCreature(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveAttachOwnCreature === 'function') {
+          _GS.resolveAttachOwnCreature(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+          afterResolve(gs);
+        }
+        refresh();
+      } catch (e) { console.warn('[resolveAttachOwnCreature]', e); }
+    },
+
+    resolveDamageCreatureTarget(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveDamageCreatureTarget === 'function') {
+          _GS.resolveDamageCreatureTarget(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveDamageCreatureTarget]', e); }
+    },
+
+    resolveMoveCountersTarget(uid: string | null) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveMoveCountersTarget === 'function') {
+          _GS.resolveMoveCountersTarget(gs, uid);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveMoveCountersTarget]', e); }
+    },
+
+    resolveMoveCountersAmount(amounts: Record<string, number>) {
+      const gs = gsRef.current;
+      if (!gs || !_GS) return;
+      try {
+        if (typeof _GS.resolveMoveCountersAmount === 'function') {
+          _GS.resolveMoveCountersAmount(gs, amounts);
+        } else {
+          gs.waitingForInput = null;
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveMoveCountersAmount]', e); }
     },
 
     resolveLibraryOrder(orderedUids: string[]) {
@@ -3305,6 +3871,100 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveGraveyardCardChoice]', e); }
+    },
+
+    resolveNoteCreatureType(type: string) {
+      if (!_GS) return;
+      try {
+        const gs = gsRef.current!;
+        _GS.resolveNoteCreatureType(gs, 0, type);
+        refresh();
+      } catch (e) { console.warn('[resolveNoteCreatureType]', e); }
+    },
+
+    resolveProtectionTypeChoice(cardType: string) {
+      try {
+        const gs = gsRef.current!;
+        const pending = gs._pendingProtectionGrant;
+        if (!pending) return;
+        gs.waitingForInput = null;
+        // Store the chosen type, then pick the creature target
+        const bf = gs.players[pending.controllerId].zones.battlefield.cards.filter((c: any) => {
+          const uid = c._uid;
+          return pending.candidateUids?.includes(uid) ?? true;
+        });
+        if (bf.length === 0) { gs._pendingProtectionGrant = null; refresh(); return; }
+        if (bf.length === 1) {
+          gs._pendingProtectionGrant = null;
+          const c = bf[0];
+          if (!c._tempProtectionFrom) c._tempProtectionFrom = [];
+          c._tempProtectionFrom.push({ type: cardType, appliedTurn: gs.turn, duration: pending.duration });
+          gs.log.push(`${c.name} gains protection from ${cardType}s until end of turn.`);
+          afterResolve(gs);
+          refresh();
+        } else {
+          // Show creature selection — store type for after creature chosen
+          gs._pendingProtectionGrant = { ...pending, chosenType: cardType };
+          gs.waitingForInput = { type: 'protection_creature_choice', playerId: pending.controllerId, choices: bf };
+          refresh();
+        }
+      } catch (e) { console.warn('[resolveProtectionTypeChoice]', e); }
+    },
+
+    resolveProtectionCreatureChoice(uid: string) {
+      try {
+        const gs = gsRef.current!;
+        const pending = gs._pendingProtectionGrant;
+        if (!pending) return;
+        gs._pendingProtectionGrant = null;
+        gs.waitingForInput = null;
+        const creature = gs.players[pending.controllerId].zones.battlefield.cards.find((c: any) => c._uid === uid);
+        if (creature) {
+          if (!creature._tempProtectionFrom) creature._tempProtectionFrom = [];
+          creature._tempProtectionFrom.push({ type: pending.chosenType, appliedTurn: gs.turn, duration: pending.duration });
+          gs.log.push(`${creature.name} gains protection from ${pending.chosenType}s until end of turn.`);
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveProtectionCreatureChoice]', e); }
+    },
+
+    resolveUnlessExile(doExile: boolean) {
+      try {
+        const gs = gsRef.current!;
+        const pending = gs._pendingUnlessExile;
+        if (!pending) return;
+        gs._pendingUnlessExile = null;
+        gs.waitingForInput = null;
+        if (doExile) {
+          if (pending.creatureUid) {
+            // New: exile the enchanted creature (Morgul-Knife Wound oracle: exile THIS creature)
+            const pid = pending.controllerId;
+            const creature = gs.players[pid]?.zones.battlefield.get(pending.creatureUid);
+            if (creature) {
+              gs.players[pid].zones.battlefield.remove?.(creature._uid);
+              if (!gs.exile) gs.exile = { cards: [] };
+              gs.exile.cards.push(creature);
+              gs.log.push(`${creature.name} exiled (Morgul-Knife Wound).`);
+            }
+          } else if (pending.auraUid) {
+            // Legacy: exile the aura
+            const aura = gs.players.flatMap((p: any) => p.zones.battlefield.cards).find((c: any) => c._uid === pending.auraUid);
+            if (aura) {
+              const owner = aura._ownerId ?? 0;
+              gs.players[owner].zones.battlefield.remove?.(aura._uid);
+              if (!gs.exile) gs.exile = { cards: [] };
+              gs.exile.cards.push(aura);
+              gs.log.push(`${aura.name} exiled (Morgul-Knife Wound).`);
+            }
+          }
+        } else {
+          gs.players[pending.controllerId].life -= pending.amount;
+          gs.log.push(`${pending.controllerId === 0 ? 'You lose' : 'Opponent loses'} ${pending.amount} life.`);
+        }
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolveUnlessExile]', e); }
     },
 
     restartGame() {

@@ -192,7 +192,8 @@ function describeMode(mode: any): string {
   if (t === 'loseLife') return `Lose ${rawAmt} life`;
   if (t === 'counter_self') {
     const n = mode.amount || 1;
-    return `Put ${n} +1/+1 counter${n !== 1 ? 's' : ''} on this creature`;
+    const cType = mode.counter || '+1/+1';
+    return `Put ${n} ${cType} counter${n !== 1 ? 's' : ''} on this creature`;
   }
   if (t === 'buff') {
     const dur = mode.duration === 'end_of_turn' ? ' until end of turn' : '';
@@ -235,9 +236,27 @@ function describeMode(mode: any): string {
   }
   if (t === 'return_from_graveyard') return `Return ${tgtLabel(tgt) || 'card'} from graveyard to hand`;
   if (t === 'damage_all') return `Deals ${amtLabel(rawAmt)} damage to all ${tgtLabel(tgt) || 'creatures'}`;
-  if (t === 'grant') return `${tgtLabel(tgt) || 'Target'} gains ${(mode.keywords || []).join(', ')}`;
+  if (t === 'grant') {
+    const kws = (mode.keywords || []).map((k: string) => k.replace(/_/g, ' ')).join(', ');
+    const dur = mode.duration === 'end_of_turn' ? ' until end of turn' : '';
+    return `${tgtLabel(tgt) || 'Target'} gains ${kws}${dur}`;
+  }
+  if (t === 'grant_all') {
+    const kws = mode.keyword || (mode.keywords || []).join(', ');
+    const dur = mode.duration === 'end_of_turn' ? ' until end of turn' : '';
+    return `All your creatures gain ${kws.replace(/_/g, ' ')}${dur}`;
+  }
+  if (t === 'ring_tempts') return 'The Ring tempts you';
   if (t === 'counter_all') return `Put +1/+1 counters on all ${tgtLabel(tgt) || 'creatures'}`;
   if (t === 'sacrifice') return `Opponent sacrifices ${tgtLabel(tgt) || 'a permanent'}`;
+  if (t === 'gain_control') return `Gain control of ${tgtLabel(tgt) || 'target permanent'}`;
+  if (t === 'cant_block') return `${tgtLabel(tgt) || 'Target creature'} can't block this turn`;
+  if (t === 'return_from_graveyard') {
+    if (mode.to_hand) return `Return ${tgtLabel(tgt) || 'card'} from graveyard to hand`;
+    return `Return ${tgtLabel(tgt) || 'card'} from graveyard to battlefield${mode.tapped ? ' tapped' : ''}`;
+  }
+  if (t === 'drain') return `Drain ${rawAmt || 1} (opponent loses life, you gain life)`;
+  if (t === 'grant_flash_all_spells') return 'You may cast spells as though they had flash this turn';
   // triggered: describe its sub-effects
   if (t === 'triggered') {
     const eventDesc: Record<string, string> = {
@@ -271,6 +290,8 @@ export function ModalOverlay({ pendingModal, onConfirm, onCancel, onViewBattlefi
   const [selected, setSelected] = useState<number[]>([]);
 
   function toggle(i: number) {
+    const mode = (pendingModal.modes || [])[i];
+    if (mode?.disabled) return; // can't select disabled modes
     setSelected(prev => {
       if (prev.includes(i)) return prev.filter(x => x !== i);
       if (prev.length >= chooseCount) {
@@ -298,12 +319,15 @@ export function ModalOverlay({ pendingModal, onConfirm, onCancel, onViewBattlefi
           {(pendingModal.modes || []).map((mode: any, i: number) => (
             <button
               key={i}
-              className={`modal-mode-btn ${selected.includes(i) ? 'selected' : ''}`}
+              className={`modal-mode-btn ${selected.includes(i) ? 'selected' : ''} ${mode?.disabled ? 'disabled-mode' : ''}`}
               onClick={() => toggle(i)}
+              disabled={mode?.disabled}
+              title={mode?.disabled ? 'Not available (no valid target)' : undefined}
             >
               <span className="modal-mode-num">{i + 1}</span>
               {mode?.label && <span className="modal-mode-label">{mode.label}</span>}
               <span className="modal-mode-desc">{describeMode(mode)}</span>
+              {mode?.disabled && <span className="modal-mode-unavailable"> (indisponível)</span>}
             </button>
           ))}
         </div>
@@ -590,12 +614,13 @@ export function DiscardOverlay({ hand, amount, title, hint, optional, onConfirm 
 
 // ─── Mana Color Overlay ──────────────────────────────────────────────────────
 const MANA_COLOR_NAMES: Record<string, string> = { W:'White', U:'Blue', B:'Black', R:'Red', G:'Green', C:'Colorless' };
-interface ManaColorOverlayProps { colors: string[]; onConfirm: (color: string) => void; }
-export function ManaColorOverlay({ colors, onConfirm }: ManaColorOverlayProps) {
+interface ManaColorOverlayProps { colors: string[]; onConfirm: (color: string) => void; remaining?: number; }
+export function ManaColorOverlay({ colors, onConfirm, remaining }: ManaColorOverlayProps) {
+  const title = remaining && remaining > 1 ? `Choose Mana Color (${remaining} left)` : 'Choose Mana Color';
   return (
     <div className="overlay-backdrop">
       <div className="overlay-panel glass" style={{ maxWidth: 400 }}>
-        <h3 className="overlay-title">Choose Mana Color</h3>
+        <h3 className="overlay-title">{title}</h3>
         <div className="mana-color-choices">
           {colors.map(c => (
             <button key={c} className={`btn mana-color-btn mana-btn-${c}`} onClick={() => onConfirm(c)}>
@@ -641,10 +666,10 @@ export function SearchLibraryOverlay({ candidates, optional, title, hint, onConf
 
 // ─── Creature Choice Overlay (Blight / Sacrifice / Buff) ────────────────────
 interface CreatureChoiceOverlayProps {
-  creatures: any[]; title?: string; hint?: string; optional?: boolean;
+  creatures: any[]; title?: string; hint?: string; optional?: boolean; skipLabel?: string;
   onConfirm: (cardUid: string | null) => void;
 }
-export function CreatureChoiceOverlay({ creatures, title, hint, optional, onConfirm }: CreatureChoiceOverlayProps) {
+export function CreatureChoiceOverlay({ creatures, title, hint, optional, skipLabel, onConfirm }: CreatureChoiceOverlayProps) {
   return (
     <div className="overlay-backdrop">
       <div className="overlay-panel glass">
@@ -654,11 +679,11 @@ export function CreatureChoiceOverlay({ creatures, title, hint, optional, onConf
           {creatures.map((c: any, i: number) => (
             <div key={c._uid || i} className="scry-card-slot" onClick={() => onConfirm(c._uid)}>
               <CardImage card={c} size="medium" />
-              <div className="scry-card-label">{c.name} {c.power}/{c.toughness}</div>
+              <div className="scry-card-label">{c.name}{c.power != null && c.toughness != null ? ` ${c.power}/${c.toughness}` : ''}</div>
             </div>
           ))}
         </div>
-        {optional && <button className="btn btn-muted overlay-confirm" onClick={() => onConfirm(null)}>Skip</button>}
+        {optional && <button className="btn btn-muted overlay-confirm" onClick={() => onConfirm(null)}>{skipLabel || 'Skip'}</button>}
       </div>
     </div>
   );
@@ -666,10 +691,10 @@ export function CreatureChoiceOverlay({ creatures, title, hint, optional, onConf
 
 // ─── Bounce Multi-Select Overlay (up_to: N bounce) ───────────────────────────
 interface BounceMultiOverlayProps {
-  permanents: any[]; maxBounce: number; title?: string;
+  permanents: any[]; maxBounce: number; title?: string; allowEmpty?: boolean;
   onConfirm: (uids: string[]) => void;
 }
-export function BounceMultiOverlay({ permanents, maxBounce, title, onConfirm }: BounceMultiOverlayProps) {
+export function BounceMultiOverlay({ permanents, maxBounce, title, allowEmpty, onConfirm }: BounceMultiOverlayProps) {
   const [selected, setSelected] = useState<string[]>([]);
   const toggle = (uid: string) => {
     setSelected(prev =>
@@ -697,10 +722,54 @@ export function BounceMultiOverlay({ permanents, maxBounce, title, onConfirm }: 
           ))}
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(selected)} disabled={selected.length === 0}>
+          <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(selected)} disabled={!allowEmpty && selected.length === 0}>
             Confirm ({selected.length})
           </button>
           <button className="btn btn-muted" onClick={() => onConfirm([])}>Skip</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Crew Overlay — multi-select creatures with total power >= crewCost ──────
+interface CrewOverlayProps {
+  creatures: any[]; crewCost: number;
+  onConfirm: (uids: string[] | null) => void;
+}
+export function CrewOverlay({ creatures, crewCost, onConfirm }: CrewOverlayProps) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggle = (uid: string) =>
+    setSelected(prev => prev.includes(uid) ? prev.filter(u => u !== uid) : [...prev, uid]);
+  const totalPower = creatures
+    .filter(c => selected.includes(c._uid))
+    .reduce((s: number, c: any) => s + (parseInt(c.power) || 0), 0);
+  const ready = totalPower >= crewCost;
+  return (
+    <div className="overlay-backdrop">
+      <div className="overlay-panel glass">
+        <h3 className="overlay-title">⚙ Crew {crewCost}</h3>
+        <p className="overlay-hint">
+          Select creatures with total power ≥ {crewCost}. Currently: {totalPower}/{crewCost}.
+        </p>
+        <div className="scry-cards">
+          {creatures.map((c: any, i: number) => (
+            <div
+              key={c._uid || i}
+              className={`scry-card-slot${selected.includes(c._uid) ? ' scry-card-selected' : ''}`}
+              onClick={() => toggle(c._uid)}
+            >
+              <CardImage card={c} size="medium" />
+              <div className="scry-card-label">{c.name} ({c.power || 0}/{c.toughness || 0})</div>
+              {selected.includes(c._uid) && <div className="bounce-selected-badge">✓</div>}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button className="btn btn-primary overlay-confirm" onClick={() => onConfirm(selected)} disabled={!ready}>
+            Crew ({totalPower} power)
+          </button>
+          <button className="btn btn-muted" onClick={() => onConfirm(null)}>Cancel</button>
         </div>
       </div>
     </div>
@@ -754,7 +823,7 @@ export function DistributeCountersOverlay({ creatures, totalAmount, counterType 
               >
                 <div onClick={() => addOne(c._uid)} style={{ cursor: remaining > 0 ? 'pointer' : 'default' }}>
                   <CardImage card={c} size="medium" />
-                  <div className="scry-card-label">{c.name} {c.power}/{c.toughness}</div>
+                  <div className="scry-card-label">{c.name}{c.power != null && c.toughness != null ? ` ${c.power}/${c.toughness}` : ''}</div>
                 </div>
                 {count > 0 && <div className="bounce-selected-badge">+{count}</div>}
                 <div style={{ display: 'flex', gap: 4, justifyContent: 'center', marginTop: 4 }}>
@@ -850,11 +919,62 @@ interface RevealPickOverlayProps {
   validUids: string[];
   title?: string;
   hint?: string;
+  multiSelect?: boolean;
   onConfirm: (cardUid: string | null) => void;
 }
-export function RevealPickOverlay({ cards, validUids, title, hint, onConfirm }: RevealPickOverlayProps) {
+export function RevealPickOverlay({ cards, validUids, title, hint, multiSelect, onConfirm }: RevealPickOverlayProps) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [multiSelected, setMultiSelected] = useState<Set<string>>(new Set());
   const validSet = new Set(validUids);
+
+  if (multiSelect) {
+    const toggle = (uid: string) => setMultiSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid); else next.add(uid);
+      return next;
+    });
+    return (
+      <div className="overlay-backdrop">
+        <div className="overlay-panel glass">
+          <h3 className="overlay-title">{title || '👁 Reveal — Choose Cards'}</h3>
+          <p className="overlay-hint">{hint || 'Click highlighted cards to select any number, then confirm.'}</p>
+          <div className="scry-cards">
+            {cards.map((card: any) => {
+              const isValid = validSet.has(card._uid);
+              const isSel = multiSelected.has(card._uid);
+              return (
+                <div
+                  key={card._uid}
+                  className={`scry-card-slot ${!isValid ? 'scry-away' : ''} ${isSel ? 'scry-selected' : ''}`}
+                  style={{
+                    opacity: isValid ? 1 : 0.4,
+                    cursor: isValid ? 'pointer' : 'not-allowed',
+                    outline: isSel ? '3px solid gold' : undefined,
+                    borderRadius: 8,
+                  }}
+                  onClick={() => { if (isValid) toggle(card._uid); }}
+                >
+                  <CardImage card={card} size="medium" />
+                  {isValid && <div className="scry-card-label" style={{ color: isSel ? '#ff0' : '#4f4' }}>{isSel ? '✓ Selecionada' : '+ Selecionar'}</div>}
+                  {!isValid && <div className="scry-card-label" style={{ color: '#999' }}>✗</div>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+            <button
+              className="btn btn-gold overlay-confirm"
+              style={{ flex: 1 }}
+              onClick={() => onConfirm(JSON.stringify([...multiSelected]))}
+            >
+              Confirmar ({multiSelected.size} selecionadas)
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overlay-backdrop">
       <div className="overlay-panel glass">
@@ -1073,9 +1193,14 @@ interface AbilityModalProps {
   onActivate: (abilityIdx: number, xValue?: number) => void;
   onClose: () => void;
   availableMana?: number; // Total mana available (for X cost computation)
+  conditionsMet?: boolean[]; // Per-ability: whether condition is met (undefined = no condition = always met)
 }
 
 function describeAbility(ab: any): string {
+  if (ab._copiedFromLand) {
+    const base = ab.text || 'Activate land ability';
+    return `[${ab._copiedFromLand}] ${base}`;
+  }
   if (ab.text) return ab.text;
   const cost = ab.cost || {};
   const costParts: string[] = [];
@@ -1105,11 +1230,12 @@ function describeAbility(ab: any): string {
 }
 
 function abilityHasX(ab: any): boolean {
-  const mana = (ab.cost?.mana || '').toUpperCase();
+  const raw = ab.cost?.mana;
+  const mana = (typeof raw === 'string' ? raw : String(raw ?? '')).toUpperCase();
   return mana.includes('X');
 }
 
-export function AbilityModal({ card, abilities, onActivate, onClose, availableMana = 0 }: AbilityModalProps) {
+export function AbilityModal({ card, abilities, onActivate, onClose, availableMana = 0, conditionsMet }: AbilityModalProps) {
   const isPlaneswalker = (card.type_line || '').includes('Planeswalker');
   const currentLoyalty = card._loyalty;
   const [xChoice, setXChoice] = useState<{ abilityIdx: number; value: number } | null>(null);
@@ -1193,11 +1319,16 @@ export function AbilityModal({ card, abilities, onActivate, onClose, availableMa
               ? (loyaltyCost >= 0 ? `+${loyaltyCost}` : `${loyaltyCost}`)
               : null;
             const hasX = abilityHasX(ab);
+            const condMet = conditionsMet ? conditionsMet[i] : true;
+            const isDisabled = condMet === false;
             return (
               <button
                 key={i}
                 className="modal-mode-btn"
+                disabled={isDisabled}
+                title={isDisabled ? `Condition not met: ${ab.condition || 'requirement not fulfilled'}` : undefined}
                 onClick={() => {
+                  if (isDisabled) return;
                   if (hasX) {
                     // Show X chooser step
                     setXChoice({ abilityIdx: i, value: 1 });
@@ -1206,7 +1337,7 @@ export function AbilityModal({ card, abilities, onActivate, onClose, availableMa
                     onClose();
                   }
                 }}
-                style={isPlaneswalker ? { gap: 10 } : undefined}
+                style={{ ...(isPlaneswalker ? { gap: 10 } : {}), ...(isDisabled ? { opacity: 0.4, cursor: 'not-allowed' } : {}) }}
               >
                 {isPlaneswalker && costLabel !== null ? (
                   <span style={{

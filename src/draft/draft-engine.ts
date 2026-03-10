@@ -309,11 +309,17 @@ function applyArtVariation(cards: Card[]): void {
   try {
     const altRaw = localStorage.getItem(`alt_art_${setCode}`);
     if (altRaw) {
-      const altMap: Record<string, Array<{ small: string; normal: string }>> = JSON.parse(altRaw);
+      const altMap: Record<string, Array<{ small: string; normal: string; style?: string }>> = JSON.parse(altRaw);
+      const allDisabled = JSON.parse(localStorage.getItem('alt_art_disabled_styles') || '{}');
+      const disabled: string[] = (typeof allDisabled === 'object' && !Array.isArray(allDisabled))
+        ? (allDisabled[setCode] || [])
+        : (Array.isArray(allDisabled) ? allDisabled : []);
       for (const card of cards) {
         const name = (card.name || '').toLowerCase();
-        const alts = altMap[name];
-        if (alts && alts.length > 0 && Math.random() < 0.4) {
+        const allAlts = altMap[name];
+        const alts = allAlts?.filter(a => !a.style || !disabled.includes(a.style));
+        if (alts && alts.length > 0) {
+          // Always use alt art when available; if multiple variants, pick randomly (50/50 each)
           const pick = alts[Math.floor(Math.random() * alts.length)];
           if (pick.small) card.image_small = pick.small;
           if (pick.normal) card.image_normal = pick.normal;

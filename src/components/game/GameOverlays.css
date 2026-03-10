@@ -341,6 +341,17 @@
   background: var(--gold);
   color: #000;
 }
+.modal-mode-btn.disabled-mode,
+.modal-mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+.modal-mode-unavailable {
+  font-size: 10px;
+  color: #ff6b6b;
+  margin-left: 4px;
+}
 
 .modal-mode-label {
   font-weight: 700;
@@ -693,5 +704,17 @@
 
 .exile-click-zone:hover {
   color: #d9a0f0;
+}
+
+/* ── Ring level badge in opponent bar ── */
+.ring-level-badge {
+  cursor: default;
+  padding: 2px 7px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #fcd34d;
+  background: rgba(253, 211, 77, 0.12);
+  border: 1px solid rgba(253, 211, 77, 0.3);
+  font-weight: 600;
 }
 

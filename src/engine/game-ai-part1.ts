@@ -618,7 +618,7 @@ export function playMainPhase(state: any, playerId: number): void {
         const isRemoval = effects.some((e: any) => e.type === 'destroy' || e.type === 'exile');
         const isDamage = effects.some((e: any) => e.type === 'damage' && (e.target === 'creature' || e.target === 'any' || e.target === 'any_target'));
         const isBuff = effects.some((e: any) => e.type === 'buff');
-        const isCounter = effects.some((e: any) => e.type === 'counter' && (e.target === 'spell' || e.target === 'creature_spell' || e.target === 'noncreature_spell'));
+        const isCounter = effects.some((e: any) => e.type === 'counter_spell' || (e.type === 'counter' && (e.target === 'spell' || e.target === 'creature_spell' || e.target === 'noncreature_spell')));
         const isDraw = effects.some((e: any) => e.type === 'draw');
         const isBounce = effects.some((e: any) => e.type === 'bounce');
 
@@ -800,7 +800,7 @@ export function playMainPhase(state: any, playerId: number): void {
           });
           const hasCounter = instantsInHand.some((c: any) => {
             const effs = CardEngine.getSpellEffects(c);
-            return effs.some((e: any) => e.type === 'counter');
+            return effs.some((e: any) => e.type === 'counter' || e.type === 'counter_spell');
           });
           // main2: combat is over — combat tricks are useless now, only hold for removal/counter
           const isPostCombat = state.phase === 'main2';
@@ -1016,6 +1016,9 @@ export function playMainPhase(state: any, playerId: number): void {
       }
       if (skipCard) break;
 
+      // AI already paid additional costs (discard/sacrifice) above — skip them inside castSpell
+      if (addCosts.length > 0) state._skipAdditionalCostCheck = true;
+
       let castCost = useEvoke ? CardEngine.getEvokeCost(card) : card.mana_cost;
       const parsedCastCost = ManaSystem.parseCost(castCost);
       let castCmc = useEvoke
@@ -1063,6 +1066,7 @@ export function playMainPhase(state: any, playerId: number): void {
       }
 
       const result = GameState.castSpell(state, playerId, card._uid, targets, false, useEvoke);
+      delete state._skipAdditionalCostCheck;
       if (result.success) {
         if (!state._aiActions) state._aiActions = [];
         let targetDesc = '';
@@ -1121,12 +1125,25 @@ function _tryEquipment(state: any, playerId: number): void {
   for (const equip of equipment) {
     const effects = CardEngine.parseEquipmentEffects(equip);
     const costEffect = effects.find((e: any) => e.type === 'equip_cost');
-    const manaCost = costEffect ? costEffect.cost : '{3}';
-    const parsedCost = ManaSystem.parseCost(manaCost);
-    const cmc = parsedCost.total;
+    let manaCost = costEffect ? costEffect.cost : '{3}';
+    let cmc = ManaSystem.parseCost(manaCost).total;
+
+    // Check for equip_human cost (cheaper for Human creatures)
+    const eqDb = (CardEffectsDB as any)[equip.name?.toLowerCase()];
+    const hasEquipHuman = eqDb?.equip?.equip_human !== undefined;
 
     const fakeCard = { mana_cost: manaCost, cmc } as any;
-    if (!ManaSystem.canAfford(state, playerId, fakeCard, manaCost, cmc)) continue;
+    if (!ManaSystem.canAfford(state, playerId, fakeCard, manaCost, cmc)) {
+      // If can't afford full cost but has equip_human, check if any Human creature available
+      if (hasEquipHuman) {
+        const humanCmc = eqDb.equip.equip_human;
+        const humanCost = `{${humanCmc}}`;
+        if (!ManaSystem.canAfford(state, playerId, { mana_cost: humanCost, cmc: humanCmc } as any, humanCost, humanCmc)) continue;
+        // Will only try to equip Human creatures below
+      } else {
+        continue;
+      }
+    }
 
     // Score each creature: evasion > attack triggers > raw stats
     const _scoreCreatureForEquip = (c: any): number => {
@@ -1182,7 +1199,12 @@ function _scoreActivatedAbility(effects: any[], state: any, playerId: number, so
       case 'buff_all':
       case 'grant':
       case 'grant_all':         score += 3; break;
-      case 'gainLife':          score += 3; break;
+      case 'gainLife': {
+        // Life gain is more valuable at low life
+        const myLife = state?.players?.[playerId]?.life ?? 20;
+        score += myLife <= 10 ? 6 : myLife <= 5 ? 10 : 3;
+        break;
+      }
       case 'loot':              score += 4; break;
       case 'look_top':
       case 'exile_top_play':    score += 4; break;
@@ -1198,6 +1220,13 @@ function _scoreActivatedAbility(effects: any[], state: any, playerId: number, so
       case 'untap_self':        score += 3; break;
       case 'damage_each_opponent': score += 4; break;
       case 'cant_block':        score += 3; break;
+      case 'ring_tempts':       score += 5; break;
+      case 'amass':             score += 4; break;
+      case 'create_food':       score += 2; break;
+      case 'bite':              score += 5; break;
+      case 'set_base_pt':       score += 4; break;
+      case 'exile_self':        score += 0; break;
+      case 'remove_counter_draw': score += 5; break;
     }
   }
 
@@ -1229,7 +1258,10 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
   if (globallyLocked) return;
 
   const bf = state.players[playerId].zones.battlefield;
-  const creatures = bf.cards.filter((c: any) => CardEngine.isCreature(c));
+  // Include creatures AND non-creature artifacts (Food tokens, etc.) that have activated abilities
+  const creatures = bf.cards.filter((c: any) =>
+    CardEngine.isCreature(c) || CardEngine.isArtifact(c)
+  );
 
   for (const creature of creatures) {
     const rawAbilities = CardEngine.getActivatedAbilities(creature);
@@ -1332,7 +1364,9 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
       // Score each effect to find the best ability to activate
       const abilityScore = _scoreActivatedAbility(ability.effects, state, playerId, ability.cost.sacrifice ? creature : undefined);
       // Sacrifice-self abilities need higher bar (losing the creature permanently)
-      const minScore = ability.cost.sacrifice ? 10 : 3;
+      // Exception: non-creature tokens (Food, Treasure) — sacrificing them is cheap
+      const isExpendableToken = creature._isToken && !CardEngine.isCreature(creature);
+      const minScore = (ability.cost.sacrifice && !isExpendableToken) ? 10 : 3;
       if (abilityScore < minScore) continue; // Threshold: not worth activating
 
       if (cmc > 0) {
@@ -1828,6 +1862,21 @@ export function declareAttackers(state: any, playerId: number): void {
   const myCreatures = bf.cards.filter((c: any) => CardEngine.isCreature(c));
 
   if (creatures.length === 0) return;
+
+  // Goad: force goaded creatures to attack (they must attack if able)
+  const goadedCreatures = creatures.filter((c: any) => c._goaded);
+  for (const gc of goadedCreatures) {
+    if (!state.combat.attackers.find((a: any) => a.uid === gc._uid)) {
+      CombatSystem.declareAttacker(state.combat, gc);
+      if (!CardEngine.hasKeyword(gc, 'Vigilance') && !gc._tapped) {
+        gc._tapped = true;
+        gc._tappedByAttack = true;
+      }
+      delete gc._goaded;
+      delete gc._goadedBy;
+      state.log.push(`${gc.name} is goaded and attacks!`);
+    }
+  }
 
   const totalPower = creatures.reduce((sum: number, c: any) => sum + CardEngine.getPower(c), 0);
 

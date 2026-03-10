@@ -5,8 +5,14 @@ import { buildDeck } from '../draft/bot-ai';
 import { CardImage } from './card/CardImage';
 import { BoosterOpenAnimation } from './BoosterOpenAnimation';
 import type { Card } from '../lib/types';
-import boosterImg from '../assets/tdm-booster-pack.png';
+import tdmBooster from '../assets/tdm-booster-pack.png';
+import ltrBooster from '../assets/ltr-booster-pack.png';
 import './SealedRevealScreen.css';
+
+const BOOSTER_IMAGES: Record<string, string> = {
+  tdm: tdmBooster,
+  ltr: ltrBooster,
+};
 
 function rarityOf(card: Card): string {
   return (card.rarity || '').toLowerCase();
@@ -28,7 +34,8 @@ function isHighRarity(card: Card): boolean {
 type OpenPhase = 'idle' | 'rare_spotlight' | 'revealed';
 
 export function SealedRevealScreen() {
-  const { sealedPacks, setDraftPool, setDeck, setScreen, setSealedPacks } = useAppStore();
+  const { sealedPacks, selectedSet, setDraftPool, setDeck, setScreen, setSealedPacks } = useAppStore();
+  const boosterImg = BOOSTER_IMAGES[selectedSet] || BOOSTER_IMAGES.tdm;
   const packs = sealedPacks || [];
 
   const [openedPacks, setOpenedPacks] = useState<Set<number>>(new Set());
@@ -121,7 +128,7 @@ export function SealedRevealScreen() {
     <>
     {/* Booster animation — portal to body to escape stacking contexts */}
     {animatingPackIdx !== null && createPortal(
-      <BoosterOpenAnimation onFinish={() => handleAnimFinish(animatingPackIdx!)} />,
+      <BoosterOpenAnimation onFinish={() => handleAnimFinish(animatingPackIdx!)} setCode={selectedSet} />,
       document.body
     )}
     <div className="sealed-reveal-screen animate-fade-in">

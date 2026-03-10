@@ -66,6 +66,7 @@ export {
   handleCopySpell,
   handleExtraCombat,
   handleExileGraveyardCastCopy,
+  handleRingTempts,
   isEmpty,
   processNextEffect,
   payWardCost,

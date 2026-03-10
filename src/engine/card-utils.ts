@@ -20,7 +20,7 @@ export function wordToNum(word: string | null | undefined): number | null {
 // ============================================
 
 export function isCreature(card: GameCard): boolean {
-  return (card.type_line || '').includes('Creature');
+  return (card.type_line || '').includes('Creature') || !!(card as any)._vehicleActive;
 }
 
 export function isLand(card: GameCard): boolean {
@@ -74,6 +74,9 @@ export function isKindred(card: GameCard): boolean {
 // ============================================
 
 export function hasKeyword(card: GameCard, keyword: string, gameState: EngineGameState | null = null): boolean {
+  // Card with lose_all_abilities has no keywords
+  if ((card as any)._losesAllAbilities) return false;
+
   // Normalize: treat underscores as spaces ("double_strike" === "double strike")
   const kwLower = keyword.toLowerCase().replace(/_/g, ' ');
 
@@ -127,6 +130,21 @@ export function hasKeyword(card: GameCard, keyword: string, gameState: EngineGam
           const grantedKeywords = String((granter as any)._grantUntappedDragons).split(',').map((k: string) => k.trim().toLowerCase());
           if (grantedKeywords.includes(kwLower)) return true;
         }
+      }
+    }
+  }
+
+  // Tom Bombadil: conditional keywords that require 4+ lore counters across sagas
+  if ((card as any)._conditionalKeywordsFourLore?.length > 0 && gameState) {
+    const kwsLore = ((card as any)._conditionalKeywordsFourLore as string[]).map(k => k.toLowerCase().replace(/_/g, ' '));
+    if (kwsLore.includes(kwLower)) {
+      // Check if controller has any saga with 4+ lore counters total
+      const cardController = findCardController(gameState, card);
+      if (cardController !== null) {
+        const sagas = gameState.players[cardController].zones.battlefield.cards.filter(
+          (c: any) => isSaga(c as GameCard) && (c._sagaChapter || 0) >= 4
+        );
+        if (sagas.length > 0) return true;
       }
     }
   }
@@ -196,6 +214,10 @@ export function getPower(card: GameCard): number {
   if (isNaN(p) && card._dynamicPower != null) {
     p = card._dynamicPower;
   }
+  // Star power (*/*)
+  if (isNaN(p) && card._starPower && card._starValue != null) {
+    p = card._starValue;
+  }
 
   const counterBonus = card._counters
     ? (card._counters['+1/+1'] || 0) - (card._counters['-1/-1'] || 0)
@@ -205,7 +227,11 @@ export function getPower(card: GameCard): number {
 }
 
 export function getToughness(card: GameCard): number {
-  const t = parseInt(card.toughness as string);
+  let t = parseInt(card.toughness as string);
+  // Star toughness (*/*)
+  if (isNaN(t) && (card as any)._starPower && (card as any)._starValue != null) {
+    t = (card as any)._starValue;
+  }
   const counterBonus = card._counters
     ? (card._counters['+1/+1'] || 0) - (card._counters['-1/-1'] || 0)
     : 0;
@@ -220,6 +246,7 @@ export function getToughness(card: GameCard): number {
 export function canAttack(card: GameCard): boolean {
   if (!isCreature(card)) return false;
   if (card._tapped) return false;
+  if (card._cantAttack) return false;
   if (hasKeyword(card, 'Defender') && !hasKeyword(card, 'Can_attack')) return false;
   if (card._summoningSick && !hasKeyword(card, 'Haste')) return false;
   return true;
@@ -229,6 +256,22 @@ export function canBlock(card: GameCard, attacker: GameCard, gameState: EngineGa
   if (!isCreature(card)) return false;
   if (card._tapped) return false;
   if (card._cantBlockThisTurn) return false;
+  // Permanent cant_block tied to a saga (There and Back Again Ch.I: "for as long as you control this Saga")
+  if ((card as any)._cantBlockSagaUid && gameState) {
+    const sagaUid = (card as any)._cantBlockSagaUid;
+    let sagaFound = false;
+    const gs = gameState as any;
+    if (gs.players) {
+      for (const p of gs.players) {
+        if (p.zones?.battlefield?.get?.(sagaUid)) { sagaFound = true; break; }
+      }
+    }
+    if (!sagaFound) {
+      delete (card as any)._cantBlockSagaUid; // Saga left, clear restriction
+    } else {
+      return false; // Saga still in play, can't block
+    }
+  }
 
   // Unblockable
   if (attacker._unblockable || hasKeyword(attacker, 'Unblockable', gameState)) return false;
@@ -236,8 +279,51 @@ export function canBlock(card: GameCard, attacker: GameCard, gameState: EngineGa
   // Cant be blocked by creatures with power less than attacker (Formation Breaker)
   if ((attacker as any)._cantBeBlockedBySmaller && getPower(card) < getPower(attacker)) return false;
 
+  // Can't be blocked except by legendary creatures (The Balrog)
+  if ((attacker as any)._cantBeBlockedExceptLegendary) {
+    const blockerType = (card.type_line || '').toLowerCase();
+    if (!blockerType.includes('legendary')) return false;
+  }
+
+  // Ring-bearer Level 1+: can't be blocked by creatures with greater power
+  if (gameState && (gameState as any)._ringLevel && (gameState as any)._ringBearer) {
+    let attackerPid = attacker._controller ?? (attacker as any)._ownerId ?? attacker._owner;
+    // Fallback: find which player's battlefield contains this attacker
+    if (attackerPid === undefined) {
+      const gs = gameState as any;
+      if (gs.players) {
+        for (let p = 0; p < gs.players.length; p++) {
+          if (gs.players[p]?.zones?.battlefield?.cards?.some((c: any) => c._uid === attacker._uid)) {
+            attackerPid = p;
+            break;
+          }
+        }
+      }
+    }
+    if (attackerPid !== undefined &&
+        (gameState as any)._ringLevel[attackerPid] >= 1 &&
+        (gameState as any)._ringBearer[attackerPid] === attacker._uid &&
+        getPower(card) > getPower(attacker)) {
+      return false;
+    }
+  }
+
   // Decayed creatures can't block
   if (hasKeyword(card, 'Decayed', gameState) || ((card as any)._counters?.['decayed'] || 0) > 0) return false;
+
+  // Can't block unless condition (e.g. Olog-hai Crusher: can't block unless you control a Goblin or Orc)
+  if ((card as any)._cantBlockUnless && gameState) {
+    const cond = (card as any)._cantBlockUnless;
+    const blockerPid = (card as any)._controller ?? (card as any)._ownerId ?? (card as any)._owner;
+    if (blockerPid !== undefined && cond === 'control_goblin_or_orc') {
+      const bf = (gameState as any).players[blockerPid]?.zones?.battlefield?.cards || [];
+      const hasGoblinOrOrc = bf.some((c: any) =>
+        c._uid !== card._uid && isCreature(c) &&
+        (hasCreatureType(c, 'Goblin') || hasCreatureType(c, 'Orc'))
+      );
+      if (!hasGoblinOrOrc) return false;
+    }
+  }
 
   // Flying — can only be blocked by flying or reach
   if (hasKeyword(attacker, 'Flying', gameState)) {
@@ -359,12 +445,42 @@ export function canBeTargeted(card: GameCard, byPlayerId: number, gameState: Eng
     }
   }
 
+  // Protection from colors: can't be targeted by sources of protected colors from opponents
+  const protColors = getProtectionColors(card);
+  if (protColors.length > 0 && sourceCard) {
+    const controller = gameState ? findCardController(gameState, card) : null;
+    if (controller !== null && controller !== byPlayerId) {
+      const srcColors = getCardColors(sourceCard);
+      if (srcColors.some(c => protColors.includes(c))) return false;
+    }
+  }
+
   return true;
 }
 
 // ============================================
 // Vivid Colors (needs game state)
 // ============================================
+
+const COLOR_NAME_MAP: Record<string, string> = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+
+export function getProtectionColors(card: GameCard): string[] {
+  const kws: string[] = (card.keywords || []).concat((card as any)._tempKeywords || []).concat((card as any)._grantedKeywords || []);
+  const colors: string[] = [];
+  for (const kw of kws) {
+    if (typeof kw !== 'string') continue;
+    // Format: "protection from white" / "protection from blue" etc.
+    const m = kw.match(/^protection from (\w+)$/i);
+    if (m && COLOR_NAME_MAP[m[1].toLowerCase()]) {
+      colors.push(COLOR_NAME_MAP[m[1].toLowerCase()]);
+      continue;
+    }
+    // Format: "protection_from_W" (temporary, from Éowyn effect)
+    const m2 = kw.match(/^protection_from_([WUBRG])$/);
+    if (m2) { colors.push(m2[1]); continue; }
+  }
+  return [...new Set(colors)];
+}
 
 export function countVividColors(state: EngineGameState, playerId: number): number {
   const bf = state.players[playerId].zones.battlefield;

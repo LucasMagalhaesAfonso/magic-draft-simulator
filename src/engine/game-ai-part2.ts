@@ -129,6 +129,25 @@ export function declareBlockers(state, playerId) {
     _legacyDeclareBlockers(state, playerId, blockerCandidates, attackers, myLife);
   }
 
+  // must_be_blocked enforcement: if an attacker has must_be_blocked and no blocker assigned, force one
+  for (const atk of attackers) {
+    const aCard = atk.card;
+    const hasMustBlock = (aCard.keywords || []).some((k: string) => k?.toLowerCase() === 'must be blocked') ||
+      (aCard._tempKeywords || []).some((t: any) => (typeof t === 'string' ? t : t.keyword)?.toLowerCase() === 'must be blocked');
+    if (!hasMustBlock) continue;
+    const assigned = state.combat.blockers[aCard._uid] || [];
+    if (assigned.length > 0) continue;
+    // Find first unbusied blocker that can block this attacker
+    const forcedBlocker = blockerCandidates.find((b: any) =>
+      CardEngine.canBlock(b, aCard, state) &&
+      !Object.values(state.combat.blockers).some((bl: any) => bl.find((entry: any) => (entry.card?._uid || entry._uid) === b._uid))
+    );
+    if (forcedBlocker) {
+      CombatSystem.declareBlocker(state.combat, forcedBlocker, atk.uid, state);
+      state.log.push(`${forcedBlocker.name} must block ${aCard.name}!`);
+    }
+  }
+
   const blockCount = Object.values(state.combat.blockers).reduce((sum, b) => sum + b.length, 0);
   if (blockCount > 0) {
     state.log.push(`Voce bloqueia com ${blockCount} criatura(s).`);
@@ -700,6 +719,16 @@ export function _chooseTargets(state, playerId, card) {
           } else if (opTargets.length > 0) {
             const t = opTargets[0];
             targets.push({ type: CardEngine.isCreature(t) ? 'creature' : 'permanent', player: opponentId, uid: t._uid });
+          }
+          break;
+        }
+        if (tgt === 'own_creature') {
+          // "exile target creature you control" — flicker effect (e.g. Slip on the Ring)
+          const myCreatures = state.players[playerId].zones.battlefield.cards
+            .filter((c: any) => CardEngine.isCreature(c) && c._uid !== card?._uid && CardEngine.canBeTargeted(c, playerId))
+            .sort((a: any, b: any) => _threatScore(b) - _threatScore(a));
+          if (myCreatures.length > 0) {
+            targets.push({ type: 'creature', player: playerId, uid: myCreatures[0]._uid });
           }
           break;
         }
@@ -1700,6 +1729,12 @@ function _scoreInstant(card, state, playerId, phase, myCreatures, oppCreatures) 
       score += 6 + biggestThreat * 0.3;
     }
     if (hasTap && oppCreatures.filter(c => !c._tapped).length > 0) score += 4;
+  }
+
+  // Counter spells should NEVER be cast outside stack_priority — they need a target on the stack
+  const hasCounterSpell = effects.some(e => e.type === 'counter_spell');
+  if (hasCounterSpell && phase !== 'stack_priority') {
+    score -= 50; // Massive penalty — counter spells are useless without a spell to counter
   }
 
   return score;

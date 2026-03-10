@@ -296,16 +296,6 @@ function _undoCounterSpell(state: any, controller: number, log: string[]) {
       log.push('Spell returns to hand (illegal target).');
     }
   }
-  // Show notification
-  if (!state._triggerToastQueue) state._triggerToastQueue = [];
-  state._triggerToastQueue.push({
-    id: Date.now(),
-    cardName: 'Counter falhou',
-    effectDesc: 'Alvo é creature spell — não pode ser counterado por este efeito. Magia volta para a mão.',
-    controllerId: controller,
-    imageUrl: null,
-    imageUrlLarge: null,
-  });
 }
 
 export function handleCounterSpell(
@@ -339,6 +329,27 @@ export function handleCounterSpell(
     if (tl.includes('creature')) {
       log.push(`${targetSpell.name} is a creature spell — can't be countered by this effect.`);
       // Return spell to hand + restore mana (undo)
+      _undoCounterSpell(state, controller, log);
+      return null;
+    }
+  }
+
+  // Validate creature_spell restriction (e.g. Glorious Gale)
+  if (effect.target === 'creature_spell') {
+    const tl = (targetSpell.type_line || '').toLowerCase();
+    if (!tl.includes('creature')) {
+      log.push(`${targetSpell.name} is not a creature spell — can't be countered by this effect.`);
+      _undoCounterSpell(state, controller, log);
+      return null;
+    }
+  }
+
+  // Validate power_or_toughness_2_or_less restriction (e.g. Stern Scolding)
+  if (effect.condition === 'power_or_toughness_2_or_less') {
+    const pow = parseInt(targetSpell.power || '0') || 0;
+    const tou = parseInt(targetSpell.toughness || '0') || 0;
+    if (pow > 2 && tou > 2) {
+      log.push(`${targetSpell.name} has power ${pow} and toughness ${tou} — Stern Scolding only counters creatures with power or toughness 2 or less.`);
       _undoCounterSpell(state, controller, log);
       return null;
     }
@@ -397,7 +408,10 @@ export function handleCounterSpell(
   }
 
   targetSpell._countered = true;
-  log.push(`${targetSpell.name} is countered.`);
+  if (effect.return_to_hand) targetSpell._returnToHand = true;
+  // Track MV for free_cast effects (Press the Enemy)
+  state._lastBouncedMV = targetSpell.cmc || 0;
+  log.push(`${targetSpell.name} is ${effect.return_to_hand ? 'returned to hand' : 'countered'}.`);
   return null;
 }
 
@@ -652,6 +666,8 @@ export function handleLookTop(
         const tl = (c.type_line || '').toLowerCase();
         return tl.includes('instant') || tl.includes('sorcery') || tl.includes('dragon');
       };
+    } else if (effect.reveal === 'creature') {
+      revealFilter = (c: any) => CardEngine.isCreature(c);
     }
     const validCards = looked.filter(revealFilter);
     if (state.players[controller].isHuman) {
@@ -677,6 +693,48 @@ export function handleLookTop(
       looked.sort(() => Math.random() - 0.5);
       looked.forEach((c: any) => lib.addToBottom(c));
       log.push('No valid cards to pick from revealed cards.');
+    }
+    return null;
+  }
+
+  // Creature to hand (Elven Farsight)
+  if (effect.condition === 'creature_to_hand') {
+    const topCard = looked[0];
+    if (topCard && CardEngine.isCreature(topCard)) {
+      state.players[controller].zones.hand.add(topCard);
+      const rest = looked.slice(1);
+      rest.forEach((c: any) => lib.addToBottom(c));
+      log.push(`Reveals ${topCard.name} (creature) — goes to hand.`);
+    } else {
+      looked.reverse().forEach((c: any) => lib.addToTop(c));
+      log.push(`Reveals top card — not a creature. Stays on top.`);
+    }
+    return null;
+  }
+
+  // Creature to battlefield attacking (Doors of Durin)
+  if (effect.condition === 'creature_to_battlefield_attacking') {
+    const topCard = looked[0];
+    if (topCard && CardEngine.isCreature(topCard)) {
+      topCard._tapped = true;
+      topCard._attacking = true;
+      topCard._enteredThisTurn = true;
+      state.players[controller].zones.battlefield.add(topCard);
+      if (state.combat?.attackers) state.combat.attackers.push(topCard._uid);
+      if (CardEngine.hasCreatureType(topCard, 'Dwarf')) {
+        if (!topCard.keywords) topCard.keywords = [];
+        if (!topCard.keywords.includes('Trample')) topCard.keywords.push('Trample');
+      }
+      if (CardEngine.hasCreatureType(topCard, 'Elf')) {
+        if (!topCard.keywords) topCard.keywords = [];
+        if (!topCard.keywords.includes('Hexproof')) topCard.keywords.push('Hexproof');
+      }
+      log.push(`Reveals ${topCard.name} — enters battlefield tapped and attacking!`);
+      const rest = looked.slice(1);
+      rest.forEach((c: any) => lib.addToBottom(c));
+    } else {
+      looked.forEach((c: any) => lib.addToBottom(c));
+      log.push(`Reveals top card — not a creature. Goes to bottom.`);
     }
     return null;
   }
@@ -1097,21 +1155,34 @@ export function handleBounceToLibraryTop(
   state: any,
   targets: any[],
   controller: number,
-  log: string[]
+  log: string[],
+  effect?: any
 ): void {
+  const pos = effect?.position || 1;
   if (targets && targets.length > 0) {
     const btlTarget = targets[0];
     const btlBf = state.players[btlTarget.player].zones.battlefield;
     const btlCreature = btlBf.get(btlTarget.uid);
     if (btlCreature) {
+      if (btlCreature._phasedOut) {
+        log.push(`${btlCreature.name} is phased out — spell has no effect.`);
+        return;
+      }
       if (!CardEngine.canBeTargeted(btlCreature, controller)) {
         log.push(`${btlCreature.name} can't be targeted (hexproof/shroud).`);
         return;
       }
       btlBf.remove(btlCreature._uid);
       GameState._unregisterCardTriggers(state, btlCreature._uid);
-      state.players[btlTarget.player].zones.library.addToTop(btlCreature);
-      log.push(`${btlCreature.name} put on top of library.`);
+      const lib = state.players[btlTarget.player].zones.library;
+      if (pos > 1) {
+        const insertIdx = Math.min(pos - 1, lib.cards?.length || 0);
+        lib.cards.splice(insertIdx, 0, btlCreature);
+        log.push(`${btlCreature.name} put ${pos} from top of library.`);
+      } else {
+        lib.addToTop(btlCreature);
+        log.push(`${btlCreature.name} put on top of library.`);
+      }
     }
   }
 }
@@ -1252,6 +1323,13 @@ export function handleGrant(
   targets: any[],
   log: string[]
 ): void {
+  // up_to > 1 with own_creature: route through _resolveSimpleEffect for interactive pick (human) or auto-select (AI)
+  if ((effect.target === 'own_creature') && ((effect.up_to || 1) > 1) && (!targets || targets.length === 0)) {
+    const r = GameState._resolveSimpleEffect(state, controller, effect, { cardUid: card?._uid });
+    if (r && typeof r === 'string') log.push(r);
+    return;
+  }
+
   // Support both singular (effect.keyword) and plural (effect.keywords) forms
   const kwList: string[] = [];
   if (effect.keyword) kwList.push(effect.keyword);
@@ -1276,7 +1354,20 @@ export function handleGrant(
     return granted.join(', ');
   };
 
-  if (targets && targets.length > 0) {
+  if (effect.target === 'same') {
+    // "same" = same creature as the previous buff effect — use _lastBuffedUid fallback
+    let sameCreature: any = null;
+    if (state._lastBuffedUid) {
+      for (const p of state.players) {
+        const fc = p.zones.battlefield.get(state._lastBuffedUid);
+        if (fc) { sameCreature = fc; break; }
+      }
+    }
+    if (sameCreature) {
+      const granted = applyGrant(sameCreature);
+      log.push(`${sameCreature.name} gains ${granted}.`);
+    }
+  } else if (targets && targets.length > 0) {
     // Apply to all provided targets (e.g., multi-target grants)
     for (const gTarget of targets) {
       const gCreature = state.players[gTarget.player].zones.battlefield.get(gTarget.uid);
@@ -1333,6 +1424,14 @@ export function handleGrant(
     // Grant uncounterable/etc. to next spell cast this turn
     state._nextSpellGrant = kwList;
     log.push(`Next spell gains ${kwList.join(', ')}.`);
+  } else if (effect.target === 'self_controller') {
+    // Grant to the controlling player (not the card) — e.g. The One Ring protection
+    const hasPFE = kwList.some((k: string) => k === 'protection_from_everything' || k === 'Protection From Everything');
+    if (hasPFE) {
+      state.players[controller]._protectionFromEverything = true;
+      state.players[controller]._protectionGrantedTurn = state.turn;
+    }
+    log.push(`You gain ${kwList.join(', ')} until your next turn.`);
   } else {
     // Default: grant to self (the card itself on the battlefield)
     const gSelf = state.players[controller].zones.battlefield.get(card._uid);
@@ -1381,21 +1480,30 @@ export function handleGrantAll(
   log: string[]
 ): void {
   const opponent = controller === 0 ? 1 : 0;
-  const gaKw = effect.keyword;
+  // Support both singular `keyword` and plural `keywords` array
+  const gaKw = effect.keyword || (Array.isArray(effect.keywords) ? effect.keywords[0] : null);
   if (!gaKw) return;
   const gaKwCap = gaKw.charAt(0).toUpperCase() + gaKw.slice(1);
   const gaPid = effect.target === 'opponent_creatures' ? opponent : controller;
-  const gaCreatures = state.players[gaPid].zones.battlefield.cards.filter((c: any) =>
-    CardEngine.isCreature(c)
-  );
+  const gaCreatures = state.players[gaPid].zones.battlefield.cards.filter((c: any) => {
+    if (!CardEngine.isCreature(c)) return false;
+    if (effect.target === 'humans') return CardEngine.hasCreatureType(c, 'Human');
+    if (effect.target === 'horses') return CardEngine.hasCreatureType(c, 'Horse');
+    if (effect.target === 'dragons') return CardEngine.hasCreatureType(c, 'Dragon');
+    if (effect.target === 'elves') return CardEngine.hasCreatureType(c, 'Elf');
+    if (effect.target === 'soldiers') return CardEngine.hasCreatureType(c, 'Soldier');
+    return true;
+  });
+  const duration = effect.duration || 'end_of_turn';
+  const typeLabel = effect.target === 'humans' ? 'Human creatures' : effect.target === 'horses' ? 'Horse creatures' : effect.target === 'dragons' ? 'Dragon creatures' : 'All creatures';
   gaCreatures.forEach((c: any) => {
     if (!c.keywords) c.keywords = [];
     if (!c.keywords.includes(gaKwCap)) c.keywords.push(gaKwCap);
     if (!c._tempKeywords) c._tempKeywords = [];
-    c._tempKeywords.push(gaKwCap);
+    c._tempKeywords.push({ keyword: gaKwCap, appliedTurn: state.turn, duration });
     if (gaKwCap === 'Haste') c._summoningSick = false;
   });
-  log.push(`All creatures gain ${gaKwCap} until end of turn.`);
+  log.push(`${typeLabel} gain ${gaKwCap} until end of turn.`);
 }
 
 export function handleGrantCounters(
@@ -1568,6 +1676,8 @@ export function handleSearchLibrary(
     slFilter = (c: any) => CardEngine.isLand(c);
   } else if (effect.target === 'dragon') {
     slFilter = (c: any) => CardEngine.isDragon(c) || (c.type_line && c.type_line.toLowerCase().includes('dragon'));
+  } else if (effect.target === 'legendary_creature') {
+    slFilter = (c: any) => CardEngine.isCreature(c) && (c.type_line || '').toLowerCase().includes('legendary');
   } else if (effect.target === 'named_card' && (effect.name || effect.names)) {
     if (effect.name) {
       slFilter = (c: any) => c.name === effect.name;
@@ -2189,6 +2299,43 @@ export function handleAttach(
     return;
   }
 
+  // Attach to own creature (own_creature / own_legendary_creature ETB)
+  if (effect?.target === 'own_creature' || effect?.target === 'own_legendary_creature') {
+    const equipmentCard = state.players[controller].zones.battlefield.get(card._uid);
+    const legendaryOnly = effect.target === 'own_legendary_creature';
+    const ownCreatures = state.players[controller].zones.battlefield.cards.filter((c: any) =>
+      CardEngine.isCreature(c) && c._uid !== card._uid && (!legendaryOnly || CardEngine.isLegendary(c))
+    );
+    if (!equipmentCard || ownCreatures.length === 0) return;
+
+    // Human: show interactive choice overlay
+    if (state.players[controller].isHuman) {
+      state._pendingAttachOwnCreature = { equipUid: card._uid, candidates: ownCreatures.map((c: any) => c._uid) };
+      state.waitingForInput = { type: 'attach_own_creature', playerId: controller, choices: ownCreatures };
+      log.push(`Choose a creature to attach ${equipmentCard.name} to.`);
+      return;
+    }
+
+    // AI: auto-attach to strongest
+    ownCreatures.sort((a: any, b: any) => CardEngine.getPower(b) - CardEngine.getPower(a));
+    const autoTarget = ownCreatures[0];
+    if (equipmentCard._attachedTo) {
+      const oldTarget = state.players[controller].zones.battlefield.get(equipmentCard._attachedTo);
+      if (oldTarget) {
+        GameState._removeEquipmentEffects(equipmentCard, oldTarget);
+        if (oldTarget._attachments) {
+          oldTarget._attachments = oldTarget._attachments.filter((uid: string) => uid !== equipmentCard._uid);
+        }
+      }
+    }
+    equipmentCard._attachedTo = autoTarget._uid;
+    if (!autoTarget._attachments) autoTarget._attachments = [];
+    autoTarget._attachments.push(equipmentCard._uid);
+    GameState._applyEquipmentEffects(equipmentCard, autoTarget);
+    log.push(`${equipmentCard.name} attached to ${autoTarget.name}.`);
+    return;
+  }
+
   // Normal attach: target a creature
   if (targets && targets.length > 0) {
     const attTarget = targets[0];
@@ -2492,6 +2639,145 @@ export function aiScoreMode(
 }
 
 // ============================================================
+// handleAmass — Amass Orcs N mechanic (LTR)
+// ============================================================
+
+export function handleAmass(
+  state: any,
+  effect: any,
+  controller: number,
+  log: string[]
+): void {
+  // from_instant_sorcery_gy: amass X = count inst/sorc in the last milled player's GY (Mouth of Sauron)
+  let amount: number;
+  if ((effect as any).from_instant_sorcery_gy) {
+    const gyOwner = state._lastMillTarget ?? controller;
+    const gyCards = state.players[gyOwner].zones.graveyard.getAll();
+    amount = gyCards.filter((c: any) => CardEngine.isInstant(c) || CardEngine.isSorcery(c)).length;
+  } else {
+    amount = typeof effect.amount === 'number' ? effect.amount : 1;
+  }
+  const bf = state.players[controller].zones.battlefield;
+
+  // Find existing Army creature
+  let army = bf.cards.find((c: any) =>
+    c.type_line && c.type_line.toLowerCase().includes('army')
+  );
+
+  if (!army) {
+    // Create a 0/0 black Orc Army creature token
+    army = Cards.createToken(controller, 0, 0, 'Orc Army');
+    army.type_line = 'Creature — Orc Army';
+    army.colors = ['B'];
+    army.color_identity = ['B'];
+    bf.add(army);
+    GameState._registerCardTriggers(state, army, controller);
+    log.push(`Created a 0/0 black Orc Army creature token.`);
+  }
+
+  // Ensure it's also an Orc (Amass Orcs specifically)
+  if (army.type_line && !army.type_line.toLowerCase().includes('orc')) {
+    army.type_line = army.type_line.replace('Army', 'Orc Army');
+  }
+
+  // Put N +1/+1 counters on the Army
+  if (!army._counters) army._counters = { '+1/+1': 0, '-1/-1': 0 };
+  army._counters['+1/+1'] = (army._counters['+1/+1'] || 0) + amount;
+  log.push(`Amass Orcs ${amount}: Army gets ${amount} +1/+1 counter(s). (Now ${CardEngine.getPower(army)}/${CardEngine.getToughness(army)})`);
+
+  // Fire counter-placed triggers
+  state.fireTrigger?.('counter_placed', { cardUid: army._uid, card: army, counterType: '+1/+1', amount, controllerId: controller });
+
+  // "When you do" effects (e.g. Grishnákh: steal a creature with power ≤ Army's power)
+  if (effect.when_you_do) {
+    const armyPower = CardEngine.getPower(army);
+    for (const wyd of effect.when_you_do) {
+      const r = GameState._resolveSimpleEffect(state, controller, wyd, { armyPower });
+      if (r && r !== '__paused__') log.push(r);
+      if (r === '__paused__') break;
+    }
+  }
+}
+
+// ============================================================
+// handleRingTempts — The Ring tempts you (LTR)
+// ============================================================
+
+export function handleRingTempts(
+  state: any,
+  effect: any,
+  controller: number,
+  log: string[]
+): string[] | null {
+  // Initialize ring state if needed
+  if (!state._ringLevel) state._ringLevel = [0, 0];
+  if (!state._ringBearer) state._ringBearer = [null, null];
+  if (!state._ringTemptCount) state._ringTemptCount = [0, 0];
+
+  // Track total ring tempts (for Frodo win condition — no cap)
+  state._ringTemptCount[controller]++;
+
+  // Advance ring level (max 4)
+  if (state._ringLevel[controller] < 4) {
+    state._ringLevel[controller]++;
+  }
+  const level = state._ringLevel[controller];
+  log.push(`The Ring tempts you! Ring level: ${level}/4.`);
+
+  // Choose ring-bearer: must pick a creature you control
+  const creatures = state.players[controller].zones.battlefield.cards.filter((c: any) =>
+    CardEngine.isCreature(c)
+  );
+
+  if (creatures.length === 0) {
+    log.push(`No creatures to choose as Ring-bearer.`);
+    return null;
+  }
+
+  // Helper: apply ring-bearer status (legendary at level 1+)
+  const applyRingBearerStatus = (creature: any) => {
+    state._ringBearer[controller] = creature._uid;
+    // Ring level 1+: ring-bearer is legendary
+    if (!creature._isRingBearer) {
+      creature._isRingBearer = true;
+      if (!(creature.type_line || '').includes('Legendary')) {
+        creature._originalTypeLine = creature._originalTypeLine || creature.type_line;
+        creature.type_line = 'Legendary ' + (creature.type_line || '');
+      }
+    }
+    log.push(`${creature.name} becomes the Ring-bearer.`);
+    state.fireTrigger?.('ring_tempts', { controllerId: controller, bearerUid: creature._uid, card: creature });
+  };
+
+  if (creatures.length === 1) {
+    applyRingBearerStatus(creatures[0]);
+    return null;
+  }
+
+  // AI: pick best creature (highest power, prefer evasion)
+  if (!state.players[controller].isHuman) {
+    creatures.sort((a: any, b: any) => {
+      const aScore = CardEngine.getPower(a) + (CardEngine.hasKeyword(a, 'Flying', state) ? 2 : 0)
+        + (CardEngine.hasKeyword(a, 'Menace', state) ? 1 : 0);
+      const bScore = CardEngine.getPower(b) + (CardEngine.hasKeyword(b, 'Flying', state) ? 2 : 0)
+        + (CardEngine.hasKeyword(b, 'Menace', state) ? 1 : 0);
+      return bScore - aScore;
+    });
+    applyRingBearerStatus(creatures[0]);
+    return null;
+  }
+
+  // Human: show creature choice overlay
+  state._pendingRingBearer = { controller, creatures };
+  state.waitingForInput = {
+    type: 'ring_bearer_choice',
+    playerId: controller,
+    prompt: 'Choose a creature as your Ring-bearer',
+  };
+  return log; // Pause for human input
+}
+
+// ============================================================
 // _aiChooseModes — lines 3444-3451
 // ============================================================
 
@@ -2559,7 +2845,14 @@ export function dispatch(
       return null;
     case 'stun_counter': // alias legacy
     case 'stun':
-      handleStun(state, effect, targets, log);
+      if (effect.target === 'same') {
+        // "same" target = apply to same creatures as previous tap effect; use _resolveSimpleEffect
+        // which reads state._lastTappedUids for multi-tap stun (Scroll of Isildur ch2)
+        const stunSameResult = GameState._resolveSimpleEffect(state, controller, effect, { cardUid: card?._uid, targets });
+        if (stunSameResult && stunSameResult !== '__paused__') log.push(stunSameResult);
+      } else {
+        handleStun(state, effect, targets, log);
+      }
       return null;
     case 'stun_counter_self':
       handleStunCounterSelf(state, effect, card, log);
@@ -2571,6 +2864,8 @@ export function dispatch(
       return handleClash(state, effect, card, controller, effects, ei, targets, log);
     case 'counter_spell':
       return handleCounterSpell(state, effect, targets, controller, log);
+    case 'counter_spell_return_to_hand':
+      return handleCounterSpell(state, { ...effect, return_to_hand: true }, targets, controller, log);
     case 'endure':
       return handleEndure(state, effect, card, controller, resolveAmount, log);
     case 'drain':
@@ -2653,7 +2948,7 @@ export function dispatch(
       handleDoubleCounters(state, card, controller, targets, log);
       return null;
     case 'bounce_to_library_top':
-      handleBounceToLibraryTop(state, targets, controller, log);
+      handleBounceToLibraryTop(state, targets, controller, log, effect);
       return null;
     case 'return_land_from_mill':
       handleReturnLandFromMill(state, effect, controller, log);
@@ -2765,9 +3060,30 @@ export function dispatch(
     case 'mass_clone':
       handleMassClone(state, card, controller, targets, log);
       return null;
-    case 'gain_control':
+    case 'gain_control': {
+      // Route through _resolveSimpleEffect when condition/optional is set (e.g. Rangers of Ithilien — lesser_power)
+      if (effect.condition || effect.optional) {
+        const gcResult = GameState._resolveSimpleEffect(state, controller, effect, { cardUid: card?._uid, targets });
+        if (gcResult && gcResult !== '__paused__') log.push(gcResult);
+        if (state.waitingForInput) {
+          if (ei < effects.length - 1) {
+            state._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+          }
+          return log;
+        }
+        return null;
+      }
       handleGainControl(state, targets, controller, log);
+      // Mark stolen card with _stolenBySaga so saga sacrifice can return it (Scroll of Isildur ch1)
+      if (effect.duration === 'while_saga' && card?._uid && targets && targets.length > 0) {
+        const gcTarget = targets[0];
+        const stolenCard = state.players[controller].zones.battlefield.get(gcTarget.uid);
+        if (stolenCard && !stolenCard._stolenBySaga) {
+          stolenCard._stolenBySaga = card._uid;
+        }
+      }
       return null;
+    }
     case 'anthem':
       handleAnthem(state, effect, card, controller, log);
       return null;
@@ -2802,13 +3118,28 @@ export function dispatch(
     case 'exile_graveyard_cast_copy':
       handleExileGraveyardCastCopy(state, effect, controller, effects, ei, log);
       return null;
+    case 'amass': {
+      const wfiBefore = state.waitingForInput;
+      handleAmass(state, effect, controller, log);
+      // If handleAmass set WFI (e.g. Grishnákh steal overlay), pause resolution
+      if (state.waitingForInput && state.waitingForInput !== wfiBefore) return log;
+      return null;
+    }
+    case 'ring_tempts': {
+      const rtResult = handleRingTempts(state, effect, controller, log);
+      // If handleRingTempts paused for human input (ring_bearer_choice), save remaining effects
+      if (state.waitingForInput && ei < effects.length - 1) {
+        state._pendingStackEffects = { card, controller, targets, effects: effects.slice(ei + 1), log };
+      }
+      return rtResult;
+    }
     default: {
       // Fallback: route to _resolveSimpleEffect for any effect not explicitly handled here.
       // This ensures saga chapters, spell copies, and other stack-pushed effects work
       // even if the type is only implemented in _resolveSimpleEffect.
       const fallbackResult = GameState._resolveSimpleEffect(state, controller, effect, { cardUid: card?._uid, cardName: card?.name, targets });
-      if (fallbackResult) log.push(fallbackResult);
-      else log.push(`[DEBUG] Efeito "${effect.type}" nao resolvido.`);
+      if (fallbackResult && fallbackResult !== '__paused__') log.push(fallbackResult);
+      else if (!fallbackResult && !state.waitingForInput) log.push(`[DEBUG] Efeito "${effect.type}" nao resolvido.`);
       // If _resolveSimpleEffect set waitingForInput (e.g. buff_choice for human),
       // save remaining effects and pause resolution
       if (state.waitingForInput) {

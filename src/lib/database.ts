@@ -97,6 +97,15 @@ export async function getSetList(): Promise<{ set_code: string; set_name: string
   );
 }
 
+export async function deleteSet(setCode: string): Promise<void> {
+  if (!isTauri()) {
+    const { browserDeleteSet } = await getBrowserDb();
+    return browserDeleteSet(setCode);
+  }
+  const db = await getTauriDb();
+  await db.execute('DELETE FROM cards WHERE set_code = ?', [setCode]);
+}
+
 export async function getCardCount(): Promise<number> {
   if (!isTauri()) {
     const { browserGetCardCount } = await getBrowserDb();

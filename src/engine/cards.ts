@@ -113,14 +113,28 @@ export function getActivatedAbilities(card: GameCard): ActivatedAbility[] {
   if ((card as any)._losesAllAbilities) return [];
 
   const db = getPreprocessedEffects(card);
+  let base: ActivatedAbility[] = [];
   if (db && db.activated) {
-    return db.activated.filter(a => {
+    base = db.activated.filter(a => {
       const cost = a.cost as any;
       if (cost && cost.zone === 'graveyard') return false;
       if (cost && cost.loyalty !== undefined) return false;
       return true;
     });
+  } else {
+    // Will fall through to parseActivatedAbilities below
   }
+
+  // Sharkey: append copied non-mana land abilities from opponent's lands
+  const copied = (card as any)._copiedLandAbilities;
+  if (copied && copied.length > 0) {
+    if (base.length > 0) return [...base, ...copied];
+    // base is empty — will be built below via parseActivatedAbilities; append after
+    const parsed = parseActivatedAbilities(card);
+    return [...parsed, ...copied];
+  }
+
+  if (base.length > 0) return base;
 
   // Treasure tokens
   if (card._isToken && card.name?.toLowerCase() === 'treasure') {
@@ -128,6 +142,15 @@ export function getActivatedAbilities(card: GameCard): ActivatedAbility[] {
       cost: { tap: true, sacrifice: true } as any,
       effects: [{ type: 'add_mana', colors: ['W', 'U', 'B', 'R', 'G'], choose: 1 } as any],
       text: '{T}, Sacrifice this artifact: Add one mana of any color.',
+    } as any];
+  }
+
+  // Food tokens (includes Shelob food copies: _isFoodToken)
+  if ((card._isToken && card.name?.toLowerCase() === 'food') || card._isFoodToken) {
+    return [{
+      cost: { mana: 2, tap: true, sacrifice: true } as any,
+      effects: [{ type: 'gainLife', amount: 3 } as any],
+      text: '{2}, {T}, Sacrifice this artifact: You gain 3 life.',
     } as any];
   }
 
@@ -600,6 +623,8 @@ export function prepareForBattlefield(card: GameCard): GameCard {
   const creature = isCreature(card);
   const prepared: GameCard = {
     ...card,
+    // Deep-clone keywords to prevent shared references between same-name cards
+    keywords: Array.isArray(card.keywords) ? [...card.keywords] : [],
     _tapped: false,
     _summoningSick: creature,
     _powerMod: 0,
@@ -643,6 +668,8 @@ export function createToken(
 ): GameCard {
   const uid = 'token_' + Math.random().toString(36).slice(2, 8);
   const isTreasure = name?.toLowerCase() === 'treasure';
+  const isFood = name?.toLowerCase() === 'food';
+  const isNonCreatureArtifact = isTreasure || isFood;
 
   const token: GameCard = {
     id: uid,
@@ -652,10 +679,11 @@ export function createToken(
     _zone: 'battlefield',
     oracle_id: '',
     name: name || 'Token',
-    type_line: isTreasure ? 'Artifact Token' : 'Creature Token',
-    power: isTreasure ? '' : String(power),
-    toughness: isTreasure ? '' : String(toughness),
-    oracle_text: isTreasure ? '{T}, Sacrifice this artifact: Add one mana of any color.' : '',
+    type_line: isNonCreatureArtifact ? 'Artifact Token' : 'Creature Token',
+    power: isNonCreatureArtifact ? '' : String(power),
+    toughness: isNonCreatureArtifact ? '' : String(toughness),
+    oracle_text: isTreasure ? '{T}, Sacrifice this artifact: Add one mana of any color.'
+      : isFood ? '{2}, {T}, Sacrifice this artifact: You gain 3 life.' : '',
     mana_cost: '',
     cmc: 0,
     colors: [],
@@ -671,7 +699,7 @@ export function createToken(
     layout: 'token',
     _isToken: true,
     _tapped: false,
-    _summoningSick: !isTreasure && !keywords.some(k => k.toLowerCase() === 'haste'),
+    _summoningSick: !isNonCreatureArtifact && !keywords.some(k => k.toLowerCase() === 'haste'),
     _powerMod: 0,
     _toughnessMod: 0,
     _tempPowerMod: 0,

@@ -53,6 +53,7 @@ export interface GameCard extends Card {
   _attachedToOwner?: number;
   _attachments: string[];
   _isToken: boolean;
+  _isFoodToken?: boolean;
 
   // Dynamic P/T
   _vividPower?: boolean;
@@ -86,7 +87,16 @@ export interface GameCard extends Card {
   _exiledPlayable?: boolean;
   _harmonizeGranted?: boolean;
   _cantBlockThisTurn?: boolean;
+  _cantAttack?: boolean;
   _unblockable?: boolean;
+  _starPower?: boolean;
+  _starBasedOn?: string;
+  _starValue?: number;
+  _goaded?: boolean;
+  _goadedBy?: number;
+  _opponentsCantGainLife?: boolean;
+  _exiledUntilLeaves?: any[];
+  _exiledByUid?: string;
   _loyaltyUsedThisTurn?: boolean;
 
   // Adventure

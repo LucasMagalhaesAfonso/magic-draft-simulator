@@ -10,6 +10,7 @@ import { GameScreen } from './components/GameScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { SealedRevealScreen } from './components/SealedRevealScreen';
 import { LoginScreen } from './components/online/LoginScreen';
+import { UpdateChecker } from './components/UpdateChecker';
 import { LobbyScreen } from './components/online/LobbyScreen';
 import { onAuthChange } from './lib/firebase';
 import './styles/global.css';
@@ -133,6 +134,7 @@ function App() {
           {renderScreen()}
         </ErrorBoundary>
       </main>
+      <UpdateChecker />
     </div>
   );
 }

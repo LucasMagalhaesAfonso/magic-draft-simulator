@@ -233,7 +233,7 @@ export async function syncSingleSet(
  * Fetch all prints for a set and store alternate art URLs in localStorage.
  * Format: alt_art_{setCode} → Record<cardName, Array<{ small, normal }>>
  */
-async function fetchAltArt(
+export async function fetchAltArt(
   setCode: string,
   onProgress?: (progress: SyncProgress) => void
 ): Promise<void> {
@@ -332,7 +332,14 @@ export async function seedBundledSets(
         onProgress?.({ phase: 'inserting', current: inserted, total, message: `Importing ${setCode.toUpperCase()}... ${inserted}/${total}` });
       });
 
-      onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `${setCode.toUpperCase()} ready!` });
+      onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `${setCode.toUpperCase()} importado! Buscando artes alternativas...` });
+
+      // Fetch alt art from Scryfall (requires internet, non-fatal if offline)
+      try {
+        await fetchAltArt(setCode, onProgress);
+      } catch (e) {
+        console.warn(`[seedBundledSets] Alt art fetch failed for ${setCode} (non-fatal):`, e);
+      }
     } catch (e) {
       console.error(`[seedBundledSets] Failed to seed ${setCode}:`, e);
       // Non-fatal: user can import manually

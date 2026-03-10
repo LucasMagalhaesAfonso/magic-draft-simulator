@@ -1,7 +1,7 @@
 import { useEffect, Component, type ReactNode } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { getCardCount } from './lib/database';
-import { seedBundledSets } from './lib/scryfall';
+import { seedBundledSets, fetchAltArt } from './lib/scryfall';
 import { Header } from './components/shared/Header';
 import { HomeScreen } from './components/HomeScreen';
 import { DraftScreen } from './components/DraftScreen';
@@ -85,6 +85,13 @@ function App() {
         setSyncing(false);
         const newCount = await getCardCount();
         setTotalCards(newCount);
+      } else {
+        // Cards already exist — check if alt art is missing and fetch silently
+        for (const set of ['tdm', 'ltr']) {
+          if (!localStorage.getItem(`alt_art_${set}`)) {
+            fetchAltArt(set).catch(() => {}); // silent, non-blocking
+          }
+        }
       }
       setDbReady(true);
     } catch (e) {

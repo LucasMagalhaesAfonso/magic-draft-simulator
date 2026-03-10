@@ -1,6 +1,7 @@
 import { useEffect, Component, type ReactNode } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { getCardCount } from './lib/database';
+import { seedBundledSets } from './lib/scryfall';
 import { Header } from './components/shared/Header';
 import { HomeScreen } from './components/HomeScreen';
 import { DraftScreen } from './components/DraftScreen';
@@ -54,7 +55,7 @@ class ErrorBoundary extends Component<
 }
 
 function App() {
-  const { screen, setDbReady, setTotalCards, setCurrentUser } = useAppStore();
+  const { screen, setDbReady, setTotalCards, setCurrentUser, setSyncing } = useAppStore();
 
   useEffect(() => {
     initDatabase();
@@ -77,10 +78,17 @@ function App() {
     try {
       const count = await getCardCount();
       setTotalCards(count);
+      if (count === 0) {
+        // First launch — seed bundled sets (TDM + LTR) without internet
+        setSyncing(true, 'Preparando cards...');
+        await seedBundledSets((p) => setSyncing(true, p.message));
+        setSyncing(false);
+        const newCount = await getCardCount();
+        setTotalCards(newCount);
+      }
       setDbReady(true);
     } catch (e) {
       console.error('Database init failed:', e);
-      // DB might not be ready yet on first launch - that's OK
       setDbReady(true);
     }
   }

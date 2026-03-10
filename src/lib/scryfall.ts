@@ -303,3 +303,39 @@ async function fetchAltArt(
     console.log(`[fetchAltArt] Stored ${altCount} cards with alternate art for ${setCode.toUpperCase()}`);
   }
 }
+
+// ── Bundled seed ───────────────────────────────────────────────────────────────
+// On first launch (empty DB), auto-import TDM and LTR from the bundled JSONs
+// in public/data/ — no internet required.
+const BUNDLED_SETS = ['tdm', 'ltr'];
+
+export async function seedBundledSets(
+  onProgress?: (progress: SyncProgress) => void
+): Promise<void> {
+  for (const setCode of BUNDLED_SETS) {
+    try {
+      onProgress?.({ phase: 'downloading', current: 0, total: 0, message: `Loading ${setCode.toUpperCase()}...` });
+      const res = await fetch(`/data/scryfall-${setCode}.json`);
+      if (!res.ok) throw new Error(`Failed to load bundled ${setCode}: ${res.status}`);
+      const json = await res.json();
+      const cards: ScryfallCard[] = json.cards || [];
+
+      const rows: CardRow[] = [];
+      for (const card of cards) {
+        const row = scryfallToRow(card);
+        if (row) rows.push(row);
+      }
+
+      onProgress?.({ phase: 'inserting', current: 0, total: rows.length, message: `Importing ${setCode.toUpperCase()} (${rows.length} cards)...` });
+
+      await bulkInsertCards(rows, (inserted, total) => {
+        onProgress?.({ phase: 'inserting', current: inserted, total, message: `Importing ${setCode.toUpperCase()}... ${inserted}/${total}` });
+      });
+
+      onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `${setCode.toUpperCase()} ready!` });
+    } catch (e) {
+      console.error(`[seedBundledSets] Failed to seed ${setCode}:`, e);
+      // Non-fatal: user can import manually
+    }
+  }
+}

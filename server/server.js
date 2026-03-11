@@ -14,9 +14,11 @@ const io = new Server(httpServer, {
 });
 
 // ── Room storage ──────────────────────────────────────────────────────────────
-// rooms: Map<code, { host: socketId, guest: socketId|null, hostName, guestName, createdAt, lastActivity }>
+// rooms: Map<code, { hostSocketId, players, draftStarted, createdAt, lastActivity }>
+// players: [{socketId, displayName, seatIndex}]
 const rooms = new Map();
-const socketToRoom = new Map(); // socketId → roomCode
+// socketToRoom: Map<socketId, {code, seatIndex}>
+const socketToRoom = new Map();
 
 function generateCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -24,37 +26,42 @@ function generateCode() {
 }
 
 function getRoom(socketId) {
-  const code = socketToRoom.get(socketId);
-  return code ? rooms.get(code) : null;
+  const info = socketToRoom.get(socketId);
+  return info ? rooms.get(info.code) : null;
+}
+
+function getRoomCode(socketId) {
+  const info = socketToRoom.get(socketId);
+  return info ? info.code : null;
+}
+
+function getSeatIndex(socketId) {
+  const info = socketToRoom.get(socketId);
+  return info ? info.seatIndex : null;
 }
 
 function cleanupSocket(socketId) {
-  const code = socketToRoom.get(socketId);
-  if (!code) return null;
+  const info = socketToRoom.get(socketId);
+  if (!info) return null;
+  const { code } = info;
   const room = rooms.get(code);
   if (!room) return null;
 
   socketToRoom.delete(socketId);
-
-  if (room.host === socketId) {
-    room.host = null;
-    room.hostName = null;
-  } else if (room.guest === socketId) {
-    room.guest = null;
-    room.guestName = null;
-  }
+  room.players = room.players.filter(p => p.socketId !== socketId);
+  room.lastActivity = Date.now();
 
   // If room is completely empty, schedule cleanup
-  if (!room.host && !room.guest) {
+  if (room.players.length === 0) {
     setTimeout(() => {
       if (rooms.has(code)) {
         const r = rooms.get(code);
-        if (!r.host && !r.guest) {
+        if (r.players.length === 0) {
           rooms.delete(code);
           console.log(`[Room ${code}] Deleted (empty)`);
         }
       }
-    }, 60 * 1000); // 60s grace period
+    }, 60 * 1000);
   }
 
   return { code, room };
@@ -71,24 +78,23 @@ io.on('connection', (socket) => {
 
   // ── Create room ────────────────────────────────────────────────────────────
   socket.on('create_room', ({ displayName } = {}) => {
-    // Generate unique code
     let code;
     let attempts = 0;
     do { code = generateCode(); attempts++; } while (rooms.has(code) && attempts < 20);
 
+    const hostPlayer = { socketId: socket.id, displayName: displayName || 'Host', seatIndex: 0 };
     rooms.set(code, {
-      host: socket.id,
-      guest: null,
-      hostName: displayName || 'Host',
-      guestName: null,
+      hostSocketId: socket.id,
+      players: [hostPlayer],
+      draftStarted: false,
       createdAt: Date.now(),
       lastActivity: Date.now(),
     });
-    socketToRoom.set(socket.id, code);
+    socketToRoom.set(socket.id, { code, seatIndex: 0 });
     socket.join(code);
 
-    socket.emit('room_created', { code, role: 'host' });
-    console.log(`[Room ${code}] Created by ${displayName || socket.id}`);
+    socket.emit('room_created', { code, seatIndex: 0 });
+    console.log(`[Room ${code}] Created by ${displayName || socket.id} (seat 0)`);
   });
 
   // ── Join room ──────────────────────────────────────────────────────────────
@@ -100,94 +106,118 @@ io.on('connection', (socket) => {
       socket.emit('join_error', { message: 'Sala não encontrada. Verifique o código.' });
       return;
     }
-    if (room.guest) {
+    if (room.players.length >= 8) {
+      socket.emit('join_error', { message: 'Sala já está cheia (8 jogadores).' });
+      return;
+    }
+    if (room.players.find(p => p.socketId === socket.id)) {
+      socket.emit('join_error', { message: 'Você já está nesta sala.' });
+      return;
+    }
+
+    // Find next free seat (1-7)
+    const occupiedSeats = new Set(room.players.map(p => p.seatIndex));
+    let seatIndex = -1;
+    for (let i = 1; i <= 7; i++) {
+      if (!occupiedSeats.has(i)) { seatIndex = i; break; }
+    }
+    if (seatIndex === -1) {
       socket.emit('join_error', { message: 'Sala já está cheia.' });
       return;
     }
-    if (room.host === socket.id) {
-      socket.emit('join_error', { message: 'Você já é o host desta sala.' });
-      return;
-    }
 
-    room.guest = socket.id;
-    room.guestName = displayName || 'Guest';
+    const newPlayer = { socketId: socket.id, displayName: displayName || 'Guest', seatIndex };
+    room.players.push(newPlayer);
     room.lastActivity = Date.now();
-    socketToRoom.set(socket.id, upperCode);
+    socketToRoom.set(socket.id, { code: upperCode, seatIndex });
     socket.join(upperCode);
 
-    socket.emit('room_joined', { code: upperCode, role: 'guest', opponentName: room.hostName });
-    // Notify host
-    const hostSocket = io.sockets.sockets.get(room.host);
-    if (hostSocket) {
-      hostSocket.emit('opponent_joined', { opponentName: room.guestName });
-    }
-    console.log(`[Room ${upperCode}] ${displayName || socket.id} joined as guest`);
+    const playersPublic = room.players.map(p => ({ displayName: p.displayName, seatIndex: p.seatIndex }));
+
+    socket.emit('room_joined', { code: upperCode, seatIndex, players: playersPublic });
+    io.to(upperCode).emit('room_updated', { players: playersPublic });
+
+    console.log(`[Room ${upperCode}] ${displayName || socket.id} joined as seat ${seatIndex}`);
   });
 
-  // ── Game state update (host → guest) ──────────────────────────────────────
-  socket.on('game_state_update', (data) => {
-    const room = getRoom(socket.id);
-    if (!room || room.host !== socket.id || !room.guest) return;
+  // ── Draft event — broadcast to ALL including sender ────────────────────────
+  socket.on('draft_event', (data) => {
+    const code = getRoomCode(socket.id);
+    const room = code ? rooms.get(code) : null;
+    if (!room) return;
     room.lastActivity = Date.now();
-    const guestSocket = io.sockets.sockets.get(room.guest);
-    if (guestSocket) guestSocket.emit('game_state_update', data);
+    io.to(code).emit('draft_event', data);
+  });
+
+  // ── Game state update (host → others) ─────────────────────────────────────
+  socket.on('game_state_update', (data) => {
+    const code = getRoomCode(socket.id);
+    const room = code ? rooms.get(code) : null;
+    if (!room || room.hostSocketId !== socket.id) return;
+    room.lastActivity = Date.now();
+    // Send to all non-host players
+    for (const player of room.players) {
+      if (player.socketId !== socket.id) {
+        const s = io.sockets.sockets.get(player.socketId);
+        if (s) s.emit('game_state_update', data);
+      }
+    }
   });
 
   // ── Player action (guest → host) ──────────────────────────────────────────
   socket.on('player_action', (action) => {
-    const room = getRoom(socket.id);
-    if (!room || room.guest !== socket.id || !room.host) return;
+    const code = getRoomCode(socket.id);
+    const room = code ? rooms.get(code) : null;
+    if (!room || room.hostSocketId === socket.id) return;
     room.lastActivity = Date.now();
-    const hostSocket = io.sockets.sockets.get(room.host);
+    const hostSocket = io.sockets.sockets.get(room.hostSocketId);
     if (hostSocket) hostSocket.emit('player_action', action);
   });
 
-  // ── Chat message (either → other) ─────────────────────────────────────────
+  // ── Chat message ──────────────────────────────────────────────────────────
   socket.on('chat_message', ({ text, emote } = {}) => {
-    const code = socketToRoom.get(socket.id);
+    const code = getRoomCode(socket.id);
     const room = code ? rooms.get(code) : null;
     if (!room) return;
     room.lastActivity = Date.now();
 
-    const isHost = room.host === socket.id;
-    const senderName = isHost ? room.hostName : room.guestName;
+    const isHost = room.hostSocketId === socket.id;
+    const player = room.players.find(p => p.socketId === socket.id);
+    const senderName = player ? player.displayName : 'Unknown';
     const payload = { text, emote, senderName, isHost, timestamp: Date.now() };
 
-    // Relay to the other player
-    const otherId = isHost ? room.guest : room.host;
-    const otherSocket = otherId ? io.sockets.sockets.get(otherId) : null;
-    if (otherSocket) otherSocket.emit('chat_message', payload);
-    // Echo back to sender with their own name confirmed
+    // Relay to the other players
+    for (const p of room.players) {
+      if (p.socketId !== socket.id) {
+        const s = io.sockets.sockets.get(p.socketId);
+        if (s) s.emit('chat_message', payload);
+      }
+    }
     socket.emit('chat_message_echo', payload);
   });
 
-  // ── Resync request (guest reconnected) ────────────────────────────────────
+  // ── Resync request ─────────────────────────────────────────────────────────
   socket.on('request_resync', () => {
-    const room = getRoom(socket.id);
-    if (!room || room.guest !== socket.id || !room.host) return;
-    const hostSocket = io.sockets.sockets.get(room.host);
+    const code = getRoomCode(socket.id);
+    const room = code ? rooms.get(code) : null;
+    if (!room || room.hostSocketId === socket.id) return;
+    const hostSocket = io.sockets.sockets.get(room.hostSocketId);
     if (hostSocket) hostSocket.emit('resync_requested');
   });
 
   // ── Host starts game ──────────────────────────────────────────────────────
   socket.on('start_game', (data) => {
-    const code = socketToRoom.get(socket.id);
+    const code = getRoomCode(socket.id);
     const room = code ? rooms.get(code) : null;
-    if (!room || room.host !== socket.id) return;
-    // Relay start signal to guest
-    const guestSocket = room.guest ? io.sockets.sockets.get(room.guest) : null;
-    if (guestSocket) guestSocket.emit('game_started', data);
+    if (!room || room.hostSocketId !== socket.id) return;
+    // Relay start signal to all non-host players
+    for (const player of room.players) {
+      if (player.socketId !== socket.id) {
+        const s = io.sockets.sockets.get(player.socketId);
+        if (s) s.emit('game_started', data);
+      }
+    }
     socket.emit('game_started', { ...data, isHost: true });
-  });
-
-  // ── Draft event relay (bidirectional) ─────────────────────────────────────
-  socket.on('draft_event', (data) => {
-    const room = getRoom(socket.id);
-    if (!room) return;
-    room.lastActivity = Date.now();
-    const otherId = room.host === socket.id ? room.guest : room.host;
-    const otherSocket = otherId ? io.sockets.sockets.get(otherId) : null;
-    if (otherSocket) otherSocket.emit('draft_event', data);
   });
 
   // ── Disconnect ────────────────────────────────────────────────────────────
@@ -197,10 +227,18 @@ io.on('connection', (socket) => {
     if (!result) return;
 
     const { code, room } = result;
-    const otherId = room.host || room.guest;
-    const otherSocket = otherId ? io.sockets.sockets.get(otherId) : null;
-    if (otherSocket) {
-      otherSocket.emit('opponent_disconnected', { code });
+    const playersPublic = room.players.map(p => ({ displayName: p.displayName, seatIndex: p.seatIndex }));
+
+    if (room.players.length > 0) {
+      io.to(code).emit('room_updated', { players: playersPublic });
+      // If the host disconnected, notify remaining players
+      if (room.hostSocketId === socket.id) {
+        io.to(code).emit('host_disconnected', { code });
+      } else {
+        // Notify host specifically
+        const hostSocket = io.sockets.sockets.get(room.hostSocketId);
+        if (hostSocket) hostSocket.emit('opponent_disconnected', { code });
+      }
     }
   });
 });

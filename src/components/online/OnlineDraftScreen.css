@@ -1,0 +1,368 @@
+.od-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.od-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: rgba(0,0,0,0.3);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+
+.od-header-info {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+}
+
+.od-round-label,
+.od-pick-label,
+.od-pass-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.od-round-label { font-weight: 700; color: var(--gold, #ffc832); font-size: 14px; }
+
+.od-header-right { display: flex; gap: 16px; align-items: center; }
+
+.od-mypicks-count {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ── Timer bar ─────────────────────────────────────────────────────────────── */
+.od-timer-bar-wrap {
+  position: relative;
+  height: 6px;
+  background: rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+
+.od-timer-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #27ae60, #2ecc71);
+  transition: width 1s linear, background 0.3s;
+}
+
+.od-timer-bar.red { background: linear-gradient(90deg, #c0392b, #e74c3c); }
+
+.od-timer-text {
+  position: absolute;
+  right: 8px;
+  top: -16px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.od-timer-text.red { color: #e74c3c; }
+
+/* ── Body layout ───────────────────────────────────────────────────────────── */
+.od-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  gap: 0;
+}
+
+/* ── Left panel: seats ─────────────────────────────────────────────────────── */
+.od-left-panel {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(255,255,255,0.07);
+  overflow-y: auto;
+}
+
+.od-panel-title {
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+
+.od-seats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+
+.od-seat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+  font-size: 12px;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  transition: background 0.2s;
+}
+
+.od-seat-row.picked {
+  background: rgba(39,174,96,0.1);
+}
+
+.od-seat-row.me {
+  background: rgba(255,200,50,0.08);
+  border: 1px solid rgba(255,200,50,0.2);
+}
+
+.od-seat-num {
+  font-size: 10px;
+  color: var(--text-muted);
+  width: 22px;
+  flex-shrink: 0;
+}
+
+.od-seat-name {
+  flex: 1;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.od-seat-placeholder { color: var(--text-muted); font-style: italic; }
+
+.od-seat-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.od-seat-tag.bot { background: rgba(255,255,255,0.08); color: var(--text-muted); }
+.od-seat-tag.me { background: rgba(255,200,50,0.2); color: var(--gold, #ffc832); }
+
+.od-seat-status {
+  width: 100%;
+  font-size: 10px;
+  padding-left: 28px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.od-seat-status.done { color: #27ae60; }
+.od-seat-status.waiting { color: var(--text-muted); }
+
+/* ── Center: pack grid ─────────────────────────────────────────────────────── */
+.od-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  padding: 16px;
+  gap: 16px;
+}
+
+.od-pack-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 100px);
+  gap: 8px;
+  justify-content: center;
+}
+
+.od-card {
+  position: relative;
+  width: 100px;
+  height: 140px;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  background: rgba(255,255,255,0.04);
+  flex-shrink: 0;
+}
+
+.od-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.5);
+}
+
+.od-card.selected {
+  border-color: var(--gold, #ffc832);
+  box-shadow: 0 0 16px rgba(255,200,50,0.5);
+  transform: translateY(-4px) scale(1.02);
+}
+
+.od-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.od-card-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+.od-card-name {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.od-card-cost {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.od-card-type {
+  font-size: 8px;
+  color: var(--text-muted);
+}
+
+.od-card-rarity-dot {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+
+.od-pack-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.od-selected-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gold, #ffc832);
+}
+
+.od-confirm-btn {
+  padding: 10px 32px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.od-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.od-waiting-pack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 60px 0;
+}
+
+.od-waiting-sub {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ── Right panel: my picks ─────────────────────────────────────────────────── */
+.od-right-panel {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(255,255,255,0.07);
+  overflow-y: auto;
+}
+
+.od-my-picks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+
+.od-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.03);
+  font-size: 12px;
+}
+
+.od-pick-rarity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.od-pick-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.od-pick-colors {
+  display: flex;
+  gap: 2px;
+}
+
+.od-color-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.4);
+}
+
+/* ── Loading / spinner ─────────────────────────────────────────────────────── */
+.od-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 20px;
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.od-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255,255,255,0.1);
+  border-top-color: var(--gold, #ffc832);
+  border-radius: 50%;
+  animation: od-spin 0.8s linear infinite;
+}
+
+@keyframes od-spin {
+  to { transform: rotate(360deg); }
+}

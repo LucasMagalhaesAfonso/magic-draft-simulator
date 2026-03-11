@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { getCardsBySet } from '../../lib/database';
 import { getSocket, sendDraftEvent } from '../../lib/multiplayerSocket';
 import type { Card } from '../../lib/types';
+import './OnlineDraftScreen.css';
 
 // ── Timer formula ─────────────────────────────────────────────────────────────
 function getPickTimer(pickInRound: number): number {
@@ -28,7 +29,17 @@ function autoPick(pack: Card[], myPicks: Card[], selectedCard: Card | null): Car
   })[0];
 }
 
-// ── Shuffle utility ───────────────────────────────────────────────────────────
+// ── Bot pick logic ────────────────────────────────────────────────────────────
+function botPick(pack: Card[]): Card {
+  const order: Card['rarity'][] = ['mythic', 'rare', 'uncommon', 'common'];
+  for (const r of order) {
+    const c = pack.filter(x => x.rarity === r);
+    if (c.length) return c[Math.floor(Math.random() * c.length)];
+  }
+  return pack[0];
+}
+
+// ── Shuffle ───────────────────────────────────────────────────────────────────
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -38,18 +49,56 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-// ── Phase type ────────────────────────────────────────────────────────────────
-type Phase = 'waiting' | 'picking' | 'waiting_pack' | 'done';
+// ── Pack generation ───────────────────────────────────────────────────────────
+function generateAllPacks(cards: Card[]): Card[][][] {
+  const allPacks: Card[][][] = [];
+  const usedIds = new Set<string>();
+  for (let round = 0; round < 3; round++) {
+    const roundPacks: Card[][] = [];
+    for (let seat = 0; seat < 8; seat++) {
+      const available = cards.filter(c => !usedIds.has(c.id));
+      const shuffled = shuffle(available);
+      const pack = shuffled.slice(0, 15);
+      pack.forEach(c => usedIds.add(c.id));
+      roundPacks.push(pack);
+    }
+    allPacks.push(roundPacks);
+  }
+  return allPacks;
+}
+
+// ── Rarity color ─────────────────────────────────────────────────────────────
+function rarityColor(rarity: string): string {
+  switch (rarity) {
+    case 'mythic': return '#e05c10';
+    case 'rare': return '#b8862c';
+    case 'uncommon': return '#8fa3ad';
+    default: return '#aaa';
+  }
+}
+
+// ── Color identity dots ───────────────────────────────────────────────────────
+const COLOR_LABELS: Record<string, string> = { W: '#f5f0d8', U: '#3a8bc0', B: '#4a3560', R: '#c83030', G: '#2e7d32' };
+
+type DraftPhase = 'initializing' | 'picking' | 'waiting_others' | 'round_transition' | 'done';
+
+interface SeatInfo {
+  seatIndex: number;
+  displayName: string;
+  isBot: boolean;
+}
 
 interface DraftState {
-  phase: Phase;
-  round: number;    // 0, 1, 2
-  pick: number;     // 0-14 within round
+  phase: DraftPhase;
+  round: number;
+  pickInRound: number;
   currentPack: Card[];
   selectedCard: Card | null;
   myPicks: Card[];
-  opponentStatus: string;
   timer: number;
+  seatsPicked: Set<number>;
+  seatsInRoom: SeatInfo[];
+  lastPickBySeat: Record<number, string>;
 }
 
 const PICKS_PER_ROUND = 15;
@@ -57,239 +106,269 @@ const TOTAL_ROUNDS = 3;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export function OnlineDraftScreen() {
-  const { mpRole, selectedSet, setScreen, setDraftPool, setOnlineDraftPicks } = useAppStore();
+  const {
+    mpRole,
+    mySeatIndex,
+    podPlayers,
+    draftSetCode,
+    setScreen,
+    setOnlineDraftPicks,
+    setPodPicks,
+    currentUser,
+  } = useAppStore();
+
   const isHost = mpRole === 'host';
+  const myName = currentUser?.displayName || 'Jogador';
 
   const [state, setState] = useState<DraftState>({
-    phase: 'waiting',
+    phase: 'initializing',
     round: 0,
-    pick: 0,
+    pickInRound: 0,
     currentPack: [],
     selectedCard: null,
     myPicks: [],
-    opponentStatus: 'Aguardando...',
     timer: getPickTimer(0),
+    seatsPicked: new Set(),
+    seatsInRoom: [],
+    lastPickBySeat: {},
   });
 
-  // Host pre-generates 6 packs: [round][player(0=host,1=guest)]
-  // Each pack has 15 cards. Packs for same round swap between players after each pick.
-  const hostPacks = useRef<Card[][][]>([]); // hostPacks[round] = [hostPack, guestPack]
-  const myPackRef = useRef<Card[]>([]);     // current pack being drafted
-  const pendingPackRef = useRef<Card[] | null>(null); // pack waiting from opponent after we pick
+  // Host-only refs (large data, not state)
+  const allPacksRef = useRef<Card[][][]>([]); // [round][seat][card]
+  const currentRoundPacksRef = useRef<Card[][]>([]); // remaining cards per seat this round
+  const allPicksBySeatRef = useRef<Record<number, Card[]>>({}); // seat → picks array
+  const pickedThisTurnRef = useRef<Set<number>>(new Set());
+  const currentRoundRef = useRef(0);
+  const currentPickInRoundRef = useRef(0);
+  const humanSeatsRef = useRef<number[]>([]);
+  const botSeatsRef = useRef<number[]>([]);
+  const initDoneRef = useRef(false);
+  const myRemainingPackRef = useRef<Card[]>([]); // after picking, wait for new_pack
 
-  // Track whether we've already started to avoid double-init
-  const started = useRef(false);
-
-  // ── Listen for draft events from opponent ─────────────────────────────────
+  // ── Host initializes draft ────────────────────────────────────────────────
   useEffect(() => {
-    const socket = getSocket();
+    if (!isHost || initDoneRef.current) return;
+    initDoneRef.current = true;
 
-    function onDraftEvent(data: any) {
-      const { type } = data;
-
-      if (type === 'draft_start' && !isHost) {
-        // Guest receives first pack
-        myPackRef.current = data.pack;
-        setState(prev => ({
-          ...prev,
-          phase: 'picking',
-          round: data.round,
-          pick: 0,
-          currentPack: data.pack,
-          timer: getPickTimer(0),
-          opponentStatus: 'Oponente escolhendo...',
-        }));
-      }
-
-      if (type === 'draft_round_start' && !isHost) {
-        // Guest receives pack for new round
-        myPackRef.current = data.pack;
-        setState(prev => ({
-          ...prev,
-          phase: 'picking',
-          round: data.round,
-          pick: 0,
-          currentPack: data.pack,
-          timer: getPickTimer(0),
-          opponentStatus: 'Oponente escolhendo...',
-        }));
-      }
-
-      if (type === 'draft_pack') {
-        // Receive a pack mid-round (after swap)
-        myPackRef.current = data.pack;
-        setState(prev => ({
-          ...prev,
-          phase: 'picking',
-          currentPack: data.pack,
-          selectedCard: null,
-          timer: getPickTimer(data.pick),
-          opponentStatus: 'Oponente escolhendo...',
-        }));
-      }
-
-      if (type === 'draft_pick_pass') {
-        // Opponent picked and is sending us their remaining pack
-        // We use this as our next pack after we finish our current pick
-        pendingPackRef.current = data.remainingPack;
-        setState(prev => ({
-          ...prev,
-          opponentStatus: `Oponente escolheu${data.pickedCard ? ': ' + data.pickedCard.name : ''}`,
-        }));
-      }
-
-      if (type === 'draft_complete') {
-        setState(prev => ({ ...prev, phase: 'done', opponentStatus: 'Draft concluído!' }));
-      }
-    }
-
-    socket.on('draft_event', onDraftEvent);
-    return () => { socket.off('draft_event', onDraftEvent); };
-  }, [isHost]);
-
-  // ── Host initializes draft on mount ──────────────────────────────────────
-  useEffect(() => {
-    if (!isHost || started.current) return;
-    started.current = true;
-
-    async function initDraft() {
-      const allCards = await getCardsBySet(selectedSet);
-      if (allCards.length === 0) {
-        console.error('[OnlineDraft] No cards found for set:', selectedSet);
+    async function init() {
+      const cards = await getCardsBySet(draftSetCode);
+      if (!cards || cards.length < 120) {
+        console.error('[OnlineDraft] Not enough cards for draft:', cards?.length);
         return;
       }
 
-      // Generate 6 packs: 2 per round (one for each player)
-      const packs: Card[][][] = [];
-      const shuffled = shuffle(allCards);
-      const pool = [...shuffled, ...shuffled, ...shuffled, ...shuffled]; // repeat to ensure enough cards
+      const allPacks = generateAllPacks(cards);
+      allPacksRef.current = allPacks;
 
-      for (let r = 0; r < TOTAL_ROUNDS; r++) {
-        const hostPack = shuffle(allCards).slice(0, PICKS_PER_ROUND);
-        const guestPack = shuffle(allCards).slice(0, PICKS_PER_ROUND);
-        packs.push([hostPack, guestPack]);
+      // Initialize picks storage
+      const picks: Record<number, Card[]> = {};
+      for (let i = 0; i < 8; i++) picks[i] = [];
+      allPicksBySeatRef.current = picks;
+
+      // Determine human vs bot seats from podPlayers
+      const humanSeats = podPlayers.filter(p => !p.isBot).map(p => p.seatIndex);
+      const botSeats = podPlayers.filter(p => p.isBot).map(p => p.seatIndex);
+      humanSeatsRef.current = humanSeats;
+      botSeatsRef.current = botSeats;
+
+      // Init current round packs for round 0
+      currentRoundPacksRef.current = allPacks[0].map(pack => [...pack]);
+      currentRoundRef.current = 0;
+      currentPickInRoundRef.current = 0;
+      pickedThisTurnRef.current = new Set();
+
+      // Auto-pick for bots in round 0
+      for (const botSeat of botSeats) {
+        const pack = currentRoundPacksRef.current[botSeat];
+        const pick = botPick(pack);
+        currentRoundPacksRef.current[botSeat] = pack.filter(c => c.id !== pick.id);
+        allPicksBySeatRef.current[botSeat].push(pick);
+        sendDraftEvent({ type: 'bot_picked', seatIndex: botSeat, cardName: pick.name });
       }
-      hostPacks.current = packs;
 
-      // Host keeps packs[0][0], sends packs[0][1] to guest
-      const myFirstPack = packs[0][0];
-      const guestFirstPack = packs[0][1];
-
-      myPackRef.current = myFirstPack;
-
-      sendDraftEvent({ type: 'draft_start', pack: guestFirstPack, round: 0 });
-
-      setState(prev => ({
-        ...prev,
-        phase: 'picking',
+      // Send round_start to everyone (server broadcasts to all including host)
+      sendDraftEvent({
+        type: 'round_start',
         round: 0,
-        pick: 0,
-        currentPack: myFirstPack,
-        timer: getPickTimer(0),
-        opponentStatus: 'Oponente escolhendo...',
-      }));
+        pickInRound: 0,
+        packsForSeats: humanSeats.map(s => ({ seatIndex: s, pack: allPacks[0][s] })),
+        podPlayers: podPlayers,
+      });
     }
 
-    initDraft();
-  }, [isHost, selectedSet]);
+    init();
+  }, [isHost]);
 
-  // ── Handle pick ───────────────────────────────────────────────────────────
-  const handlePick = useCallback((card: Card) => {
-    setState(prev => {
-      if (prev.phase !== 'picking') return prev;
-      if (!prev.currentPack.find(c => c.id === card.id)) return prev;
+  // ── Socket listener for draft events ─────────────────────────────────────
+  useEffect(() => {
+    const socket = getSocket();
 
-      const remainingPack = prev.currentPack.filter(c => c.id !== card.id);
-      const newPicks = [...prev.myPicks, card];
-      const newPick = prev.pick + 1;
-      const isLastPickInRound = newPick >= PICKS_PER_ROUND;
-      const isLastRound = prev.round >= TOTAL_ROUNDS - 1;
-
-      // Send our pick + remaining pack to opponent (they use it as their next pack)
-      sendDraftEvent({
-        type: 'draft_pick_pass',
-        pickedCard: card,
-        remainingPack,
-        round: prev.round,
-        pick: prev.pick,
-      });
-
-      if (isLastPickInRound) {
-        if (isLastRound) {
-          // Draft complete
-          setOnlineDraftPicks(newPicks);
-          setDraftPool(newPicks);
-          if (isHost) sendDraftEvent({ type: 'draft_complete' });
-          // Navigate after short delay
-          setTimeout(() => setScreen('deckbuilder'), 1500);
-          return {
-            ...prev,
-            phase: 'done',
-            myPicks: newPicks,
-            currentPack: [],
-            selectedCard: null,
-          };
-        }
-
-        // Start next round
-        const nextRound = prev.round + 1;
-        if (isHost) {
-          const myNextPack = hostPacks.current[nextRound]?.[0] || [];
-          const guestNextPack = hostPacks.current[nextRound]?.[1] || [];
-          myPackRef.current = myNextPack;
-          sendDraftEvent({ type: 'draft_round_start', pack: guestNextPack, round: nextRound });
-          return {
-            ...prev,
-            phase: 'picking',
-            round: nextRound,
-            pick: 0,
-            currentPack: myNextPack,
-            selectedCard: null,
-            myPicks: newPicks,
-            timer: getPickTimer(0),
-            opponentStatus: 'Oponente escolhendo...',
-          };
-        } else {
-          // Guest: wait for host to send new round pack
-          return {
-            ...prev,
-            phase: 'waiting_pack',
-            pick: newPick,
-            currentPack: [],
-            selectedCard: null,
-            myPicks: newPicks,
-          };
-        }
-      }
-
-      // Check if we have a pending pack from opponent
-      const pending = pendingPackRef.current;
-      if (pending) {
-        pendingPackRef.current = null;
-        myPackRef.current = pending;
-        return {
-          ...prev,
+    function handleDraftEvent(data: any) {
+      if (data.type === 'round_start') {
+        const myPack = (data.packsForSeats as { seatIndex: number; pack: Card[] }[])
+          .find(p => p.seatIndex === mySeatIndex)?.pack ?? [];
+        myRemainingPackRef.current = myPack;
+        setState(s => ({
+          ...s,
           phase: 'picking',
-          pick: newPick,
-          currentPack: pending,
+          round: data.round,
+          pickInRound: data.pickInRound ?? 0,
+          currentPack: myPack,
           selectedCard: null,
-          myPicks: newPicks,
-          timer: getPickTimer(newPick),
-          opponentStatus: 'Oponente escolhendo...',
-        };
+          timer: getPickTimer(data.pickInRound ?? 0),
+          seatsPicked: new Set(),
+          seatsInRoom: data.podPlayers ?? s.seatsInRoom,
+          lastPickBySeat: {},
+        }));
       }
 
-      // Wait for opponent's pack
-      return {
-        ...prev,
-        phase: 'waiting_pack',
-        pick: newPick,
-        currentPack: [],
-        selectedCard: null,
-        myPicks: newPicks,
-      };
-    });
-  }, [isHost, setDraftPool, setOnlineDraftPicks, setScreen]);
+      if (data.type === 'new_pack') {
+        const myPack = (data.packsForSeats as { seatIndex: number; pack: Card[] }[])
+          .find(p => p.seatIndex === mySeatIndex)?.pack ?? [];
+        myRemainingPackRef.current = myPack;
+        setState(s => ({
+          ...s,
+          phase: 'picking',
+          pickInRound: data.pickInRound ?? s.pickInRound,
+          currentPack: myPack,
+          selectedCard: null,
+          timer: getPickTimer(data.pickInRound ?? s.pickInRound),
+          seatsPicked: new Set(),
+        }));
+      }
+
+      if (data.type === 'pick_confirmed') {
+        setState(s => {
+          const next = new Set(s.seatsPicked);
+          next.add(data.seatIndex as number);
+          const nextLast = { ...s.lastPickBySeat, [data.seatIndex]: data.cardName };
+          return { ...s, seatsPicked: next, lastPickBySeat: nextLast };
+        });
+      }
+
+      if (data.type === 'bot_picked') {
+        setState(s => ({
+          ...s,
+          lastPickBySeat: { ...s.lastPickBySeat, [data.seatIndex]: data.cardName },
+        }));
+      }
+
+      if (data.type === 'round_transition') {
+        setState(s => ({ ...s, phase: 'round_transition', round: data.round }));
+      }
+
+      if (data.type === 'draft_complete') {
+        const allPicks = data.allPicks as Record<number, Card[]>;
+        // Store pod picks
+        const podPicksResult = (data.podPlayers as SeatInfo[]).map(p => ({
+          seatIndex: p.seatIndex,
+          displayName: p.displayName,
+          isBot: p.isBot,
+          picks: allPicks[p.seatIndex] ?? [],
+        }));
+        setPodPicks(podPicksResult);
+        // My picks
+        const myPicks = allPicks[mySeatIndex!] ?? [];
+        setOnlineDraftPicks(myPicks);
+        setState(s => ({ ...s, phase: 'done', myPicks }));
+        setScreen('pod_lobby');
+      }
+
+      // Host processes incoming human picks
+      if (isHost && data.type === 'pick') {
+        const seatIdx = data.seatIndex as number;
+        const cardId = data.cardId as string;
+        const cardName = data.cardName as string;
+
+        // Remove from that seat's remaining pack
+        currentRoundPacksRef.current[seatIdx] = currentRoundPacksRef.current[seatIdx].filter(c => c.id !== cardId);
+        // Find card object and store pick
+        const picked = allPacksRef.current.flat().flat().find(c => c.id === cardId);
+        if (picked) allPicksBySeatRef.current[seatIdx].push(picked);
+
+        pickedThisTurnRef.current.add(seatIdx);
+
+        // Broadcast pick_confirmed so all can see who picked
+        sendDraftEvent({ type: 'pick_confirmed', seatIndex: seatIdx, cardName });
+
+        // Check if all human seats have picked
+        const humanSeats = humanSeatsRef.current;
+        const allHumansPicked = humanSeats.every(s => pickedThisTurnRef.current.has(s));
+        if (allHumansPicked) {
+          currentPickInRoundRef.current++;
+          if (currentPickInRoundRef.current >= PICKS_PER_ROUND) {
+            // End of round
+            const nextRound = currentRoundRef.current + 1;
+            if (nextRound >= TOTAL_ROUNDS) {
+              // Draft complete
+              const podPlayersSnap = podPlayers;
+              sendDraftEvent({
+                type: 'draft_complete',
+                allPicks: allPicksBySeatRef.current,
+                podPlayers: podPlayersSnap,
+              });
+            } else {
+              sendDraftEvent({ type: 'round_transition', round: nextRound });
+              currentRoundRef.current = nextRound;
+              currentPickInRoundRef.current = 0;
+              pickedThisTurnRef.current = new Set();
+              // Start new round
+              const newRoundPacks = allPacksRef.current[nextRound].map(pack => [...pack]);
+              currentRoundPacksRef.current = newRoundPacks;
+              // Bot picks for new round
+              for (const botSeat of botSeatsRef.current) {
+                const pack = currentRoundPacksRef.current[botSeat];
+                const pick = botPick(pack);
+                currentRoundPacksRef.current[botSeat] = pack.filter(c => c.id !== pick.id);
+                allPicksBySeatRef.current[botSeat].push(pick);
+                sendDraftEvent({ type: 'bot_picked', seatIndex: botSeat, cardName: pick.name });
+              }
+              sendDraftEvent({
+                type: 'round_start',
+                round: nextRound,
+                pickInRound: 0,
+                packsForSeats: humanSeats.map(s => ({ seatIndex: s, pack: currentRoundPacksRef.current[s] })),
+                podPlayers: podPlayers,
+              });
+            }
+          } else {
+            // Rotate packs
+            const direction = currentRoundRef.current % 2 === 0 ? 'left' : 'right';
+            const newPacks: Card[][] = new Array(8);
+            for (let i = 0; i < 8; i++) {
+              if (direction === 'left') {
+                newPacks[i] = currentRoundPacksRef.current[(i - 1 + 8) % 8];
+              } else {
+                newPacks[i] = currentRoundPacksRef.current[(i + 1) % 8];
+              }
+            }
+            currentRoundPacksRef.current = newPacks;
+
+            // Bot picks on new packs
+            for (const botSeat of botSeatsRef.current) {
+              const pack = currentRoundPacksRef.current[botSeat];
+              if (!pack || pack.length === 0) continue;
+              const pick = botPick(pack);
+              currentRoundPacksRef.current[botSeat] = pack.filter(c => c.id !== pick.id);
+              allPicksBySeatRef.current[botSeat].push(pick);
+              sendDraftEvent({ type: 'bot_picked', seatIndex: botSeat, cardName: pick.name });
+            }
+
+            pickedThisTurnRef.current = new Set();
+            sendDraftEvent({
+              type: 'new_pack',
+              round: currentRoundRef.current,
+              pickInRound: currentPickInRoundRef.current,
+              packsForSeats: humanSeats.map(s => ({ seatIndex: s, pack: currentRoundPacksRef.current[s] })),
+            });
+          }
+        }
+      }
+    }
+
+    socket.on('draft_event', handleDraftEvent);
+    return () => { socket.off('draft_event', handleDraftEvent); };
+  }, [isHost, mySeatIndex, podPlayers]);
 
   // ── Timer countdown ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -299,147 +378,213 @@ export function OnlineDraftScreen() {
       if (card) handlePick(card);
       return;
     }
-    const interval = setInterval(() => {
-      setState(prev => ({ ...prev, timer: prev.timer - 1 }));
+    const t = setInterval(() => {
+      setState(s => ({ ...s, timer: s.timer - 1 }));
     }, 1000);
-    return () => clearInterval(interval);
-  }, [state.phase, state.timer, handlePick]);
+    return () => clearInterval(t);
+  }, [state.phase, state.timer]);
 
-  // ── When we receive a pending pack while in waiting_pack phase ────────────
-  useEffect(() => {
-    if (state.phase !== 'waiting_pack') return;
-    const pending = pendingPackRef.current;
-    if (!pending) return;
-    pendingPackRef.current = null;
-    setState(prev => ({
-      ...prev,
-      phase: 'picking',
-      currentPack: pending,
-      selectedCard: null,
-      timer: getPickTimer(prev.pick),
-      opponentStatus: 'Oponente escolhendo...',
-    }));
-  }, [state.phase, state.opponentStatus]); // re-check when opponent status changes (pick_pass event updates it)
+  // ── Handle pick ───────────────────────────────────────────────────────────
+  const handlePick = useCallback((card: Card) => {
+    setState(s => {
+      if (s.phase !== 'picking') return s;
+      const remaining = s.currentPack.filter(c => c.id !== card.id);
+      myRemainingPackRef.current = remaining;
+      return {
+        ...s,
+        phase: 'waiting_others',
+        currentPack: [],
+        selectedCard: null,
+        myPicks: [...s.myPicks, card],
+      };
+    });
+    sendDraftEvent({
+      type: 'pick',
+      seatIndex: mySeatIndex,
+      cardId: card.id,
+      cardName: card.name,
+    });
+  }, [mySeatIndex]);
 
-  // ── Select card (single click) ────────────────────────────────────────────
-  function handleSelect(card: Card) {
+  function handleSelectCard(card: Card) {
     if (state.phase !== 'picking') return;
-    setState(prev => ({ ...prev, selectedCard: card }));
+    setState(s => ({ ...s, selectedCard: s.selectedCard?.id === card.id ? null : card }));
   }
 
-  // ── Confirm pick ──────────────────────────────────────────────────────────
-  function handleConfirm() {
+  function handleConfirmPick() {
     if (state.phase !== 'picking' || !state.selectedCard) return;
     handlePick(state.selectedCard);
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
-  const timerUrgent = state.timer <= 10;
-  const progressPct = Math.min(100, (state.myPicks.length / (PICKS_PER_ROUND * TOTAL_ROUNDS)) * 100);
+  // ── Render helpers ────────────────────────────────────────────────────────
+  function renderSeatRow(seat: SeatInfo) {
+    const hasPicked = state.seatsPicked.has(seat.seatIndex) || seat.isBot;
+    const isMe = seat.seatIndex === mySeatIndex && !seat.isBot;
+    const last = state.lastPickBySeat[seat.seatIndex];
+    return (
+      <div key={seat.seatIndex} className={`od-seat-row ${hasPicked ? 'picked' : ''} ${isMe ? 'me' : ''}`}>
+        <span className="od-seat-num">#{seat.seatIndex + 1}</span>
+        <span className="od-seat-name">{seat.displayName}</span>
+        {seat.isBot && <span className="od-seat-tag bot">Bot</span>}
+        {isMe && <span className="od-seat-tag me">Você</span>}
+        {hasPicked
+          ? <span className="od-seat-status done">Pickado {last ? `— ${last}` : ''}</span>
+          : <span className="od-seat-status waiting">Aguardando...</span>
+        }
+      </div>
+    );
+  }
+
+  const timerPct = (state.timer / getPickTimer(state.pickInRound)) * 100;
+  const timerRed = state.timer <= 10;
+
+  const passDirection = state.round % 2 === 0 ? 'ESQUERDA' : 'DIREITA';
+
+  // ── Phase: initializing ───────────────────────────────────────────────────
+  if (state.phase === 'initializing') {
+    return (
+      <div className="od-screen">
+        <div className="od-loading">
+          <div className="od-spinner" />
+          <p>{isHost ? 'Gerando packs...' : 'Aguardando host iniciar...'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase: round_transition ───────────────────────────────────────────────
+  if (state.phase === 'round_transition') {
+    return (
+      <div className="od-screen">
+        <div className="od-loading">
+          <div className="od-spinner" />
+          <p>Round {state.round + 1} / {TOTAL_ROUNDS} — Preparando novos packs...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase: done ───────────────────────────────────────────────────────────
+  if (state.phase === 'done') {
+    return (
+      <div className="od-screen">
+        <div className="od-loading">
+          <p>Draft concluido! Redirecionando...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={styles.root}>
-      {/* Header bar */}
-      <div style={styles.header}>
-        <div style={styles.headerLeft}>
-          <span style={styles.roundLabel}>
-            Rodada {state.round + 1}/{TOTAL_ROUNDS} — Pick {state.pick + 1}/{PICKS_PER_ROUND}
-          </span>
-          <span style={styles.picksCount}>{state.myPicks.length} cartas</span>
+    <div className="od-screen">
+      {/* ── Header bar ─────────────────────────────────────────────────────── */}
+      <div className="od-header">
+        <div className="od-header-info">
+          <span className="od-round-label">Round {state.round + 1} / {TOTAL_ROUNDS}</span>
+          <span className="od-pick-label">Pick {state.pickInRound + 1} / {PICKS_PER_ROUND}</span>
+          <span className="od-pass-label">Passa: {passDirection}</span>
         </div>
-        <div style={styles.headerCenter}>
+        <div className="od-header-right">
+          <span className="od-mypicks-count">{state.myPicks.length} picks</span>
+        </div>
+      </div>
+
+      {/* ── Timer bar ──────────────────────────────────────────────────────── */}
+      <div className="od-timer-bar-wrap">
+        <div
+          className={`od-timer-bar ${timerRed ? 'red' : ''}`}
+          style={{ width: `${timerPct}%` }}
+        />
+        <span className={`od-timer-text ${timerRed ? 'red' : ''}`}>{state.timer}s</span>
+      </div>
+
+      <div className="od-body">
+        {/* ── Left: Seat status ─────────────────────────────────────────────── */}
+        <div className="od-left-panel">
+          <div className="od-panel-title">Status do Pod</div>
+          <div className="od-seats-list">
+            {state.seatsInRoom.length > 0
+              ? state.seatsInRoom.map(renderSeatRow)
+              : Array.from({ length: 8 }, (_, i) => (
+                <div key={i} className="od-seat-row">
+                  <span className="od-seat-num">#{i + 1}</span>
+                  <span className="od-seat-name od-seat-placeholder">—</span>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+
+        {/* ── Center: Current pack ───────────────────────────────────────────── */}
+        <div className="od-center">
           {state.phase === 'picking' && (
-            <span style={{ ...styles.timer, ...(timerUrgent ? styles.timerUrgent : {}) }}>
-              {state.timer}s
-            </span>
-          )}
-          {state.phase === 'waiting_pack' && (
-            <span style={styles.waitingLabel}>Aguardando pacote do oponente...</span>
-          )}
-          {state.phase === 'waiting' && (
-            <span style={styles.waitingLabel}>Aguardando início do draft...</span>
-          )}
-          {state.phase === 'done' && (
-            <span style={styles.doneLabel}>Draft concluído! Construindo deck...</span>
-          )}
-        </div>
-        <div style={styles.headerRight}>
-          <span style={styles.opponentStatus}>{state.opponentStatus}</span>
-        </div>
-      </div>
-
-      {/* Progress bar */}
-      <div style={styles.progressBar}>
-        <div style={{ ...styles.progressFill, width: `${progressPct}%` }} />
-      </div>
-
-      {/* Main content */}
-      <div style={styles.body}>
-        {/* Pack grid */}
-        <div style={styles.packArea}>
-          {state.phase === 'picking' && state.currentPack.length > 0 ? (
             <>
-              <div style={styles.packGrid}>
+              <div className="od-pack-grid">
                 {state.currentPack.map(card => {
-                  const isSelected = state.selectedCard?.id === card.id;
+                  const selected = state.selectedCard?.id === card.id;
                   return (
                     <div
                       key={card.id}
-                      style={{
-                        ...styles.cardSlot,
-                        ...(isSelected ? styles.cardSelected : {}),
-                      }}
-                      onClick={() => handleSelect(card)}
+                      className={`od-card ${selected ? 'selected' : ''}`}
+                      onClick={() => handleSelectCard(card)}
                       onDoubleClick={() => handlePick(card)}
-                      title={card.name}
+                      title={`${card.name}\n${card.oracle_text}`}
                     >
-                      {card.image_normal || card.image_small ? (
-                        <img
-                          src={card.image_normal || card.image_small}
-                          alt={card.name}
-                          style={styles.cardImg}
-                          draggable={false}
-                        />
-                      ) : (
-                        <div style={styles.cardPlaceholder}>
-                          <div style={styles.cardPlaceholderName}>{card.name}</div>
-                          <div style={styles.cardPlaceholderType}>{card.type_line}</div>
-                        </div>
-                      )}
-                      {isSelected && <div style={styles.selectedOverlay}>✓</div>}
+                      {card.image_normal
+                        ? <img src={card.image_normal} alt={card.name} className="od-card-img" loading="lazy" />
+                        : (
+                          <div className="od-card-placeholder">
+                            <div className="od-card-name">{card.name}</div>
+                            <div className="od-card-cost">{card.mana_cost}</div>
+                            <div className="od-card-type">{card.type_line}</div>
+                          </div>
+                        )
+                      }
+                      <div className="od-card-rarity-dot" style={{ background: rarityColor(card.rarity) }} />
                     </div>
                   );
                 })}
               </div>
-              {state.selectedCard && (
-                <div style={styles.confirmRow}>
-                  <span style={styles.selectedName}>{state.selectedCard.name}</span>
-                  <button style={styles.confirmBtn} onClick={handleConfirm}>
-                    Confirmar Pick
-                  </button>
-                </div>
-              )}
+              <div className="od-pack-actions">
+                {state.selectedCard && (
+                  <div className="od-selected-name">{state.selectedCard.name}</div>
+                )}
+                <button
+                  className="btn btn-gold od-confirm-btn"
+                  onClick={handleConfirmPick}
+                  disabled={!state.selectedCard}
+                >
+                  Confirmar Pick
+                </button>
+                <div className="od-hint">Clique duplo para picar diretamente</div>
+              </div>
             </>
-          ) : (
-            <div style={styles.emptyPack}>
-              {state.phase === 'done'
-                ? 'Draft encerrado! Redirecionando...'
-                : state.phase === 'waiting'
-                ? 'Aguardando início...'
-                : 'Aguardando pacote...'}
+          )}
+
+          {state.phase === 'waiting_others' && (
+            <div className="od-waiting-pack">
+              <div className="od-spinner" />
+              <p>Aguardando outros jogadores picarem...</p>
+              <p className="od-waiting-sub">
+                {Array.from(state.seatsPicked).length} / {state.seatsInRoom.filter(s => !s.isBot).length} confirmados
+              </p>
             </div>
           )}
         </div>
 
-        {/* Picks sidebar */}
-        <div style={styles.sidebar}>
-          <div style={styles.sidebarTitle}>Minhas picks ({state.myPicks.length})</div>
-          <div style={styles.picksList}>
-            {state.myPicks.map((card, i) => (
-              <div key={`${card.id}-${i}`} style={styles.pickItem}>
-                <span style={styles.pickNumber}>{i + 1}.</span>
-                <span style={styles.pickName}>{card.name}</span>
-                <span style={styles.pickRarity}>{card.rarity[0].toUpperCase()}</span>
+        {/* ── Right: My picks ───────────────────────────────────────────────── */}
+        <div className="od-right-panel">
+          <div className="od-panel-title">Meus Picks ({state.myPicks.length})</div>
+          <div className="od-my-picks-list">
+            {state.myPicks.map((card, idx) => (
+              <div key={`${card.id}-${idx}`} className="od-pick-row">
+                <span className="od-pick-rarity-dot" style={{ background: rarityColor(card.rarity) }} />
+                <span className="od-pick-name">{card.name}</span>
+                <span className="od-pick-colors">
+                  {(Array.isArray(card.colors) ? card.colors : []).map(c => (
+                    <span key={c} className="od-color-dot" style={{ background: COLOR_LABELS[c] ?? '#888' }} />
+                  ))}
+                </span>
               </div>
             ))}
           </div>
@@ -448,251 +593,3 @@ export function OnlineDraftScreen() {
     </div>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────────────────────
-const styles: Record<string, React.CSSProperties> = {
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100%',
-    background: 'var(--bg-primary, #1a1a2e)',
-    color: 'var(--text-primary, #e0e0e0)',
-    fontFamily: 'var(--font-primary, sans-serif)',
-    overflow: 'hidden',
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '8px 16px',
-    background: 'var(--bg-secondary, #16213e)',
-    borderBottom: '1px solid var(--border, #333)',
-    minHeight: 48,
-  },
-  headerLeft: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 2,
-  },
-  headerCenter: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerRight: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    maxWidth: 220,
-    textAlign: 'right',
-  },
-  roundLabel: {
-    fontSize: 14,
-    fontWeight: 600,
-    color: 'var(--text-primary, #e0e0e0)',
-  },
-  picksCount: {
-    fontSize: 12,
-    color: 'var(--text-muted, #888)',
-  },
-  timer: {
-    fontSize: 28,
-    fontWeight: 700,
-    color: '#4ade80',
-    minWidth: 64,
-    textAlign: 'center',
-    transition: 'color 0.3s',
-  },
-  timerUrgent: {
-    color: '#ef4444',
-    animation: 'pulse 0.5s ease-in-out infinite alternate',
-  },
-  waitingLabel: {
-    fontSize: 14,
-    color: 'var(--text-muted, #888)',
-    fontStyle: 'italic',
-  },
-  doneLabel: {
-    fontSize: 16,
-    color: '#4ade80',
-    fontWeight: 600,
-  },
-  opponentStatus: {
-    fontSize: 12,
-    color: 'var(--text-muted, #aaa)',
-    wordBreak: 'break-word',
-  },
-  progressBar: {
-    height: 4,
-    background: 'var(--bg-tertiary, #0f3460)',
-    flexShrink: 0,
-  },
-  progressFill: {
-    height: '100%',
-    background: 'var(--accent, #e94560)',
-    transition: 'width 0.3s ease',
-  },
-  body: {
-    display: 'flex',
-    flex: 1,
-    overflow: 'hidden',
-    gap: 0,
-  },
-  packArea: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    padding: '12px',
-  },
-  packGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
-    gap: 8,
-    overflowY: 'auto',
-    flex: 1,
-    paddingBottom: 8,
-  },
-  cardSlot: {
-    position: 'relative',
-    borderRadius: 8,
-    cursor: 'pointer',
-    border: '2px solid transparent',
-    transition: 'border-color 0.15s, transform 0.1s',
-    aspectRatio: '63/88',
-    overflow: 'hidden',
-    background: '#0d1117',
-  },
-  cardSelected: {
-    borderColor: '#f59e0b',
-    transform: 'scale(1.04)',
-    boxShadow: '0 0 12px rgba(245, 158, 11, 0.6)',
-  },
-  cardImg: {
-    width: '100%',
-    height: '100%',
-    objectFit: 'cover',
-    display: 'block',
-    borderRadius: 6,
-  },
-  cardPlaceholder: {
-    width: '100%',
-    height: '100%',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: '#1c2035',
-    padding: 8,
-    textAlign: 'center',
-  },
-  cardPlaceholderName: {
-    fontSize: 11,
-    fontWeight: 600,
-    color: '#e0e0e0',
-    marginBottom: 4,
-  },
-  cardPlaceholderType: {
-    fontSize: 9,
-    color: '#888',
-  },
-  selectedOverlay: {
-    position: 'absolute',
-    bottom: 4,
-    right: 4,
-    background: '#f59e0b',
-    color: '#000',
-    borderRadius: '50%',
-    width: 20,
-    height: 20,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 12,
-    fontWeight: 700,
-  },
-  confirmRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    padding: '8px 0 0',
-    flexShrink: 0,
-  },
-  selectedName: {
-    fontSize: 14,
-    fontWeight: 600,
-    color: '#f59e0b',
-    flex: 1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  confirmBtn: {
-    background: 'var(--accent, #e94560)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 6,
-    padding: '8px 20px',
-    fontSize: 14,
-    fontWeight: 700,
-    cursor: 'pointer',
-    flexShrink: 0,
-  },
-  emptyPack: {
-    flex: 1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 16,
-    color: 'var(--text-muted, #888)',
-    fontStyle: 'italic',
-  },
-  sidebar: {
-    width: 220,
-    flexShrink: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    background: 'var(--bg-secondary, #16213e)',
-    borderLeft: '1px solid var(--border, #333)',
-    overflow: 'hidden',
-  },
-  sidebarTitle: {
-    padding: '10px 12px',
-    fontWeight: 700,
-    fontSize: 13,
-    color: 'var(--text-primary, #e0e0e0)',
-    borderBottom: '1px solid var(--border, #333)',
-    flexShrink: 0,
-  },
-  picksList: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: '4px 0',
-  },
-  pickItem: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '4px 12px',
-    fontSize: 12,
-    color: 'var(--text-primary, #ddd)',
-    borderBottom: '1px solid rgba(255,255,255,0.04)',
-  },
-  pickNumber: {
-    color: 'var(--text-muted, #666)',
-    minWidth: 22,
-    fontSize: 11,
-  },
-  pickName: {
-    flex: 1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  pickRarity: {
-    fontSize: 10,
-    fontWeight: 700,
-    color: '#f59e0b',
-    flexShrink: 0,
-  },
-};

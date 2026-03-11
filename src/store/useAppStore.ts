@@ -38,6 +38,19 @@ function applyThemeClass(theme: ThemeId) {
 // Apply on load
 applyThemeClass(loadTheme());
 
+export interface PodPlayer {
+  displayName: string;
+  seatIndex: number;
+  isBot: boolean;
+}
+
+export interface PodPickEntry {
+  seatIndex: number;
+  displayName: string;
+  isBot: boolean;
+  picks: Card[];
+}
+
 interface AppState {
   // Navigation
   screen: Screen;
@@ -113,6 +126,19 @@ interface AppState {
   // Draft picks from online draft (before deckbuilder)
   onlineDraftPicks: Card[] | null;
   setOnlineDraftPicks: (picks: Card[] | null) => void;
+
+  // ── Pod draft (8-player) ─────────────────────────────────────────────────
+  mySeatIndex: number | null;
+  setMySeatIndex: (i: number | null) => void;
+
+  podPlayers: PodPlayer[];
+  setPodPlayers: (players: PodPlayer[]) => void;
+
+  podPicks: PodPickEntry[] | null;
+  setPodPicks: (picks: PodPickEntry[] | null) => void;
+
+  draftSetCode: string;
+  setDraftSetCode: (code: string) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -202,4 +228,17 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   onlineDraftPicks: null,
   setOnlineDraftPicks: (onlineDraftPicks) => set({ onlineDraftPicks }),
+
+  // ── Pod draft ─────────────────────────────────────────────────────────────
+  mySeatIndex: null,
+  setMySeatIndex: (mySeatIndex) => set({ mySeatIndex }),
+
+  podPlayers: [],
+  setPodPlayers: (podPlayers) => set({ podPlayers }),
+
+  podPicks: null,
+  setPodPicks: (podPicks) => set({ podPicks }),
+
+  draftSetCode: 'tdm',
+  setDraftSetCode: (draftSetCode) => set({ draftSetCode }),
 }));

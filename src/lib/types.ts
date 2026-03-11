@@ -264,7 +264,7 @@ export interface DeckList {
 // App Navigation
 // ============================================
 
-export type Screen = 'home' | 'draft' | 'deckbuilder' | 'game' | 'settings' | 'sealed' | 'login' | 'online_lobby' | 'online_game' | 'online_draft';
+export type Screen = 'home' | 'draft' | 'deckbuilder' | 'game' | 'settings' | 'sealed' | 'login' | 'online_lobby' | 'online_game' | 'online_draft' | 'pod_lobby';
 
 // ============================================
 // Multiplayer Types

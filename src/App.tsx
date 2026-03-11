@@ -13,6 +13,7 @@ import { LoginScreen } from './components/online/LoginScreen';
 import { UpdateChecker } from './components/UpdateChecker';
 import { LobbyScreen } from './components/online/LobbyScreen';
 import { OnlineDraftScreen } from './components/online/OnlineDraftScreen';
+import { PodLobbyScreen } from './components/online/PodLobbyScreen';
 import { onAuthChange } from './lib/firebase';
 import './styles/global.css';
 import './components/shared/Header.css';
@@ -143,6 +144,8 @@ function App() {
         return <GameScreen multiplayerMode />;
       case 'online_draft':
         return <OnlineDraftScreen />;
+      case 'pod_lobby':
+        return <PodLobbyScreen />;
       default:
         return <HomeScreen />;
     }

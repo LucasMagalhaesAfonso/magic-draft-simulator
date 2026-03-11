@@ -180,6 +180,16 @@ io.on('connection', (socket) => {
     socket.emit('game_started', { ...data, isHost: true });
   });
 
+  // ── Draft event relay (bidirectional) ─────────────────────────────────────
+  socket.on('draft_event', (data) => {
+    const room = getRoom(socket.id);
+    if (!room) return;
+    room.lastActivity = Date.now();
+    const otherId = room.host === socket.id ? room.guest : room.host;
+    const otherSocket = otherId ? io.sockets.sockets.get(otherId) : null;
+    if (otherSocket) otherSocket.emit('draft_event', data);
+  });
+
   // ── Disconnect ────────────────────────────────────────────────────────────
   socket.on('disconnect', () => {
     console.log(`[Socket] Disconnected: ${socket.id}`);

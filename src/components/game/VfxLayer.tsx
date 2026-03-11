@@ -43,7 +43,7 @@ export interface VfxEvent {
 const SPRITE_MAP: Record<VfxEventType, string[]> = {
   damage:        ['slash_ice_1.png', 'slash_ice_2.png', 'slash_ice_3.png', 'slash_ice_6.png', 'slash_ice_8.png', 'slash_ice_10.png', 'slash_ice_11.png', 'attack_red_claw.png'],
   playerDamage:  ['blood_splat_1.png', 'blood_splat_5.png', 'blood_splat_6.png', 'blood_splat_9.png', 'blood_splat_10.png'],
-  heal:          ['water_splash.png', 'teal_impact.png', 'water_geyser.png', 'teal_vortex.png'],
+  heal:          ['heal2.png', 'heal1.png'],
   death:         ['death_2.png', 'death_3.png'],
   spellCast:     ['fx_1.png', 'fx_2.png', 'fx_3.png', 'fx_4.png', 'elem_1.png', 'elem_2.png'],
   buff:          ['purple_wisp.png', 'purple_alt_1.png', 'purple_orb.png', 'purple_spiral.png'],
@@ -91,7 +91,11 @@ interface VfxTypeConfig {
 const TYPE_CONFIG: Record<VfxEventType, VfxTypeConfig> = {
   damage:          { anim: 'vfxPop',    size: 100, duration: 380, burst: 8,  scatter: 5,  shake: false, noRotate: true,  burstDelay: 55, sweepY: 9, lastBurstSize: 60 },
   playerDamage:    { anim: 'vfxBurst',  size: 100, duration: 460, burst: 2, scatter: 30, shake: false, flash: 'red' },
-  heal:            { anim: 'vfxFloat',  size: 80,  duration: 600, burst: 1, scatter: 12, shake: false, flash: 'green' },
+  heal:            { anim: 'vfxHealGrow', size: 200, duration: 550, burst: 2, scatter: 0, shake: false, flash: 'green', noRotate: true,
+                     perBurst: [
+                       { rotation: 0, size: 200, anim: 'vfxHealGrow',  duration: 550,  delayMs: 0   }, // heal2: nasce pequeno, cresce até tamanho normal
+                       { rotation: 0, size: 155, anim: 'vfxHealPulse', duration: 1100, delayMs: 430 }, // heal1: aparece quando heal2 chega ao pico, fica 1s
+                     ] },
   death:           { anim: 'vfxGrowVisible', size: 105, duration: 600, burst: 2, scatter: 0, shake: false, noRotate: true,
                      perBurst: [
                        { rotation: 0, size: 90,  anim: 'vfxGrowVisible', duration: 600 },          // death_2: pequeno→cresce→some
@@ -372,6 +376,7 @@ export function VfxLayer() {
           top:  ${entry.y - entry.size / 2}px;
           width:  ${entry.size}px;
           height: ${entry.size}px;
+          object-fit: contain;
           pointer-events: none;
           animation: ${entry.anim} ${entry.duration}ms ease-out ${entry.delay}ms forwards;
           mix-blend-mode: screen;

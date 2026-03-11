@@ -94,3 +94,7 @@ export function sendStartGame(data: { hostDeck: any; guestDeck?: any }) {
 export function requestResync() {
   getSocket().emit('request_resync');
 }
+
+export function sendDraftEvent(data: { type: string; [key: string]: any }) {
+  getSocket().emit('draft_event', data);
+}

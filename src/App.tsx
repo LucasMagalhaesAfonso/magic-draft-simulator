@@ -12,6 +12,7 @@ import { SealedRevealScreen } from './components/SealedRevealScreen';
 import { LoginScreen } from './components/online/LoginScreen';
 import { UpdateChecker } from './components/UpdateChecker';
 import { LobbyScreen } from './components/online/LobbyScreen';
+import { OnlineDraftScreen } from './components/online/OnlineDraftScreen';
 import { onAuthChange } from './lib/firebase';
 import './styles/global.css';
 import './components/shared/Header.css';
@@ -140,6 +141,8 @@ function App() {
         return <LobbyScreen />;
       case 'online_game':
         return <GameScreen multiplayerMode />;
+      case 'online_draft':
+        return <OnlineDraftScreen />;
       default:
         return <HomeScreen />;
     }

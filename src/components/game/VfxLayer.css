@@ -63,6 +63,23 @@
   100% { opacity: 0;   transform: scale(1.1)  rotate(var(--r, 0deg)); }
 }
 
+/* ── Heal: phase 1 — heal2 nasce pequeno e cresce até o tamanho normal ── */
+@keyframes vfxHealGrow {
+  0%   { opacity: 0.85; transform: scale(0.05); }
+  22%  { opacity: 1;    transform: scale(0.5);  }
+  68%  { opacity: 1;    transform: scale(1.0);  }
+  85%  { opacity: 0.55; transform: scale(1.06); }
+  100% { opacity: 0;    transform: scale(1.1);  }
+}
+
+/* ── Heal: phase 2 — heal1 aparece no pico, sustenta 1s e some ── */
+@keyframes vfxHealPulse {
+  0%   { opacity: 0;   transform: scale(0.88); }
+  12%  { opacity: 1;   transform: scale(1.0);  }
+  72%  { opacity: 1;   transform: scale(1.0);  }
+  100% { opacity: 0;   transform: scale(1.06); }
+}
+
 /* ── Combat strike projectile travel ── */
 @keyframes combatTravel {
   0%   { transform: translate(var(--sx, 0px), var(--sy, 0px)) scale(0.4); opacity: 0; }

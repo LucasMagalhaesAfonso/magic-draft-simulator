@@ -109,6 +109,10 @@ interface AppState {
   // Deck selected for online play
   onlineDeck: DeckList | null;
   setOnlineDeck: (deck: DeckList | null) => void;
+
+  // Draft picks from online draft (before deckbuilder)
+  onlineDraftPicks: Card[] | null;
+  setOnlineDraftPicks: (picks: Card[] | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -195,4 +199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   onlineDeck: null,
   setOnlineDeck: (onlineDeck) => set({ onlineDeck }),
+
+  onlineDraftPicks: null,
+  setOnlineDraftPicks: (onlineDraftPicks) => set({ onlineDraftPicks }),
 }));

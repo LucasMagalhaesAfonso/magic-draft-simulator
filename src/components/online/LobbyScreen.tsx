@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { logoutUser } from '../../lib/firebase';
 import {
-  connectSocket, disconnectSocket, createRoom, joinRoom, sendStartGame,
+  connectSocket, disconnectSocket, createRoom, joinRoom, sendStartGame, sendDraftEvent,
   type ChatMessage,
 } from '../../lib/multiplayerSocket';
 import type { DeckList } from '../../lib/types';
@@ -86,6 +86,13 @@ export function LobbyScreen() {
       setError('Oponente desconectou. Aguardando reconexão...');
     });
 
+    // Draft start signal — guest navigates to online_draft
+    socket.on('draft_event', (data: any) => {
+      if (data.type === 'draft_start_signal') {
+        setScreen('online_draft');
+      }
+    });
+
     // Trigger connection
     setConnecting(true);
     if (!socket.connected) socket.connect();
@@ -100,6 +107,7 @@ export function LobbyScreen() {
       socket.off('opponent_joined');
       socket.off('game_started');
       socket.off('opponent_disconnected');
+      socket.off('draft_event');
     };
   }, []);
 
@@ -119,6 +127,13 @@ export function LobbyScreen() {
     const selectedDeck = onlineDeck || deck;
     sendStartGame({ hostDeck: selectedDeck });
     setScreen('online_game');
+  }
+
+  function handleStartOnlineDraft() {
+    if (!mpConnected) { setError('Oponente não está conectado.'); return; }
+    // Signal guest to navigate to online_draft screen
+    sendDraftEvent({ type: 'draft_start_signal' });
+    setScreen('online_draft');
   }
 
   async function handleLogout() {
@@ -240,13 +255,23 @@ export function LobbyScreen() {
               {!mpConnected && (
                 <p className="lobby-waiting-label">⏳ Aguardando oponente humano entrar na sala...</p>
               )}
-              <button
-                className="btn btn-gold lobby-start-btn"
-                onClick={handleStartGame}
-                disabled={!mpConnected || (!onlineDeck && !deck)}
-              >
-                🚀 Iniciar Partida
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
+                <button
+                  className="btn btn-gold lobby-start-btn"
+                  onClick={handleStartOnlineDraft}
+                  disabled={!mpConnected}
+                  style={{ background: 'linear-gradient(135deg, #7c3aed, #a855f7)' }}
+                >
+                  🃏 Iniciar Draft Online
+                </button>
+                <button
+                  className="btn btn-gold lobby-start-btn"
+                  onClick={handleStartGame}
+                  disabled={!mpConnected || (!onlineDeck && !deck)}
+                >
+                  ⚔️ Jogar (deck já pronto)
+                </button>
+              </div>
             </>
           )}
           {mpRole === 'guest' && (

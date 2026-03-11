@@ -1,4 +1,4 @@
-const GAME_VERSION = '2026-03-11-145415';
+const GAME_VERSION = '2026-03-11-152926';
 
 const App = {
   currentScreen: null,

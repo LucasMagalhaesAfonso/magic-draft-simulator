@@ -268,7 +268,20 @@ export async function bulkInsertCards(
   const BATCH = 30;
   let inserted = 0;
 
-  await db.execute('BEGIN TRANSACTION', []);
+  // BEGIN IMMEDIATE acquires write lock upfront, avoiding "database is locked"
+  // from concurrent background operations (e.g. fetchAltArt fire-and-forget)
+  let begun = false;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await db.execute('BEGIN IMMEDIATE', []);
+      begun = true;
+      break;
+    } catch {
+      await new Promise(r => setTimeout(r, 300 + attempt * 200));
+    }
+  }
+  if (!begun) throw new Error('database is locked — tente novamente em alguns segundos');
+
   try {
     for (let i = 0; i < cards.length; i += BATCH) {
       const batch = cards.slice(i, i + BATCH);

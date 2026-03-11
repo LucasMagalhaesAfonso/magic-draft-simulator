@@ -1,36 +1,69 @@
 // ai-brain.ts — Neural network AI that learns from playing against the human
-// Architecture: 40 inputs → Dense(64) → Dropout(0.3) → Dense(32) → Dense(1, sigmoid)
+// Architecture (v7): AlphaZero-style combined functional model with shared body + residual blocks.
 //
-// Improvements over v1:
-//   1. Soft labels (0.8/0.2 instead of 1.0/0.0) — prevents collapse
-//   2. Dropout regularization — prevents overfitting on early games
-//   3. REINFORCE baseline — subtracts mean recent reward to reduce variance
-//   4. Temporal discounting — later decisions get higher reward weight
-//   5. Experience replay buffer — prevents catastrophic forgetting
+// Improvements over v6:
+//   1. Shared body: policy + value heads share a common board-processing trunk
+//   2. Residual block: skip connection in shared body for better gradient flow
+//   3. Joint training: gradients from both losses improve shared representations simultaneously
+//   4. valueSubModel: shares weights with combined model for efficient board-only inference
 
 import * as tf from '@tensorflow/tfjs';
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Compile a multi-output model with lossWeights.
+ * The bundled @tensorflow/tfjs typings (4.x) omit `lossWeights` from
+ * ModelCompileArgs, so we widen via `as any` in one centralised place.
+ */
+function compileMultiHead(model: tf.LayersModel): void {
+  (model as any).compile({
+    optimizer: tf.train.adam(LEARNING_RATE),
+    loss: ['binaryCrossentropy', 'meanSquaredError'],
+    lossWeights: [1.0, 0.5],
+  });
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MODEL_KEY           = 'indexeddb://magic-draft-ai-brain-v4'; // v4: new arch
-const FROZEN_KEY          = 'indexeddb://magic-draft-ai-frozen-v4';
-const FROZEN_KEY_PHASE    = (p: number) => `indexeddb://magic-draft-ai-frozen-v4-p${p}`;
-const STATS_KEY           = 'magic_draft_ai_stats_v4';
-const REPLAY_KEY          = 'magic_draft_ai_replay_v3';
+const MODEL_KEY           = 'indexeddb://magic-draft-ai-brain-v6'; // v6: value network TD
+const FROZEN_KEY          = 'indexeddb://magic-draft-ai-frozen-v6';
+const FROZEN_KEY_PHASE    = (p: number) => `indexeddb://magic-draft-ai-frozen-v6-p${p}`;
+const BEST_MODEL_KEY      = 'indexeddb://magic-draft-ai-best-v6';  // checkpoint do melhor modelo
+const VALUE_MODEL_KEY     = 'indexeddb://magic-draft-ai-value-v6'; // kept for cleanup only
+const STATS_KEY           = 'magic_draft_ai_stats_v6';
+const REPLAY_KEY          = 'magic_draft_ai_replay_v4';
+// Tamanho do vetor de board features (sem as action features)
+const BOARD_FEAT_SIZE     = 35;
+const ACTION_FEAT_SIZE    = 10;
 // Boltzmann temperature exploration (replaces epsilon-greedy)
-const TEMP_INITIAL        = 2.0;      // high = explore freely
-const TEMP_MIN            = 0.3;      // low = mostly exploit (but not hard argmax)
-const TEMP_DECAY          = 0.004;    // reaches TEMP_MIN in ~425 games
-const LEARNING_RATE       = 0.001;
-const INPUT_SIZE          = 45;
+const TEMP_INITIAL        = 1.5;      // slightly lower start — less random early
+const TEMP_MIN            = 0.6;      // never too deterministic — keeps exploring
+const TEMP_DECAY          = 0.002;    // slower decay — reaches TEMP_MIN in ~450 games
+const LEARNING_RATE       = 0.0006;  // reduzido 0.001→0.0006: atualizações mais lentas, menos esquecimento catastrófico
 const DISCOUNT            = 0.97;
-const REPLAY_MAX          = 1000;     // bigger buffer = less forgetting
+const REPLAY_MAX          = 2000;     // aumentado 1000→2000: buffer maior dilui padrões ruins recentes
 const REPLAY_SAMPLE       = 64;       // larger batch from replay
 const REPLAY_ALPHA        = 0.6;      // priority exponent for prioritized replay
 const REPLAY_EPS_P        = 0.01;     // small constant to avoid zero priority
 const BASELINE_WINDOW     = 20;
 const PHASE_WIN_THRESHOLD = 0.63;
 const PHASE_SAMPLE        = 100;
+// Checkpoint: salva modelo quando bate recorde, restaura se cair demais
+const CHECKPOINT_SAMPLE   = 50;   // janela de 50 jogos para detectar colapso (mais reativo que 100)
+const CHECKPOINT_MIN_GAMES = 120; // só começa a fazer checkpoint após 120 jogos (imitação sólida)
+const CHECKPOINT_SAVE_MARGIN = 0.0;   // salva checkpoint em qualquer melhora no recorde
+const CHECKPOINT_RESTORE_DROP = 0.10; // restaura se cair 10% abaixo do recorde (mais reativo)
+// Melhoria 1 — Confidence threshold: só sobrescreve heurística quando confiante
+// 0.15: após treino por imitação, scores ficam comprimidos em [0.4-0.7]. 0.08 era agressivo demais.
+const CONFIDENCE_THRESHOLD = 0.05;   // reduzido 0.15→0.05: NN testa suas escolhas com mais frequência
+// Melhoria 2 — Imitation learning blend: começa alto (aprende professor), decai com experiência
+const IMITATION_BLEND_START = 0.65;  // levemente maior: ancora mais forte no início
+const IMITATION_BLEND_MIN   = 0.35;  // aumentado 0.20→0.35: mantém âncora na heurística por mais tempo
+const IMITATION_BLEND_DECAY = 0.0002;// reduzido 0.0005→0.0002: atinge mínimo em ~1500 jogos (não em 800)
+// Warmup: primeiros N jogos a NN só observa, sem sobrescrever a heurística
+// 80 jogos: garante base sólida de imitação antes de começar a sobrescrever
+const WARMUP_GAMES         = 80;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,29 +80,39 @@ export interface AiBrainStats {
   phase: number;
   phaseGames: number;
   phaseRecentWins: boolean[];
+  // Checkpoint
+  bestWinRate: number;               // melhor win rate (últimos 50 jogos) já atingida
+  checkpointRestorations: number;    // quantas vezes restaurou do checkpoint
 }
 
 interface DecisionRecord {
   boardFeatures: number[];
   actionFeatures: number[];
-  boardEval: number;   // board score at decision time (for intermediate rewards)
+  boardEval: number;           // board score at decision time (for intermediate rewards)
+  wasHeuristicChoice: boolean; // true = NN concordou com heurística; false = desviou
 }
 
 interface ReplayEntry {
-  input: number[];
-  target: number;
-  priority: number;  // |target - 0.5| + REPLAY_EPS_P — for prioritized sampling
+  board:        number[];
+  action:       number[];
+  policyTarget: number;
+  valueTarget:  number;
+  priority: number;  // |policyTarget - 0.5| + REPLAY_EPS_P — for prioritized sampling
 }
 
 // ─── AiBrain class ────────────────────────────────────────────────────────────
 
 class AiBrain {
-  private model: tf.LayersModel | null = null;
-  private frozenModel: tf.LayersModel | null = null;
+  private model: tf.LayersModel | null = null;          // combined functional model
+  private frozenModel: tf.LayersModel | null = null;    // frozen copy (same architecture)
+  private valueSubModel: tf.LayersModel | null = null;  // board-only inference (shared weights)
+  private bestModel: tf.LayersModel | null = null;      // checkpoint do melhor modelo
   private decisions: DecisionRecord[] = [];
   private stats: AiBrainStats;
   private _initialized = false;
   private _initializing = false;
+  private _checkpointPending = false;   // evita saves simultâneos
+  private _lastRestorationGame = -999; // cooldown: não restaura mais de 1x a cada 60 jogos
 
   constructor() {
     this.stats = this._loadStats();
@@ -88,10 +131,13 @@ class AiBrain {
         if (!s.phaseRecentWins) s.phaseRecentWins = [];
         // Migrate epsilon → temperature
         if (s.temperature === undefined) s.temperature = TEMP_INITIAL;
+        // Migrate checkpoint fields
+        if (s.bestWinRate === undefined) s.bestWinRate = 0;
+        if (s.checkpointRestorations === undefined) s.checkpointRestorations = 0;
         return s;
       }
     } catch {}
-    return { gamesPlayed: 0, wins: 0, temperature: TEMP_INITIAL, lastTrained: null, recentRewards: [], cloudGamesCount: 0, phase: 0, phaseGames: 0, phaseRecentWins: [] };
+    return { gamesPlayed: 0, wins: 0, temperature: TEMP_INITIAL, lastTrained: null, recentRewards: [], cloudGamesCount: 0, phase: 0, phaseGames: 0, phaseRecentWins: [], bestWinRate: 0, checkpointRestorations: 0 };
   }
 
   private _saveStats(): void {
@@ -109,16 +155,30 @@ class AiBrain {
   private _loadReplayBuffer(): ReplayEntry[] {
     try {
       const raw = localStorage.getItem(REPLAY_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Migrate old format (entries with `input`/`target`) to new format
+        return (parsed as any[]).map((e: any): ReplayEntry => {
+          if (e.board !== undefined) return e as ReplayEntry;
+          // Old format: { input: number[], target: number, priority: number }
+          const board   = (e.input as number[]).slice(0, BOARD_FEAT_SIZE);
+          const action  = (e.input as number[]).slice(BOARD_FEAT_SIZE);
+          return {
+            board,
+            action,
+            policyTarget: e.target,
+            valueTarget:  e.target,  // best guess for old entries
+            priority: e.priority,
+          };
+        });
+      }
     } catch {}
     return [];
   }
 
   private _saveReplayBuffer(buffer: ReplayEntry[], newEntries: ReplayEntry[]): void {
     try {
-      // Keep balanced: alternate adding to avoid bias
       const combined = [...buffer, ...newEntries];
-      // Trim to REPLAY_MAX — keep most recent
       const trimmed = combined.slice(-REPLAY_MAX);
       localStorage.setItem(REPLAY_KEY, JSON.stringify(trimmed));
     } catch {}
@@ -153,23 +213,84 @@ class AiBrain {
 
   // ── Model construction ─────────────────────────────────────────────────────
 
-  private _buildModel(): tf.LayersModel {
-    const model = tf.sequential();
-    // Input → Dense(128, relu) — larger first layer for richer representations
-    model.add(tf.layers.dense({ inputShape: [INPUT_SIZE], units: 128, activation: 'relu' }));
-    model.add(tf.layers.dropout({ rate: 0.3 }));
-    // Dense(64, relu)
-    model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
-    model.add(tf.layers.dropout({ rate: 0.2 }));
-    // Dense(32, relu)
-    model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-    // Output: Q-value [0,1]
-    model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
-    model.compile({
-      optimizer: tf.train.adam(LEARNING_RATE),
-      loss: 'binaryCrossentropy',
+  /**
+   * Build the combined AlphaZero-style functional model.
+   *
+   * Architecture:
+   *   boardInput(35) → Dense(128,relu) → Dropout(0.25)
+   *                         │
+   *                   [Residual block]
+   *                   Dense(64,relu) → Dense(64) → Add(+skip Dense(64)) → relu
+   *                         │
+   *              ┌──────────┴──────────────┐
+   *              │ VALUE HEAD              │ POLICY HEAD
+   *              Dense(32,relu)     Concat([sharedBody, actionInput(10)])
+   *              Dense(1,sigmoid)   Dense(32,relu) → Dense(1,sigmoid)
+   *
+   * Returns both the combined model (policy + value outputs) and a
+   * valueSubModel that shares the same weights but only needs boardInput.
+   */
+  private _buildCombinedModel(): { combined: tf.LayersModel; valueSubModel: tf.LayersModel } {
+    const boardInput  = tf.input({ shape: [BOARD_FEAT_SIZE], name: 'board' });
+    const actionInput = tf.input({ shape: [ACTION_FEAT_SIZE], name: 'action' });
+
+    // ── Shared body ──────────────────────────────────────────────────────────
+    let x = tf.layers.dense({ units: 128, activation: 'relu', name: 'shared1' })
+      .apply(boardInput) as tf.SymbolicTensor;
+    x = tf.layers.dropout({ rate: 0.25, name: 'shared_drop' })
+      .apply(x) as tf.SymbolicTensor;
+
+    // ── Residual block ───────────────────────────────────────────────────────
+    const r1   = tf.layers.dense({ units: 64, activation: 'relu', name: 'res_h1' })
+      .apply(x) as tf.SymbolicTensor;
+    const r2   = tf.layers.dense({ units: 64, name: 'res_h2' })
+      .apply(r1) as tf.SymbolicTensor;
+    const skip = tf.layers.dense({ units: 64, name: 'res_skip' })
+      .apply(x) as tf.SymbolicTensor;
+    const sharedBody = tf.layers.activation({ activation: 'relu', name: 'res_out' })
+      .apply(
+        tf.layers.add({ name: 'res_add' }).apply([r2, skip])
+      ) as tf.SymbolicTensor;
+
+    // ── Value head ───────────────────────────────────────────────────────────
+    const v1 = tf.layers.dense({ units: 32, activation: 'relu', name: 'val_dense' })
+      .apply(sharedBody) as tf.SymbolicTensor;
+    const valueOutput = tf.layers.dense({ units: 1, activation: 'sigmoid', name: 'val_out' })
+      .apply(v1) as tf.SymbolicTensor;
+
+    // ── Policy head ──────────────────────────────────────────────────────────
+    const concat = tf.layers.concatenate({ name: 'pol_concat' })
+      .apply([sharedBody, actionInput]) as tf.SymbolicTensor;
+    const p1 = tf.layers.dense({ units: 32, activation: 'relu', name: 'pol_dense' })
+      .apply(concat) as tf.SymbolicTensor;
+    const policyOutput = tf.layers.dense({ units: 1, activation: 'sigmoid', name: 'pol_out' })
+      .apply(p1) as tf.SymbolicTensor;
+
+    // ── Combined model: inputs=[board,action], outputs=[policy,value] ────────
+    const combined = tf.model({
+      inputs: [boardInput, actionInput],
+      outputs: [policyOutput, valueOutput],
     });
-    return model;
+    compileMultiHead(combined);
+
+    // ── valueSubModel: board → value (shared weights, inference-only) ────────
+    // We reconstruct a model from the same nodes — no duplicate weights.
+    const valueSubModel = tf.model({ inputs: boardInput, outputs: valueOutput });
+    // No separate compile needed; weights are shared with `combined`.
+
+    return { combined, valueSubModel };
+  }
+
+  /** Estima P(vitória) para um conjunto de estados de tabuleiro (sync via dataSync). */
+  private _estimateValuesBatch(boardStates: number[][]): number[] {
+    if (!this.valueSubModel || boardStates.length === 0) return boardStates.map(() => 0.5);
+    try {
+      return tf.tidy(() => {
+        const inp  = tf.tensor2d(boardStates.map(s => s.slice(0, BOARD_FEAT_SIZE)));
+        const pred = this.valueSubModel!.predict(inp) as tf.Tensor;
+        return Array.from(pred.dataSync());
+      });
+    } catch { return boardStates.map(() => 0.5); }
   }
 
   // ── Initialization ─────────────────────────────────────────────────────────
@@ -178,35 +299,37 @@ class AiBrain {
     if (this._initialized || this._initializing) return;
     this._initializing = true;
     try {
+      // Disable WebGL timer queries — causa GL_INVALID_OPERATION: glGetQueryObjectuivEXT
+      // durante self-play intenso (TF.js tenta medir tempo de ops na GPU mas perde referências)
+      try { tf.env().set('WEBGL_DISJOINT_QUERY_TIMER_EXTENSION_RELIABLE', false); } catch {}
+      try { tf.env().set('WEBGL_DISJOINT_QUERY_TIMER_EXTENSION_VERSION', 0); } catch {}
+      // Try to load combined model from IndexedDB
       try {
         this.model = await tf.loadLayersModel(MODEL_KEY);
-        this.model.compile({
-          optimizer: tf.train.adam(LEARNING_RATE),
-          loss: 'binaryCrossentropy',
-        });
-        console.log('[AiBrain] Loaded model from IndexedDB');
+        compileMultiHead(this.model);
+        // Reconstruct valueSubModel from loaded model's nodes (shared weights)
+        const boardIn = this.model.inputs.find(i => i.name.startsWith('board')) ?? this.model.inputs[0];
+        const valOut  = this.model.outputs[1]; // [policyOutput, valueOutput]
+        this.valueSubModel = tf.model({ inputs: boardIn, outputs: valOut });
+        console.log('[AiBrain] Loaded combined model from IndexedDB');
       } catch {
-        // No local model — try bundled prebuilt first, then fresh
+        // No local model — try bundled prebuilt first, then build fresh
         const loaded = await this._tryLoadPrebuilt();
         if (!loaded) {
-          this.model = this._buildModel();
-          console.log('[AiBrain] Created fresh model');
-        }
-        if (this.model) {
-          this.model.compile({
-            optimizer: tf.train.adam(LEARNING_RATE),
-            loss: 'binaryCrossentropy',
-          });
+          const { combined, valueSubModel } = this._buildCombinedModel();
+          this.model = combined;
+          this.valueSubModel = valueSubModel;
+          console.log('[AiBrain] Created fresh combined model');
         }
       }
-      // Warmup: run one forward pass to pre-compile WebGL shaders.
-      // Without this, the FIRST call to scoreActionsSync blocks the main thread
-      // for ~500ms while TF.js compiles GPU programs — freezing the UI mid-game.
+
+      // Warmup: pre-compile WebGL shaders to avoid first-call freeze
       if (this.model) {
         try {
           tf.tidy(() => {
-            const dummy = tf.zeros([1, INPUT_SIZE]);
-            (this.model!.predict(dummy) as tf.Tensor).dataSync();
+            const dBoard  = tf.zeros([1, BOARD_FEAT_SIZE]);
+            const dAction = tf.zeros([1, ACTION_FEAT_SIZE]);
+            (this.model!.predict([dBoard, dAction]) as tf.Tensor[]).forEach(t => t.dataSync());
           });
           console.log('[AiBrain] Warmup pass complete — shaders compiled');
         } catch { /* non-fatal */ }
@@ -215,9 +338,26 @@ class AiBrain {
       // Load frozen opponent model (phase 1+ self-play), non-fatal
       try {
         this.frozenModel = await tf.loadLayersModel(FROZEN_KEY);
-        this.frozenModel.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+        compileMultiHead(this.frozenModel);
         console.log('[AiBrain] Frozen model loaded for phase', this.stats.phase);
       } catch { /* No frozen model yet — phase 0 */ }
+
+      // Load best checkpoint model, non-fatal
+      try {
+        this.bestModel = await tf.loadLayersModel(BEST_MODEL_KEY);
+        compileMultiHead(this.bestModel);
+        console.log(`[AiBrain] Best checkpoint loaded (best win rate: ${((this.stats.bestWinRate || 0) * 100).toFixed(0)}%)`);
+      } catch { /* No checkpoint yet */ }
+
+      // Warmup valueSubModel
+      if (this.valueSubModel) {
+        try {
+          tf.tidy(() => {
+            const dummy = tf.zeros([1, BOARD_FEAT_SIZE]);
+            (this.valueSubModel!.predict(dummy) as tf.Tensor).dataSync();
+          });
+        } catch { /* non-fatal */ }
+      }
 
       // Sync from cloud (non-blocking, non-fatal)
       this.syncFromCloud().catch(() => {});
@@ -230,27 +370,13 @@ class AiBrain {
     this._initializing = false;
   }
 
-  /** Try loading the bundled prebuilt model from /data/ai-brain-prebuilt.json */
+  /**
+   * Try loading the bundled prebuilt model from /data/ai-brain-prebuilt.json.
+   * Returns false early if the format has changed (architecture mismatch).
+   */
   private async _tryLoadPrebuilt(): Promise<boolean> {
-    try {
-      const res = await fetch('/data/ai-brain-prebuilt.json');
-      if (!res.ok) return false;
-      const data = await res.json();
-      if (!data?.weights?.length) return false;
-
-      const model = this._buildModel();
-      const tensors = (data.weights as { shape: number[]; data: number[] }[])
-        .map(w => tf.tensor(w.data, w.shape));
-      model.setWeights(tensors);
-      tensors.forEach(t => t.dispose());
-
-      this.model = model;
-      await this.model.save(MODEL_KEY); // persist to IndexedDB for next session
-      console.log(`[AiBrain] Loaded prebuilt model (${data.gamesPlayed || 0} games bundled)`);
-      return true;
-    } catch {
-      return false;
-    }
+    // Prebuilt format changed with combined model — skip to avoid shape mismatches
+    return false;
   }
 
   isReady(): boolean {
@@ -377,7 +503,6 @@ class AiBrain {
         const oppTotalPower = oppAtks.reduce((s: number, c: any) =>
           s + Math.max(0, (parseInt(c.power) || 0) + (c._powerMod || 0)), 0
         );
-        // Rough lethal estimate: opp power per turn vs my life (ignoring blocks for conservatism)
         return oppTotalPower * 2 >= myLife ? 1 : 0;
       })(),                                                              // 33
 
@@ -416,7 +541,7 @@ class AiBrain {
   /**
    * Re-rank candidate cards using the neural network (synchronous via dataSync).
    * Returns candidate indices sorted best-first.
-   * Epsilon-greedy: with probability epsilon returns random order for exploration.
+   * Boltzmann exploration: softmax over raw scores scaled by temperature.
    */
   scoreActionsSync(
     boardFeatures: number[],
@@ -428,26 +553,34 @@ class AiBrain {
 
     try {
       const rawScores = tf.tidy(() => {
-        const inputs = candidateCards.map((card) => [
-          ...boardFeatures,
-          ...this.extractActionFeatures(card, actionType),
-        ]);
-        const inputTensor = tf.tensor2d(inputs);
-        const predictions = this.model!.predict(inputTensor) as tf.Tensor;
-        return Array.from(predictions.dataSync());
+        const boardInputs  = candidateCards.map(() => boardFeatures.slice(0, BOARD_FEAT_SIZE));
+        const actionInputs = candidateCards.map(card => this.extractActionFeatures(card, actionType));
+        const bTensor = tf.tensor2d(boardInputs);
+        const aTensor = tf.tensor2d(actionInputs);
+        const [policyPred] = this.model!.predict([bTensor, aTensor]) as tf.Tensor[];
+        return Array.from(policyPred.dataSync());
       });
 
-      // ── Boltzmann (softmax temperature) exploration ──────────────────────
-      // High temperature → explore (soft distribution)
-      // Low temperature  → exploit (near-deterministic argmax)
+      // ── Warmup: primeiros WARMUP_GAMES jogos só observa, sem sobrescrever ──
+      if (this.stats.gamesPlayed < WARMUP_GAMES) {
+        return candidateCards.map((_, i) => i);
+      }
+
+      // ── Confidence threshold ──────────────────────────────────────────────
+      const sortedRaw = [...rawScores].sort((a, b) => b - a);
+      const confidence = rawScores.length >= 2 ? sortedRaw[0] - sortedRaw[1] : 1;
+      if (confidence < CONFIDENCE_THRESHOLD) {
+        return candidateCards.map((_, i) => i);
+      }
+
+      // ── Boltzmann (softmax temperature) exploration ───────────────────────
       const T = Math.max(this.stats.temperature, 0.01);
       const scaled = rawScores.map(s => s / T);
       const maxS = Math.max(...scaled);
-      const exps = scaled.map(s => Math.exp(s - maxS)); // numerically stable
+      const exps = scaled.map(s => Math.exp(s - maxS));
       const sumExp = exps.reduce((a, b) => a + b, 0);
       const probs = exps.map(p => p / sumExp);
 
-      // Sample one action from the Boltzmann distribution
       let r = Math.random();
       let sampledIdx = rawScores.length - 1;
       for (let i = 0; i < probs.length; i++) {
@@ -455,7 +588,6 @@ class AiBrain {
         if (r <= 0) { sampledIdx = i; break; }
       }
 
-      // Return: sampled first, rest sorted by raw score descending
       const sortedIndices = rawScores
         .map((s, i) => ({ s, i }))
         .sort((a, b) => b.s - a.s)
@@ -470,39 +602,106 @@ class AiBrain {
 
   // ── Decision recording ────────────────────────────────────────────────────
 
-  recordDecision(boardFeatures: number[], actionFeatures: number[]): void {
+  recordDecision(boardFeatures: number[], actionFeatures: number[], wasHeuristicChoice = true): void {
     if (this.decisions.length < 200) {
-      // Compute board evaluation from features for intermediate reward calculation
-      // f[0]=myLife/20, f[1]=oppLife/20, f[2]=myCreatures/10, f[3]=oppCreatures/10
-      // f[4]=myPower/20, f[5]=oppPower/20, f[14]=myHand/7, f[15]=oppHand/7
+      const myKwQuality  = boardFeatures[8] * 1.5
+                         + boardFeatures[10] * 2.0
+                         + boardFeatures[12] * 1.0;
+      const oppKwQuality = boardFeatures[9] * 1.5
+                         + boardFeatures[11] * 2.0
+                         + boardFeatures[13] * 1.0;
+
+      const myResources  = boardFeatures[14] * 1.0 + boardFeatures[16] * 0.4;
+      const oppResources = boardFeatures[15] * 1.0 + boardFeatures[17] * 0.4;
+
+      const threatBonus   = boardFeatures[24] ? 1.0 : 0;
+      const dangerPenalty = boardFeatures[23] ? -1.0 : 0;
+
       const boardEval =
-        (boardFeatures[0] - boardFeatures[1]) * 3.0 +   // life diff
-        (boardFeatures[2] - boardFeatures[3]) * 1.0 +   // creature count
-        (boardFeatures[4] - boardFeatures[5]) * 1.5 +   // power diff
-        (boardFeatures[6] - boardFeatures[7]) * 0.5 +   // toughness
-        (boardFeatures[14] - boardFeatures[15]) * 0.5;  // hand size
-      this.decisions.push({ boardFeatures: [...boardFeatures], actionFeatures: [...actionFeatures], boardEval });
+        (boardFeatures[0] - boardFeatures[1]) * 3.5 +
+        (boardFeatures[2] - boardFeatures[3]) * 1.2 +
+        (boardFeatures[4] - boardFeatures[5]) * 1.8 +
+        (boardFeatures[6] - boardFeatures[7]) * 0.6 +
+        (myKwQuality - oppKwQuality) * 2.0 +
+        (myResources - oppResources) * 1.2 +
+        threatBonus + dangerPenalty;
+
+      this.decisions.push({
+        boardFeatures: [...boardFeatures],
+        actionFeatures: [...actionFeatures],
+        boardEval,
+        wasHeuristicChoice,
+      });
     }
+  }
+
+  // ── Mana variance detection ───────────────────────────────────────────────
+
+  /**
+   * Detects mana screw / flood from the recorded decision history.
+   * Returns a weight in [0, 1]:
+   *   1.0 = clean game (train normally)
+   *   0.4 = mild screw/flood (train with reduced signal)
+   *   0.0 = severe screw/flood (skip training — outcome is pure luck)
+   */
+  private _detectManaVarianceWeight(decisions: DecisionRecord[]): number {
+    if (decisions.length < 4) return 1.0;
+
+    const early = decisions.slice(0, Math.min(8, decisions.length));
+    const mid   = decisions.slice(Math.floor(decisions.length / 3));
+
+    // Screw: early turns with very few lands relative to turn number
+    let screwHits = 0;
+    for (const d of early) {
+      const lands = d.boardFeatures[16] * 10;  // actual land count
+      const turn  = d.boardFeatures[18] * 20;  // actual turn
+      if (turn >= 4 && lands < 2) screwHits += 2;
+      else if (turn >= 5 && lands < 3) screwHits++;
+    }
+    const severeScrew = screwHits >= 4;
+    const mildScrew   = screwHits >= 2;
+
+    // Flood: mid-game with high mana ratio but few creatures (can't cast spells)
+    let floodHits = 0;
+    for (const d of mid) {
+      const manaRatio  = d.boardFeatures[22];        // 0=no mana, 1=flooded
+      const creatures  = d.boardFeatures[2] * 10;   // creature count
+      if (manaRatio > 0.88 && creatures < 2) floodHits++;
+    }
+    const floodThreshold = Math.max(2, Math.floor(mid.length * 0.45));
+    const severeFlood = floodHits >= floodThreshold;
+    const mildFlood   = floodHits >= Math.max(1, Math.floor(floodThreshold * 0.5));
+
+    if (severeScrew || severeFlood) return 0.0;  // skip — pure luck game
+    if (mildScrew   || mildFlood)   return 0.4;  // partial — discount signal
+    return 1.0;
   }
 
   // ── Training ──────────────────────────────────────────────────────────────
 
   /**
-   * Called at game end. Trains with:
-   *   - Soft labels (won → 0.8, lost → 0.2)
-   *   - REINFORCE baseline (subtract mean recent reward)
-   *   - Temporal discounting (later decisions matter more)
-   *   - Experience replay (mix in 40 past decisions)
+   * Called at game end. Trains the combined model with:
+   *   - Policy head: REINFORCE + imitation + TD dense rewards
+   *   - Value head: TD(λ) targets (V(s_terminal) = outcome, V(s_t) = γ·V(s_{t+1}))
+   *   - Experience replay: mix past decisions for both heads jointly
    */
   async trainOnGame(won: boolean): Promise<void> {
-    const softReward = won ? 0.8 : 0.2;
+    // Soft reward: combina win/loss com vantagem de board final
+    // Mais estável do que binário puro — reduz variância de deck luck
+    const n0 = this.decisions.length;
+    const lastBoardEval = n0 > 0 ? this.decisions[n0 - 1].boardEval : 0;
+    const boardReward = Math.max(0.05, Math.min(0.95, 0.5 + lastBoardEval / 18));
+    // Win ancora em [0.55, 0.90], Loss ancora em [0.10, 0.45]
+    const softReward = won
+      ? Math.max(0.55, Math.min(0.90, boardReward))
+      : Math.min(0.45, Math.max(0.10, boardReward));
 
     // ── REINFORCE baseline ─────────────────────────────────────────────────
     const recent = this.stats.recentRewards;
     const baseline = recent.length >= 3
       ? recent.reduce((a, b) => a + b, 0) / recent.length
       : 0.5;
-    const advantage = softReward - baseline;  // positive = better than expected
+    const advantage = softReward - baseline;
 
     if (!this.model || this.decisions.length === 0) {
       this._updateStatsAfterGame(won, softReward);
@@ -510,55 +709,123 @@ class AiBrain {
       return;
     }
 
-    // ── Temporal discounting + Intermediate rewards ────────────────────────
+    // ── Mana variance filter ───────────────────────────────────────────────
+    const manaWeight = this._detectManaVarianceWeight(this.decisions);
+    if (manaWeight === 0.0) {
+      // Severe screw/flood — outcome is pure luck, skip training to avoid corrupting model
+      console.log(`[AiBrain] Skipping training — mana issue detected (screw/flood). Won=${won}`);
+      this._updateStatsAfterGame(won, softReward);
+      this.decisions = [];
+      return;
+    }
+
     const n = this.decisions.length;
-    const currentInputs = this.decisions.map((d) => [...d.boardFeatures, ...d.actionFeatures]);
+    const boardStates  = this.decisions.map(d => d.boardFeatures.slice(0, BOARD_FEAT_SIZE));
+    const actionStates = this.decisions.map(d => d.actionFeatures);
+
+    // ── Step 1: Compute TD targets (backwards pass) ────────────────────────
+    const tdTargets = new Array(n).fill(0);
+    tdTargets[n - 1] = won ? 1.0 : 0.0;
+    for (let t = n - 2; t >= 0; t--) {
+      tdTargets[t] = DISCOUNT * tdTargets[t + 1];
+    }
+
+    // ── Step 2: Estimate board values for TD error dense rewards ──────────
+    // After the fit call below the weights will have moved, so we grab
+    // value estimates BEFORE training (prior model's view).
+    const valueTrust = Math.min(this.stats.gamesPlayed / 40, 1.0);
+    let valueEstimates: number[] = boardStates.map(() => 0.5);
+    if (this.valueSubModel && valueTrust > 0.05) {
+      valueEstimates = this._estimateValuesBatch(boardStates);
+    }
+
+    // ── Step 3: Policy targets ─────────────────────────────────────────────
     const currentTargets = this.decisions.map((d, i) => {
       const decay = Math.pow(DISCOUNT, n - 1 - i);
-      let target  = 0.5 + advantage * decay * 0.5;
+      // manaWeight < 1.0: jogo com mild screw/flood — reduz contribuição do win/loss
+      const reinforceTarget = 0.5 + advantage * manaWeight * decay * 0.5;
 
-      // Intermediate reward: did the board improve after this decision?
-      if (i < this.decisions.length - 1) {
-        const nextEval = this.decisions[i + 1].boardEval;
-        const delta = nextEval - d.boardEval;
-        const normDelta = Math.tanh(delta * 0.4); // clamp to [-1, 1]
-        target += normDelta * 0.15;               // small but meaningful signal
+      // Imitation blend dinâmico: começa em 0.60, decai para 0.20 ao longo de ~1000 jogos
+      // Fase inicial: aprende o professor (heurística). Fase tardia: REINFORCE domina.
+      const imitBlend = Math.max(
+        IMITATION_BLEND_MIN,
+        IMITATION_BLEND_START - this.stats.gamesPlayed * IMITATION_BLEND_DECAY
+      );
+
+      // Imitation target depende do resultado — não punir desvios que levaram a vitórias
+      // Concordou + ganhou → muito bom (0.85) — heurística era correta
+      // Concordou + perdeu → levemente positivo (0.55) — FIX: era 0.65 (recompensava perda),
+      //                                                   era 0.50 (neutro demais → NN perde base).
+      //                                                   0.55 = sinal fraco de "heurística ainda é ok"
+      //                                                   sem inflar decisões perdedoras artificialmente.
+      // Desviou  + ganhou → bom (0.75)        — descobriu algo melhor, recompensar
+      // Desviou  + perdeu → levemente ruim (0.20) — FIX: era 0.10 (punição forte demais
+      //                                              → NN colapsa em desvios → fica no heurístico)
+      const imitationTarget = d.wasHeuristicChoice
+        ? (won ? 0.85 : 0.55)
+        : (won ? 0.75 : 0.20);
+      let target = imitBlend * imitationTarget + (1 - imitBlend) * reinforceTarget;
+
+      if (i < n - 1) {
+        let tdDelta: number;
+        if (valueTrust > 0.1) {
+          const vDelta = valueEstimates[i + 1] - valueEstimates[i];
+          tdDelta = valueTrust * Math.tanh(vDelta * 3) + (1 - valueTrust) * Math.tanh((this.decisions[i + 1].boardEval - d.boardEval) * 0.35);
+        } else {
+          tdDelta = Math.tanh((this.decisions[i + 1].boardEval - d.boardEval) * 0.35);
+        }
+        // Aumentado 0.22→0.42: sinal de melhora de board turno-a-turno é mais confiável que win/loss
+        target += tdDelta * 0.42;
       }
 
       return Math.max(0.05, Math.min(0.95, target));
     });
 
-    // ── Experience replay ──────────────────────────────────────────────────
+    // ── Step 4: Experience replay ──────────────────────────────────────────
     const buffer  = this._loadReplayBuffer();
     const sampled = this._sampleReplay(buffer, REPLAY_SAMPLE);
 
-    const allInputs  = [...currentInputs,  ...sampled.map((e) => e.input)];
-    const allTargets = [...currentTargets, ...sampled.map((e) => e.target)];
+    const allBoards  = [...boardStates,   ...sampled.map(e => e.board)];
+    const allActions = [...actionStates,  ...sampled.map(e => e.action)];
+    const allPolicy  = [...currentTargets, ...sampled.map(e => e.policyTarget)];
+    const allValue   = [...tdTargets,      ...sampled.map(e => e.valueTarget)];
 
+    // ── Step 5: Train combined model (both heads jointly) ─────────────────
     try {
-      const inputTensor  = tf.tensor2d(allInputs);
-      const targetTensor = tf.tensor2d(allTargets.map((t) => [t]));
+      const bTensor = tf.tensor2d(allBoards);
+      const aTensor = tf.tensor2d(allActions);
+      const pTensor = tf.tensor2d(allPolicy.map(t => [t]));
+      const vTensor = tf.tensor2d(allValue.map(t => [t]));
 
-      await this.model.fit(inputTensor, targetTensor, {
-        epochs: 3,
-        batchSize: Math.min(32, allInputs.length),
+      await this.model.fit([bTensor, aTensor], [pTensor, vTensor], {
+        epochs: 1,   // 1 epoch por jogo — menos risco de catastrophic forgetting
+        batchSize: Math.min(32, allBoards.length),
         verbose: 0,
       });
 
-      inputTensor.dispose();
-      targetTensor.dispose();
+      bTensor.dispose();
+      aTensor.dispose();
+      pTensor.dispose();
+      vTensor.dispose();
 
       await this.model.save(MODEL_KEY);
-      console.log(`[AiBrain] Trained on ${allInputs.length} samples (${currentInputs.length} new + ${sampled.length} replay). Won=${won}, advantage=${advantage.toFixed(2)}`);
+      console.log(`[AiBrain] Trained on ${allBoards.length} samples (${boardStates.length} new + ${sampled.length} replay). Won=${won}, advantage=${advantage.toFixed(2)}`);
+      if (this.valueSubModel) {
+        const v0 = this._estimateValuesBatch([boardStates[0]])[0];
+        const vT = this._estimateValuesBatch([boardStates[n - 1]])[0];
+        console.log(`[ValueHead] V(s0)=${v0.toFixed(2)} V(sT)=${vT.toFixed(2)}`);
+      }
     } catch (e) {
       console.warn('[AiBrain] Training failed:', e);
     }
 
-    // ── Save new decisions to replay buffer (with priority) ───────────────
-    const newReplayEntries: ReplayEntry[] = currentInputs.map((inp, i) => ({
-      input: inp,
-      target: currentTargets[i],
-      priority: Math.abs(currentTargets[i] - 0.5) + REPLAY_EPS_P,
+    // ── Save new decisions to replay buffer ────────────────────────────────
+    const newReplayEntries: ReplayEntry[] = boardStates.map((board, i) => ({
+      board,
+      action:       actionStates[i],
+      policyTarget: currentTargets[i],
+      valueTarget:  tdTargets[i],
+      priority:     Math.abs(currentTargets[i] - 0.5) + REPLAY_EPS_P,
     }));
     this._saveReplayBuffer(buffer, newReplayEntries);
 
@@ -584,23 +851,112 @@ class AiBrain {
     this._saveStats();
     // Auto-advance phase check (non-blocking)
     this._checkPhaseAdvance().catch(() => {});
+    // Checkpoint: save best / restore on collapse (non-blocking)
+    this._manageCheckpoint().catch(() => {});
+  }
+
+  /** Compute win rate over last N games from phaseRecentWins */
+  private _recentWinRate(n: number): number {
+    const h = this.stats.phaseRecentWins || [];
+    if (h.length === 0) return 0;
+    const slice = h.slice(-n);
+    return slice.filter(w => w).length / slice.length;
+  }
+
+  /**
+   * Checkpoint manager — called after each game.
+   * Saves the model when a new win-rate record is set.
+   * Restores from checkpoint when a catastrophic drop is detected.
+   */
+  private async _manageCheckpoint(): Promise<void> {
+    if (!this.model) return;
+    if (this.stats.gamesPlayed < CHECKPOINT_MIN_GAMES) return;
+    if (this._checkpointPending) return;
+
+    const winRate50 = this._recentWinRate(CHECKPOINT_SAMPLE);
+    const best = this.stats.bestWinRate || 0;
+
+    // ── Save checkpoint if new record ────────────────────────────────────────
+    if (winRate50 > best + CHECKPOINT_SAVE_MARGIN && winRate50 > 0.44) {
+      this._checkpointPending = true;
+      try {
+        const weights = this.model.getWeights();
+        try {
+          if (!this.bestModel) {
+            const { combined } = this._buildCombinedModel();
+            this.bestModel = combined;
+          }
+          this.bestModel.setWeights(weights.map(w => w.clone()));
+          await this.bestModel.save(BEST_MODEL_KEY);
+          this.stats.bestWinRate = winRate50;
+          this._saveStats();
+          console.log(`[AiBrain] ✅ Checkpoint saved! Win rate ${(winRate50 * 100).toFixed(0)}% (prev best: ${(best * 100).toFixed(0)}%)`);
+        } finally {
+          // Dispose getWeights() refs — cada chamada cria novas referências que acumulam na GPU
+          weights.forEach(w => w.dispose());
+        }
+      } catch (e) {
+        console.warn('[AiBrain] Checkpoint save failed:', e);
+      } finally {
+        this._checkpointPending = false;
+      }
+      return;
+    }
+
+    // ── Restore checkpoint on catastrophic drop ───────────────────────────
+    const gamesSinceRestore = this.stats.gamesPlayed - this._lastRestorationGame;
+    if (best > 0.44 && winRate50 < best - CHECKPOINT_RESTORE_DROP && gamesSinceRestore >= 60) {
+      this._checkpointPending = true;
+      try {
+        let restored = this.bestModel;
+        if (!restored) {
+          try {
+            restored = await tf.loadLayersModel(BEST_MODEL_KEY);
+            compileMultiHead(restored);
+            this.bestModel = restored;
+          } catch { /* no checkpoint saved yet */ }
+        }
+        if (restored) {
+          // Copy weights directly into existing this.model — no new model creation needed
+          const weights = restored.getWeights();
+          this.model.setWeights(weights.map(w => w.clone()));
+          weights.forEach(w => w.dispose());
+
+          // Rebuild valueSubModel from this.model's own nodes (shared weights, no duplication)
+          const boardIn = this.model.inputs.find(i => i.name.startsWith('board')) ?? this.model.inputs[0];
+          const valOut  = this.model.outputs[1];
+          this.valueSubModel = tf.model({ inputs: boardIn, outputs: valOut });
+
+          // Reset temperature to explore more after restore
+          this.stats.temperature = Math.min(TEMP_INITIAL, this.stats.temperature + 0.3);
+          this.stats.checkpointRestorations = (this.stats.checkpointRestorations || 0) + 1;
+          this._lastRestorationGame = this.stats.gamesPlayed;
+          this._saveStats();
+          await this.model.save(MODEL_KEY);
+          console.log(`[AiBrain] 🔄 Checkpoint restored! Win rate was ${(winRate50 * 100).toFixed(0)}%, best was ${(best * 100).toFixed(0)}%. Restoration #${this.stats.checkpointRestorations}`);
+        }
+      } catch (e) {
+        console.warn('[AiBrain] Checkpoint restore failed:', e);
+      } finally {
+        this._checkpointPending = false;
+      }
+    }
   }
 
   private async _checkPhaseAdvance(): Promise<void> {
     const history = this.stats.phaseRecentWins;
-    if (history.length < PHASE_SAMPLE) return; // not enough data yet
+    if (history.length < PHASE_SAMPLE) return;
 
     const recent = history.slice(-PHASE_SAMPLE);
     const winRate = recent.filter(w => w).length / PHASE_SAMPLE;
     if (winRate < PHASE_WIN_THRESHOLD) return;
 
-    // Phase complete! Freeze current model and advance
     console.log(`[AiBrain] Phase ${this.stats.phase} complete! Win rate ${(winRate * 100).toFixed(0)}% — advancing to phase ${this.stats.phase + 1}`);
     await this.saveFrozenModel();
     this.stats.phase++;
     this.stats.phaseGames = 0;
     this.stats.phaseRecentWins = [];
-    this.stats.temperature = TEMP_INITIAL; // Reset exploration for new phase
+    this.stats.temperature = TEMP_INITIAL;
     this._saveStats();
   }
 
@@ -628,11 +984,10 @@ class AiBrain {
     try {
       const weights = this.model.getWeights();
       if (!this.frozenModel) {
-        this.frozenModel = this._buildModel();
-        this.frozenModel.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+        const { combined } = this._buildCombinedModel();
+        this.frozenModel = combined;
       }
       this.frozenModel.setWeights(weights.map(w => w.clone()));
-      // Save to main FROZEN_KEY (current opponent) and phase-specific key (pool archive)
       await this.frozenModel.save(FROZEN_KEY);
       await this.frozenModel.save(FROZEN_KEY_PHASE(this.stats.phase));
       console.log(`[AiBrain] Frozen model saved (phase ${this.stats.phase})`);
@@ -644,20 +999,18 @@ class AiBrain {
   /** Load a random frozen model from the pool (phases 1..currentPhase). Used by self-play. */
   async loadRandomFrozenModel(): Promise<void> {
     const phase = this.stats.phase;
-    if (phase === 0) return; // No frozen models yet
+    if (phase === 0) return;
 
-    // Pick a random phase from 1..phase
     const targetPhase = Math.floor(Math.random() * phase) + 1;
     try {
       const m = await tf.loadLayersModel(FROZEN_KEY_PHASE(targetPhase));
-      m.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+      compileMultiHead(m);
       this.frozenModel = m;
       console.log(`[AiBrain] Pool: loaded frozen model from phase ${targetPhase}/${phase}`);
     } catch {
-      // Fall back to main frozen key
       try {
         const m = await tf.loadLayersModel(FROZEN_KEY);
-        m.compile({ optimizer: tf.train.adam(LEARNING_RATE), loss: 'binaryCrossentropy' });
+        compileMultiHead(m);
         this.frozenModel = m;
       } catch { /* ignore */ }
     }
@@ -674,13 +1027,12 @@ class AiBrain {
 
     try {
       const scores = tf.tidy(() => {
-        const inputs = candidateCards.map((card) => [
-          ...boardFeatures,
-          ...this.extractActionFeatures(card, actionType),
-        ]);
-        const inputTensor = tf.tensor2d(inputs);
-        const predictions = this.frozenModel!.predict(inputTensor) as tf.Tensor;
-        return Array.from(predictions.dataSync());
+        const boardInputs  = candidateCards.map(() => boardFeatures.slice(0, BOARD_FEAT_SIZE));
+        const actionInputs = candidateCards.map(card => this.extractActionFeatures(card, actionType));
+        const bTensor = tf.tensor2d(boardInputs);
+        const aTensor = tf.tensor2d(actionInputs);
+        const [policyPred] = this.frozenModel!.predict([bTensor, aTensor]) as tf.Tensor[];
+        return Array.from(policyPred.dataSync());
       });
       return scores
         .map((score, i) => ({ score, i }))
@@ -694,12 +1046,11 @@ class AiBrain {
   // ── Cloud sync (federated learning) ──────────────────────────────────────
 
   private _lastCloudSync = 0;
-  private static CLOUD_SYNC_COOLDOWN_MS = 60_000; // max 1 upload per minute
+  private static CLOUD_SYNC_COOLDOWN_MS = 60_000;
 
   /**
    * Upload local weights to Firestore (FedAvg merge).
-   * Called after trainOnGame. Throttled to once per minute to avoid
-   * concurrent transaction conflicts during rapid self-play sessions.
+   * Called after trainOnGame. Throttled to once per minute.
    */
   async syncToCloud(): Promise<void> {
     if (!this.model) return;
@@ -711,8 +1062,6 @@ class AiBrain {
       const tfWeights = this.model.getWeights();
       const weights = tfWeights.map((w) => Array.from(w.dataSync()));
       const shapes  = tfWeights.map((w) => [...w.shape] as number[]);
-      // NOTE: do NOT dispose tfWeights — getWeights() returns the model's own
-      // LayerVariable tensors; disposing them destroys the model parameters.
       await uploadBrainContribution(weights, shapes);
       console.log('[AiBrain] Weights uploaded to cloud');
     } catch (e) {
@@ -735,7 +1084,6 @@ class AiBrain {
       const localCount  = Math.max(this.stats.gamesPlayed, 1);
       const globalCount = data.gamesCount || 1;
 
-      // Blend: more weight to whichever has more games
       const globalBlend = Math.min(globalCount / (globalCount + localCount), 0.9);
 
       const newWeights = data.weights.map((globalW, i) => {
@@ -747,9 +1095,7 @@ class AiBrain {
         return tf.tensor(blended, shape);
       });
 
-      // currentWeights are the model's own LayerVariables — do NOT dispose them.
       this.model.setWeights(newWeights);
-      // newWeights are temporary tensors we created above — safe to dispose.
       newWeights.forEach((w) => w.dispose());
 
       await this.model.save(MODEL_KEY);
@@ -764,11 +1110,8 @@ class AiBrain {
   // ── Export for bundling ───────────────────────────────────────────────────
 
   /**
-   * Serialize current model weights to a JSON string suitable for bundling.
-   * Save the result to public/data/ai-brain-prebuilt.json and commit it.
-   * New users will automatically load this model on first launch.
-   *
-   * Call syncFromCloud() first to include other players' training data.
+   * Serialize current combined model weights to JSON for bundling.
+   * Save to public/data/ai-brain-prebuilt.json and commit.
    */
   async exportForBundling(): Promise<string> {
     if (!this.model) throw new Error('Model not initialized');
@@ -777,9 +1120,8 @@ class AiBrain {
       shape: [...w.shape] as number[],
       data: Array.from(w.dataSync()),
     }));
-    // tfWeights are the model's own LayerVariables — do NOT dispose them.
     return JSON.stringify({
-      version: 3,
+      version: 4,  // bumped for combined model format
       gamesPlayed: this.stats.gamesPlayed,
       cloudGamesCount: this.stats.cloudGamesCount,
       exportedAt: new Date().toISOString(),
@@ -792,12 +1134,19 @@ class AiBrain {
   async reset(): Promise<void> {
     try { await tf.io.removeModel(MODEL_KEY); } catch {}
 
-    this.model = this._buildModel();
+    const { combined, valueSubModel } = this._buildCombinedModel();
+    this.model = combined;
+    this.valueSubModel = valueSubModel;
     this.frozenModel = null;
+
     try { await tf.io.removeModel(FROZEN_KEY); } catch {}
-    // Clean up per-phase frozen models (up to phase 20)
     for (let p = 1; p <= 20; p++) { try { await tf.io.removeModel(FROZEN_KEY_PHASE(p)); } catch {} }
-    this.stats = { gamesPlayed: 0, wins: 0, temperature: TEMP_INITIAL, lastTrained: null, recentRewards: [], cloudGamesCount: 0, phase: 0, phaseGames: 0, phaseRecentWins: [] };
+    // Clean up old separate value model key and best checkpoint
+    try { await tf.io.removeModel(VALUE_MODEL_KEY); } catch {}
+    try { await tf.io.removeModel(BEST_MODEL_KEY); } catch {}
+    this.bestModel = null;
+
+    this.stats = { gamesPlayed: 0, wins: 0, temperature: TEMP_INITIAL, lastTrained: null, recentRewards: [], cloudGamesCount: 0, phase: 0, phaseGames: 0, phaseRecentWins: [], bestWinRate: 0, checkpointRestorations: 0 };
     this._saveStats();
     this.decisions = [];
 

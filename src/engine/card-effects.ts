@@ -529,7 +529,7 @@ export const CardEffectsDB: Record<string, any> = {
 
   "lasyd prowler": {
     etb: [{ type: "mill", amount: "lands_count", target: "self" }],
-    graveyard: [{ cost: { mana: "1G", exile: true }, effects: [{ type: "distribute_counters", counter: "+1/+1", amount: "lands_in_gy_count", target: "creature" }], sorcerySpeed: true }]
+    graveyard: [{ cost: { mana: "1G", exile: true }, effects: [{ type: "counter", counter: "+1/+1", amount: "lands_in_gy_count", target: "creature" }], sorcerySpeed: true }]
   },
 
   "lotuslight dancers": {
@@ -1784,7 +1784,7 @@ export const CardEffectsDB: Record<string, any> = {
   },
   "oliphaunt": {
     static: [{ type: "has_keyword", keywords: ["trample"] }],
-    triggered: [{ event: "attacks", self: true, effects: [{ type: "buff", power: 2, toughness: 0, target: "own_creature", duration: "end_of_turn", keywords: ["trample"] }] }],
+    triggered: [{ event: "attacks", self: true, effects: [{ type: "buff", power: 2, toughness: 0, target: "another_own_creature", duration: "end_of_turn", keywords: ["trample"] }] }],
     cycling: { cost: "1", type: "typecycling", searchType: "Mountain" }
   },
   "pelargir survivor": {
@@ -2983,10 +2983,11 @@ export const CardEffectsDB: Record<string, any> = {
     activated: [{ cost: { mana: "1U", tap: true }, condition: "control_legendary", effects: [{ type: "scry", amount: 2 }] }]
   },
   "the grey havens": {
+    // Oracle: When ETB, scry 1. {T}: Add {C}. {T}: Add one mana of any color (only for legendary spells — restriction not enforced in engine).
     etb: [{ type: "scry", amount: 1 }],
     activated: [
-      { cost: { tap: true }, effects: [{ type: "add_mana", color: "C" }] },
-      { cost: { tap: true }, effects: [{ type: "add_mana", color: "any", condition: "legendary_creature_in_gy" }], text: "{T}: Add one mana of any color among legendary creature cards in your graveyard." }
+      { cost: { tap: true }, effects: [{ type: "add_mana", color: "C" }], text: "{T}: Add {C}." },
+      { cost: { tap: true }, effects: [{ type: "add_mana", color: "any" }], text: "{T}: Add one mana of any color (for legendary spells)." }
     ]
   },
   "the shire": {

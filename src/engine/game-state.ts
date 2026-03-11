@@ -11,6 +11,7 @@ import * as Stack from './stack';
 import * as GameAI from './game-ai';
 import { CardEffectsDB } from './card-effects';
 import { Zone, PlayerZones } from './zones';
+import { vfxPlay as _vfxPlayBridge } from './vfx-bridge';
 
 // ─── Initialize effects cache from CardEffectsDB ───
 // The migration introduced an effectsCache layer in cards.ts but never populated it.
@@ -386,6 +387,16 @@ export function _aiChooseTargetsForEffects(state, playerId, effects) {
             .filter(c => CardEngine.isCreature(c))
             .sort((a, b) => (CardEngine.getPower(b) + CardEngine.getToughness(b)) - (CardEngine.getPower(a) + CardEngine.getToughness(a)));
           if (ownCreatures.length > 0) target = ownCreatures[0];
+          break;
+        }
+
+        case 'another_own_creature': {
+          // AI picks best own creature that isn't the trigger source (e.g. Oliphaunt)
+          const selfUid = data?.triggerCardUid || data?.cardUid;
+          const others = state.players[playerId].zones.battlefield.cards
+            .filter(c => CardEngine.isCreature(c) && c._uid !== selfUid)
+            .sort((a, b) => (CardEngine.getPower(b) + CardEngine.getToughness(b)) - (CardEngine.getPower(a) + CardEngine.getToughness(a)));
+          if (others.length > 0) target = others[0];
           break;
         }
       }
@@ -917,13 +928,16 @@ function _pushTriggerToast(state: any, trigger: any): void {
       .find((c: any) => c._uid === trigger.cardUid);
     const effectDesc = (trigger.effects || []).map((e: any) => _describeTriggerEffect(e)).join(', ');
     if (!state._triggerToastQueue) state._triggerToastQueue = [];
+    const isToken = !!(triggerCard?._isToken);
     state._triggerToastQueue.push({
       id: (state._triggerToastQueue.length > 0 ? state._triggerToastQueue[state._triggerToastQueue.length - 1].id + 1 : 1),
       cardName: trigger.cardName || triggerCard?.name || '?',
-      imageUrl: triggerCard?.image_small || triggerCard?.image_normal || null,
-      imageUrlLarge: triggerCard?.image_normal || triggerCard?.image_small || null,
+      imageUrl: (triggerCard?.image_small || triggerCard?.image_normal) || null,
+      imageUrlLarge: (triggerCard?.image_normal || triggerCard?.image_small) || null,
       controllerId: trigger.controllerId,
       effectDesc: effectDesc || 'Ability triggers',
+      isToken,
+      tokenColors: isToken ? (triggerCard?.colors || []) : undefined,
     });
     if (state._triggerToastQueue.length > 20) state._triggerToastQueue.shift();
   } catch (_) { /* ignore */ }
@@ -1488,6 +1502,18 @@ export function fireTrigger(state, eventType, data) {
     // Process the queue immediately (unless already inside processGameQueue)
     if (!state._processingQueue) {
       processGameQueue(state);
+    }
+
+    // If trigger_priority is already active (processGameQueue returned early),
+    // still push toasts for any newly added queue items so all pending triggers
+    // appear simultaneously in the panel rather than one by one.
+    if (state.waitingForInput?.type === 'trigger_priority') {
+      for (const qi of state._gameQueue) {
+        if (qi.type === 'trigger' && !qi._toastPushed) {
+          _pushTriggerToast(state, qi.trigger);
+          qi._toastPushed = true;
+        }
+      }
     }
 
     return logs;
@@ -4027,6 +4053,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
       }
       case 'destroy_all': {
         // Board wipe with optional condition filter
+        _vfxPlayBridge('boardWipe');
         const results: string[] = [];
         for (let pid = 0; pid < 2; pid++) {
           const bf = state.players[pid].zones.battlefield;
@@ -15183,8 +15210,22 @@ export function autoTapForSpell(state, playerId, manaCost, cmc, convokeCard) {
         const remainingLands = available.filter((l: any) => l._uid !== land._uid);
         const castable = _countCastableFromHand(handCards, simPool, remainingLands);
 
-        // Score: maximize castable hand cards (multi-spell bonus), penalize high flexibility
-        const score = castable * 1000 - flexibility;
+        // Tiebreaker: prefer tapping lands whose color is in SURPLUS relative to hand demand.
+        // This prevents "all whites tapped, only blacks left" when either would give same castable count.
+        // surplus = (sources_of_color_including_this + pool) - hand_demand_for_that_color
+        // Higher surplus = safer to tap now (we have more than enough of this color).
+        const colorSurplus = (() => {
+          if (!tapColor) return 0;
+          const sourcesOfColor = available.filter((l: any) =>
+            ManaSystem.getLandManaColors(l).includes(tapColor)
+          ).length; // includes current land
+          const poolOfColor = state.manaPool[playerId][tapColor] || 0;
+          const demand = colorDemand[tapColor] || 0;
+          return (sourcesOfColor + poolOfColor) - demand;
+        })();
+
+        // Score: maximize castable hand cards, tiebreak by color surplus, penalize flexibility loss
+        const score = castable * 1000 + colorSurplus * 0.5 - flexibility;
 
         if (score > bestScore) {
           bestScore = score;

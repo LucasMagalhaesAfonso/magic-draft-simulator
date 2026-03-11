@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore, type ThemeId, type PlaymatId } from '../store/useAppStore';
 import { aiBrain, type AiBrainStats } from '../engine/ai-brain';
+import { SoundManager } from '../engine/sound-manager';
+import { VfxManager } from './game/VfxLayer';
 import { getHumanLearnStats, resetHumanLearn } from '../draft/bot-ai';
 import { getSetList, deleteSet } from '../lib/database';
 import { getRatingsStats, hasRatingsData, preloadRatings } from '../lib/seventeen-lands';
@@ -25,6 +27,43 @@ const THEMES: { id: ThemeId; label: string; accent: string; bg: string }[] = [
   { id: 'obscura',   label: '✦ Obscura',  accent: '#a8a8a8', bg: 'linear-gradient(135deg, #0a0a0a, #1a1a1a)' },
 ];
 
+
+// ── Sound Settings ────────────────────────────────────────────────────────────
+function SoundSettings() {
+  const [enabled, setEnabled] = useState(SoundManager.enabled);
+  const [volume, setVolume]   = useState(Math.round(SoundManager.volume * 100));
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+      <button
+        className={`btn btn-sm ${enabled ? 'btn-gold' : ''}`}
+        onClick={() => {
+          const next = !enabled;
+          SoundManager.setEnabled(next);
+          setEnabled(next);
+          if (next) { SoundManager.init(); SoundManager.play('card_draw'); }
+        }}
+        style={{ minWidth: 90 }}
+      >
+        {enabled ? '🔊 Ligado' : '🔇 Mudo'}
+      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 160 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Volume</span>
+        <input
+          type="range" min={0} max={100} value={volume}
+          onChange={e => { const v = Number(e.target.value); setVolume(v); SoundManager.setVolume(v / 100); }}
+          style={{ flex: 1, accentColor: 'var(--gold)' }}
+          disabled={!enabled}
+        />
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 32 }}>{volume}%</span>
+      </div>
+      <button className="btn btn-sm" style={{ fontSize: 12 }} disabled={!enabled}
+        onClick={() => { SoundManager.init(); SoundManager.play('spell_cast'); }}>
+        ▶ Testar
+      </button>
+    </div>
+  );
+}
 
 export function SettingsScreen() {
   const { theme, setTheme, playmat, playmatArt, playmatPosition, playmatSize, setPlaymat, setPlaymatPosition, setPlaymatSize, landArts, setLandArt, resetLandArts, sleeveArt, setSleeveArt } = useAppStore();
@@ -141,10 +180,24 @@ export function SettingsScreen() {
   }
 
   function handleStartSelfPlay() {
-    if (SelfPlay.isRunning()) { SelfPlay.stop(); return; }
+    if (SelfPlay.isRunning()) {
+      SelfPlay.stop();
+      // Re-enable VFX + sound after training stops
+      VfxManager.setEnabled(true);
+      SoundManager.setEnabled(true);
+      return;
+    }
+    // Disable VFX + sound during headless self-play (prevents Settings page shake)
+    VfxManager.setEnabled(false);
+    SoundManager.setEnabled(false);
     SelfPlay.run(selfPlayTarget, {
       onProgress: (s) => setSelfPlayStats({ ...s }),
-      onDone: (s) => { setSelfPlayStats({ ...s }); setAiStats(aiBrain.getStats()); },
+      onDone: (s) => {
+        setSelfPlayStats({ ...s });
+        setAiStats(aiBrain.getStats());
+        VfxManager.setEnabled(true);
+        SoundManager.setEnabled(true);
+      },
     }, selfPlaySet);
     setSelfPlayStats(SelfPlay.getStats());
   }
@@ -192,6 +245,13 @@ export function SettingsScreen() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Sound Section */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">🔊 Som</h2>
+          <p className="settings-desc">Volume dos efeitos sonoros do jogo.</p>
+          <SoundSettings />
         </div>
 
         {/* Playmat Section */}

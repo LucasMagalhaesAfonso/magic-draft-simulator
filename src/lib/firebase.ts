@@ -120,6 +120,13 @@ export interface GlobalBrainData {
   gamesCount: number;
 }
 
+// Firestore doesn't support nested arrays, so we serialize weights/shapes as JSON strings.
+interface GlobalBrainDoc {
+  weightsJson: string;  // JSON.stringify(number[][])
+  shapesJson: string;   // JSON.stringify(number[][])
+  gamesCount: number;
+}
+
 /**
  * Upload local model weights to Firestore, merged via FedAvg into the global model.
  * Uses a transaction to safely merge concurrent contributions.
@@ -132,19 +139,21 @@ export async function uploadBrainContribution(
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(globalRef);
     if (!snap.exists()) {
-      transaction.set(globalRef, { weights, shapes, gamesCount: 1, lastUpdated: serverTimestamp() });
+      const payload: GlobalBrainDoc = { weightsJson: JSON.stringify(weights), shapesJson: JSON.stringify(shapes), gamesCount: 1 };
+      transaction.set(globalRef, { ...payload, lastUpdated: serverTimestamp() });
       return;
     }
-    const data = snap.data() as GlobalBrainData & { lastUpdated: any };
-    const globalCount = data.gamesCount || 1;
+    const raw = snap.data() as Partial<GlobalBrainDoc> & { lastUpdated: any };
+    const globalCount = raw.gamesCount || 1;
+    const globalWeights: number[][] = raw.weightsJson ? JSON.parse(raw.weightsJson) : weights;
     // FedAvg: weighted average of global and new contribution
     const merged = weights.map((layerW, li) => {
-      const globalW = data.weights[li] || layerW;
+      const globalW = globalWeights[li] || layerW;
       return layerW.map((w, j) => (globalW[j] * globalCount + w) / (globalCount + 1));
     });
     transaction.update(globalRef, {
-      weights: merged,
-      shapes,
+      weightsJson: JSON.stringify(merged),
+      shapesJson: JSON.stringify(shapes),
       gamesCount: globalCount + 1,
       lastUpdated: serverTimestamp(),
     });
@@ -155,7 +164,12 @@ export async function downloadGlobalBrain(): Promise<GlobalBrainData | null> {
   try {
     const snap = await getDoc(doc(db, 'ai_brain', 'global'));
     if (!snap.exists()) return null;
-    return snap.data() as GlobalBrainData;
+    const raw = snap.data() as Partial<GlobalBrainDoc>;
+    // Support both new format (weightsJson) and old format (weights)
+    const legacy = snap.data() as any;
+    const weights: number[][] = raw.weightsJson ? JSON.parse(raw.weightsJson) : (legacy.weights ?? []);
+    const shapes: number[][] = raw.shapesJson ? JSON.parse(raw.shapesJson) : (legacy.shapes ?? []);
+    return { weights, shapes, gamesCount: raw.gamesCount || 0 };
   } catch {
     return null;
   }

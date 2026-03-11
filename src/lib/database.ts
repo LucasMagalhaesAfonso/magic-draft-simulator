@@ -173,6 +173,25 @@ export async function getDecks(): Promise<{ id: number; name: string; set_code: 
   return db.select('SELECT id, name, set_code, created_at FROM decks ORDER BY created_at DESC');
 }
 
+export async function getDeckById(id: number): Promise<{ id: number; name: string; set_code: string; cards_json: string; sideboard_json: string } | null> {
+  if (!isTauri()) {
+    const { browserGetDeckById } = await getBrowserDb();
+    return browserGetDeckById(id);
+  }
+  const db = await getTauriDb();
+  const rows = await db.select('SELECT * FROM decks WHERE id = $1', [id]) as { id: number; name: string; set_code: string; cards_json: string; sideboard_json: string }[];
+  return rows.length > 0 ? rows[0] : null;
+}
+
+export async function deleteDeck(id: number): Promise<void> {
+  if (!isTauri()) {
+    const { browserDeleteDeck } = await getBrowserDb();
+    return browserDeleteDeck(id);
+  }
+  const db = await getTauriDb();
+  await db.execute('DELETE FROM decks WHERE id = $1', [id]);
+}
+
 // ============================================
 // User Preferences
 // ============================================

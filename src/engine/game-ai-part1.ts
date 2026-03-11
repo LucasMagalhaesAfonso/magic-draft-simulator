@@ -1014,7 +1014,8 @@ export function playMainPhase(state: any, playerId: number): void {
           // Training player (or normal game vs human): use current model + record decision
           const _nnRank = aiBrain.scoreActionsSync(_nnBf, _nnTop.map((s: any) => s.card), 'play');
           card = _nnTop[_nnRank[0]].card;
-          aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(card, 'play'));
+          // wasHeuristicChoice: NN escolheu o mesmo que a heurística escolheria (índice 0)?
+          aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(card, 'play'), _nnRank[0] === 0);
         }
       } else {
         card = scored[0].card;
@@ -1353,6 +1354,102 @@ function _scoreActivatedAbility(effects: any[], state: any, playerId: number, so
   return score;
 }
 
+/**
+ * Sacrifice cost of losing a creature (normalized scale ~0-10).
+ * Distinct from the exported _creatureValue (which uses raw power+keywords for combat scoring).
+ * This version is calibrated against _scoreActivatedAbility scores (3-10 range).
+ */
+function _sacrificeCost(c: any): number {
+  // Mobilize/EOT tokens die at end of turn anyway — completely free to sacrifice
+  if (c._sacrificeAtEndStep) return 0;
+  // Non-creature tokens (Food, Treasure, Clue) — very cheap
+  if (c._isToken && !CardEngine.isCreature(c)) return 1;
+  // Regular tokens — cheap
+  if (c._isToken) {
+    const dt = CardEngine.getTriggeredAbilities(c).filter((t: any) => t.event === 'dies').length;
+    return dt > 0 ? 3 : 2;
+  }
+  // Real creatures: base value from CMC
+  const cmc = c.cmc ?? 0;
+  let val = cmc <= 2 ? 3 : cmc <= 4 ? 5 : 7;
+  if (CardEngine.hasKeyword(c, 'Flying'))   val += 1;
+  if (CardEngine.hasKeyword(c, 'Trample'))  val += 1;
+  const dt = CardEngine.getTriggeredAbilities(c).filter((t: any) => t.event === 'dies').length;
+  val += dt * 2;
+  return val;
+}
+
+/** Sort creatures from most expendable (index 0) to most valuable. */
+function _sortByExpendable(creatures: any[]): any[] {
+  return [...creatures].sort((a: any, b: any) => {
+    // EOT tokens are completely free — always first
+    if (a._sacrificeAtEndStep !== b._sacrificeAtEndStep) return a._sacrificeAtEndStep ? -1 : 1;
+    // Other tokens before real creatures
+    if (a._isToken !== b._isToken) return a._isToken ? -1 : 1;
+    // Fewer death triggers = cheaper to lose
+    const aDt = CardEngine.getTriggeredAbilities(a).filter((t: any) => t.event === 'dies').length;
+    const bDt = CardEngine.getTriggeredAbilities(b).filter((t: any) => t.event === 'dies').length;
+    if (aDt !== bDt) return aDt - bDt;
+    // Lowest power last resort
+    return CardEngine.getPower(a) - CardEngine.getPower(b);
+  });
+}
+
+/**
+ * Estimate the non-mana cost of activating an ability.
+ * Mirrors _scoreActivatedAbility so we can compare gain vs cost directly.
+ * (Mana cost is handled separately via canAfford / autoTap.)
+ */
+function _costValue(ability: any, state: any, playerId: number, sourceCreature: any): number {
+  let cost = 0;
+  const bf = state.players[playerId].zones.battlefield.cards;
+
+  // Sacrifice self
+  if (ability.cost.sacrifice) {
+    cost += _sacrificeCost(sourceCreature);
+  }
+
+  // Sacrifice another creature — pick the cheapest available victim
+  if (ability.cost.sacrifice_creature) {
+    const candidates = bf.filter((c: any) => CardEngine.isCreature(c) && c._uid !== sourceCreature._uid);
+    if (candidates.length === 0) return 99; // no target → infeasible
+    cost += _sacrificeCost(_sortByExpendable(candidates)[0]);
+  }
+
+  // Sacrifice a token — pick the cheapest token
+  if (ability.cost.sacrifice_token) {
+    const tokens = bf.filter((c: any) => c._isToken && CardEngine.isCreature(c) && c._uid !== sourceCreature._uid);
+    if (tokens.length === 0) return 99;
+    cost += _sacrificeCost(_sortByExpendable(tokens)[0]);
+  }
+
+  // Discard N cards from hand
+  if (ability.cost.discard) {
+    cost += (typeof ability.cost.discard === 'number' ? ability.cost.discard : 1) * 3;
+  }
+  if (ability.cost.discard_hand) {
+    cost += state.players[playerId].zones.hand.count() * 3;
+  }
+
+  // Pay life — more expensive the lower our life total
+  if (ability.cost.life) {
+    const n = typeof ability.cost.life === 'number' ? ability.cost.life : 1;
+    const myLife = state.players[playerId].life ?? 20;
+    cost += Math.round((n / Math.max(myLife, 1)) * 20);
+  }
+
+  // Tap opportunity cost (minor)
+  if (ability.cost.tap) cost += 1;
+
+  // Exile from GY (secondary resource)
+  if (ability.cost.exile_gy_creature) cost += 1;
+
+  // Remove counter from permanent
+  if (ability.cost.removeCounter) cost += 2;
+
+  return cost;
+}
+
 function _tryActivatedAbilities(state: any, playerId: number): void {
   // Clarion Conqueror: if activated abilities of creatures/artifacts/planeswalkers are globally locked, skip
   const globallyLocked = state.players.some((p: any) =>
@@ -1464,13 +1561,10 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
         }
       }
 
-      // Score each effect to find the best ability to activate
+      // Unified gain-vs-cost decision: only activate if we come out ahead
       const abilityScore = _scoreActivatedAbility(ability.effects, state, playerId, ability.cost.sacrifice ? creature : undefined);
-      // Sacrifice-self abilities need higher bar (losing the creature permanently)
-      // Exception: non-creature tokens (Food, Treasure) — sacrificing them is cheap
-      const isExpendableToken = creature._isToken && !CardEngine.isCreature(creature);
-      const minScore = (ability.cost.sacrifice && !isExpendableToken) ? 10 : 3;
-      if (abilityScore < minScore) continue; // Threshold: not worth activating
+      const abilityCost  = _costValue(ability, state, playerId, creature);
+      if (abilityScore - abilityCost < 1) continue;
 
       if (cmc > 0) {
         GameState.autoTapForSpell(state, playerId, manaCost, cmc);
@@ -1486,19 +1580,10 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
         state._abilityUsedThisTurn[key] = true;
       }
       if (ability.cost.sacrifice_creature) {
-        // Priority: tokens first, then fewest death triggers, then lowest power
-        const others = state.players[playerId].zones.battlefield.cards
-          .filter((c: any) => CardEngine.isCreature(c) && c._uid !== creature._uid)
-          .sort((a: any, b: any) => {
-            // Tokens are most expendable
-            if (a._isToken !== b._isToken) return a._isToken ? -1 : 1;
-            // Fewer death triggers = cheaper to lose
-            const aDt = CardEngine.getTriggeredAbilities(a).filter((t: any) => t.event === 'dies').length;
-            const bDt = CardEngine.getTriggeredAbilities(b).filter((t: any) => t.event === 'dies').length;
-            if (aDt !== bDt) return aDt - bDt;
-            // Lowest power last resort
-            return CardEngine.getPower(a) - CardEngine.getPower(b);
-          });
+        const others = _sortByExpendable(
+          state.players[playerId].zones.battlefield.cards
+            .filter((c: any) => CardEngine.isCreature(c) && c._uid !== creature._uid)
+        );
         if (others.length > 0) {
           const victim = others[0];
           GameState.creatureDies(state, victim, playerId);
@@ -1506,9 +1591,10 @@ function _tryActivatedAbilities(state: any, playerId: number): void {
         }
       }
       if (ability.cost.sacrifice_token) {
-        const tokens = state.players[playerId].zones.battlefield.cards
-          .filter((c: any) => CardEngine.isCreature(c) && c._isToken && c._uid !== creature._uid)
-          .sort((a: any, b: any) => CardEngine.getPower(a) - CardEngine.getPower(b));
+        const tokens = _sortByExpendable(
+          state.players[playerId].zones.battlefield.cards
+            .filter((c: any) => CardEngine.isCreature(c) && c._isToken && c._uid !== creature._uid)
+        );
         if (tokens.length > 0) {
           GameState.creatureDies(state, tokens[0], playerId);
           state.log.push(`Sacrifica ${tokens[0].name} token como custo.`);
@@ -2048,12 +2134,17 @@ export function declareAttackers(state: any, playerId: number): void {
   const boardScore = _evaluateBoard(state, playerId);
 
   const hand = state.players[playerId].zones.hand;
-  const hasCombatTrick = hand.getAll().some((c: any) => {
-    const tl = (c.type_line || '').toLowerCase();
-    if (!tl.includes('instant')) return false;
+  const myInstants = hand.getAll().filter((c: any) => (c.type_line || '').toLowerCase().includes('instant'));
+  const hasCombatTrick = myInstants.some((c: any) => {
     const effs = CardEngine.getSpellEffects(c);
-    return effs.some((e: any) => e.type === 'buff');
+    return effs.some((e: any) => e.type === 'buff' || e.type === 'buff_self');
   });
+  // Pump power: max single-creature buff available (for attack risk adjustment)
+  const myPumpPower = myInstants.reduce((max: number, c: any) => {
+    const effs = CardEngine.getSpellEffects(c);
+    const buff = effs.find((e: any) => e.type === 'buff' || e.type === 'buff_self');
+    return buff ? Math.max(max, buff.power || 0) : max;
+  }, 0);
 
   // Opponent removal risk: if opp has untapped mana and a small hand,
   // they may be holding an instant removal spell — reduce our trick confidence
@@ -2172,9 +2263,9 @@ export function declareAttackers(state: any, playerId: number): void {
             if (_allAtkCards.length > 1) {
               const _nnRank = aiBrain.scoreActionsSync(_atkBf, _allAtkCards, 'attack');
               const _bestAtk = _allAtkCards[_nnRank[0]];
-              if (_bestAtk) aiBrain.recordDecision(_atkBf, aiBrain.extractActionFeatures(_bestAtk, 'attack'));
+              if (_bestAtk) aiBrain.recordDecision(_atkBf, aiBrain.extractActionFeatures(_bestAtk, 'attack'), _nnRank[0] === 0);
             } else if (_allAtkCards[0]) {
-              aiBrain.recordDecision(_atkBf, aiBrain.extractActionFeatures(_allAtkCards[0], 'attack'));
+              aiBrain.recordDecision(_atkBf, aiBrain.extractActionFeatures(_allAtkCards[0], 'attack'), true);
             }
           } catch { /* non-fatal */ }
         }

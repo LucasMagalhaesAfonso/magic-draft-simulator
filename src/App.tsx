@@ -1,6 +1,6 @@
 import { useEffect, Component, type ReactNode } from 'react';
 import { useAppStore } from './store/useAppStore';
-import { getCardCount } from './lib/database';
+import { getCardCount, getSetList } from './lib/database';
 import { seedBundledSets, fetchAltArt } from './lib/scryfall';
 import { Header } from './components/shared/Header';
 import { HomeScreen } from './components/HomeScreen';
@@ -79,21 +79,27 @@ function App() {
     try {
       const count = await getCardCount();
       setTotalCards(count);
-      if (count === 0) {
-        // First launch — seed bundled sets (TDM + LTR) without internet
+
+      // Check which bundled sets are missing and seed only those
+      const existingSets = await getSetList();
+      const existingCodes = new Set(existingSets.map(s => s.set_code.toLowerCase()));
+      const missingSets = ['tdm', 'ltr'].filter(s => !existingCodes.has(s));
+
+      if (missingSets.length > 0) {
         setSyncing(true, 'Preparando cards...');
-        await seedBundledSets((p) => setSyncing(true, p.message));
+        await seedBundledSets((p) => setSyncing(true, p.message), missingSets);
         setSyncing(false);
         const newCount = await getCardCount();
         setTotalCards(newCount);
-      } else {
-        // Cards already exist — check if alt art is missing and fetch silently
-        for (const set of ['tdm', 'ltr']) {
-          if (!localStorage.getItem(`alt_art_${set}`)) {
-            fetchAltArt(set).catch(() => {}); // silent, non-blocking
-          }
+      }
+
+      // Fetch alt art silently for any set that's missing it
+      for (const set of ['tdm', 'ltr']) {
+        if (existingCodes.has(set) && !localStorage.getItem(`alt_art_${set}`)) {
+          fetchAltArt(set).catch(() => {});
         }
       }
+
       setDbReady(true);
     } catch (e) {
       console.error('Database init failed:', e);

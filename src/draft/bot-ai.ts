@@ -5,6 +5,25 @@
 // color signal reading, mana curve awareness, and archetype tracking.
 
 import type { Card } from '../lib/types';
+import { blendWithLands, preloadRatings } from '../lib/seventeen-lands';
+import { getArenaPickScore, getArenaPickTrust, preloadArenaPicks } from '../lib/arena-picks';
+
+// Preload data sources in the background when this module is imported
+preloadRatings().catch(() => {});
+preloadArenaPicks().catch(() => {});
+
+/**
+ * Final card score: BREAD → blended with 17lands (up to 65%) → blended with Arena picks (up to 40%).
+ * Arena picks are lower-trust because they come from one player's games; 17lands has thousands of games.
+ */
+function _blendAllSources(cardName: string, breadScore: number): number {
+  const landsBlended = blendWithLands(cardName, breadScore);
+  const arenaScore = getArenaPickScore(cardName);
+  if (arenaScore === null) return landsBlended;
+  const arenaTrust = getArenaPickTrust(cardName);
+  const arenaWeight = arenaTrust * 0.40;
+  return landsBlended * (1 - arenaWeight) + arenaScore * arenaWeight;
+}
 
 // ============================================
 // Human Pick Learning System
@@ -255,7 +274,8 @@ function _doPick(bot: BotState, card: Card): Card {
 
 function _evaluateCard(bot: BotState, card: Card): number {
   let score = 0;
-  score += _cardPower(card);
+  // Blend BREAD power with 17lands data-driven score when available
+  score += _blendAllSources(card.name || '', _cardPower(card));
   score += _colorFit(bot, card);
   score += _curveNeed(bot, card);
   score += _balanceNeed(bot, card);
@@ -939,7 +959,8 @@ function _isSituational(card: Card): boolean {
 }
 
 function _deckBuildScore(card: Card, colors: string[], archetype?: 'aggro' | 'control' | 'midrange'): number {
-  let score = _cardPower(card);
+  // Also blend 17lands data in deck-build scoring for better card selection
+  let score = _blendAllSources(card.name || '', _cardPower(card));
   const rarityBonus: Record<string, number> = { mythic: 0.3, rare: 0.2, uncommon: 0.1, common: 0 };
   score += rarityBonus[card.rarity] || 0;
 

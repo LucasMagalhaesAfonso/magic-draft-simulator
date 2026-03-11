@@ -7,7 +7,7 @@ import * as CardUtils from './card-utils';
 import * as GameState from './game-state';
 import * as GameAI from './game-ai';
 import * as StackPart2 from './stack-part2';
-import { vfxPlay } from './vfx-bridge';
+import { vfxPlay, vfxPlayText } from './vfx-bridge';
 
 // Legacy name aliases
 const CardEngine = { ...Cards, ...CardUtils };
@@ -293,6 +293,7 @@ export function _resolveItem(item, state) {
                 }
                 if (!_payWardCost(creature, controller, gameState, log, !!(card && (Cards.getPreprocessedEffects(card) as any)?.cantBeCountered))) continue;
                 vfxPlay('damage', creature._uid);
+                vfxPlayText(`-${dividedDmg}`, creature._uid, '#ff4a4a');
                 creature._damage += dividedDmg;
                 creature._damagedThisTurn = true;
                 log.push(`${creature.name} takes ${dividedDmg} damage.`);
@@ -304,6 +305,7 @@ export function _resolveItem(item, state) {
               gameState._damageDealtThisTurn[target.player] = (gameState._damageDealtThisTurn[target.player] || 0) + dividedDmg;
               log.push(`${dividedDmg} damage to player ${target.player}. (Life: ${gameState.players[target.player].life})`);
               vfxPlay('playerDamage', 'p' + target.player);
+              vfxPlayText(`-${dividedDmg}`, 'p' + target.player, '#ff4a4a');
             }
           }
           // Lifelink for total damage dealt

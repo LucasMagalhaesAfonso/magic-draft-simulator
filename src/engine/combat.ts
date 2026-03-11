@@ -10,7 +10,25 @@ import {
   canAttack,
   canBlock,
 } from './card-utils';
-import { vfxPlay } from './vfx-bridge';
+import { vfxPlay, vfxPlayText, vfxPlayCombat } from './vfx-bridge';
+
+/** Pick attack VFX type based on creature color identity */
+function _attackVfx(card: any): string {
+  const colors: string[] = card.colors || card.color_identity || [];
+  const r = colors.includes('R');
+  const u = colors.includes('U');
+  const g = colors.includes('G');
+  const b = colors.includes('B');
+  const w = colors.includes('W');
+  if (r && b) return 'attackBlood';
+  if (u && r) return 'attackLightning';
+  if (r)      return 'attackFire';
+  if (u)      return 'attackWater';
+  if (g)      return 'attackGreen';
+  if (b)      return 'attackDark';
+  if (w)      return 'attackGold';
+  return 'attackBlood'; // colorless / artifact
+}
 
 // Apply life gain with Phial of Galadriel replacement: doubles gain when at 5 or less life
 function applyLifelinkGain(player: any, amount: number): void {
@@ -630,6 +648,8 @@ export function resolveDamagePhase(
           );
 
           vfxPlay('playerDamage', 'p' + defendingPlayer.id);
+          vfxPlay(_attackVfx(attacker), 'p' + defendingPlayer.id);
+          vfxPlayText(`-${dmg}`, 'p' + defendingPlayer.id, '#ff4a4a');
 
           // Lifelink
           if (hasKeyword(attacker, 'Lifelink')) {
@@ -638,6 +658,7 @@ export function resolveDamagePhase(
               `${attacker.name} tem lifelink. +${dmg} vida. (Vida: ${attackingPlayer.life})`
             );
             vfxPlay('heal', 'p' + attackingPlayer.id);
+            vfxPlayText(`+${dmg} ❤`, 'p' + attackingPlayer.id, '#4aff7a');
           }
 
           attacker._hasDealtDamage = true;
@@ -736,9 +757,15 @@ export function resolveDamagePhase(
           }
         }
 
-        // VFX: show damage on both creatures
-        vfxPlay('damage', blocker._uid);
-        if (blockerPower > 0) vfxPlay('damage', uid);
+        // VFX: both strikes simultaneously; groupKey=uid so all blockers of same attacker share slot
+        vfxPlayCombat(
+          uid,          blocker._uid,
+          blockerPower > 0 ? blocker._uid : undefined,
+          blockerPower > 0 ? uid          : undefined,
+          uid, // groupKey = attacker UID
+        );
+        if (attackPower > 0)  vfxPlayText(`-${attackPower}`,  blocker._uid, '#ff4a4a');
+        if (blockerPower > 0) vfxPlayText(`-${blockerPower}`, uid,          '#ff4a4a');
 
         log.push(
           `${attacker.name} (${attackPower}/${getToughness(attacker)}) combate com ${blocker.name} (${blockerPower}/${getToughness(blocker)})`

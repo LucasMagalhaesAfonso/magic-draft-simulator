@@ -9,7 +9,11 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "fetch-17lands": "npx tsx tools/fetch-17lands.ts",
+    "export-ai-model": "npx tsx tools/export-ai-model.ts",
+    "parse-arena-log": "npx tsx tools/parse-arena-log.ts",
+    "fetch-mtgo-data": "npx tsx tools/fetch-mtgo-data.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -1514,51 +1514,61 @@
   gap: 1px;
   z-index: 5;
   pointer-events: none;
+  background: rgba(0,0,0,0.55);
+  border-radius: 4px;
+  padding: 1px 2px;
 }
 .bf-mana-cost img {
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9));
+}
+/* ManaCostPips adds a margin-left: 6px by default — remove inside bf-mana-cost */
+.bf-mana-cost > span {
+  margin-left: 0 !important;
 }
 
 /* ── Keyword badges on BF cards ── */
 .bf-keyword-badges {
   position: absolute;
-  bottom: 0px;
-  left: 0px;
+  bottom: 22px;
+  left: 2px;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  max-width: 60%;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 95%;
   z-index: 5;
 }
 
 .kw-badge {
-  background: rgba(0,0,0,0.75);
+  background: rgba(0,0,0,0.82);
   color: #f0c040;
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
-  padding: 1px 3px;
+  padding: 2px 2px;
   border-radius: 3px;
-  line-height: 1.2;
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.7);
 }
 
 /* ── Keyword badge image icon ── */
 .kw-badge-img {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   object-fit: contain;
   display: block;
-  filter: drop-shadow(0 0 1px #000);
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9)) brightness(1.05);
 }
 
 /* ── Temp-granted keyword badge (until EOT) ── */
 .kw-badge.kw-temp {
   border: 1px solid #f0c040;
   color: #f0c040;
-  opacity: 0.85;
-  background: rgba(60,40,0,0.85);
+  opacity: 0.9;
+  background: rgba(60,40,0,0.88);
 }
 
 /* ── Equipment: attached indicator (on equipment card) ── */
@@ -1937,7 +1947,9 @@
   position: fixed;
   z-index: 100;
   pointer-events: none;
+  opacity: 1;
   animation: cardExitFade 400ms ease-out forwards;
+  animation-fill-mode: both;
 }
 
 .exit-ghost img {

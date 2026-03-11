@@ -61,6 +61,10 @@ export function DeckBuilderScreen() {
   const [colorFilter, setColorFilter] = useState<Set<string>>(new Set());
   const [rarityFilter, setRarityFilter] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'pool' | 'deck'>('pool');
+  const [saveModal, setSaveModal] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [decksModal, setDecksModal] = useState(false);
+  const [savedDecks, setSavedDecks] = useState<{ id: number; name: string; set_code: string; created_at: string }[]>([]);
 
   // Fetch basic land card images from DB — prefer selected set, fallback to any
   const [landCardImages, setLandCardImages] = useState<Record<string, string>>({});
@@ -285,9 +289,86 @@ export function DeckBuilderScreen() {
   }
 
   function handleSave() {
+    setSaveName('');
+    setSaveModal(true);
+  }
+
+  async function handleSaveConfirm() {
+    const name = saveName.trim() || `Deck ${new Date().toLocaleDateString()}`;
+    setSaveModal(false);
     setDeck({ mainboard, sideboard, lands });
-    setToast(`Deck saved! (${totalCards} cards)`);
+    try {
+      const { saveDeck: dbSaveDeck } = await import('../lib/database');
+      await dbSaveDeck(name, mainboard, sideboard, selectedSet);
+      setToast(`"${name}" salvo! (${totalCards} cards)`);
+    } catch {
+      setToast(`Deck salvo na sessão (${totalCards} cards)`);
+    }
     setTimeout(() => setToast(null), 2500);
+  }
+
+  async function handleOpenDecks() {
+    try {
+      const { getDecks } = await import('../lib/database');
+      const decks = await getDecks();
+      setSavedDecks(decks);
+    } catch {
+      setSavedDecks([]);
+    }
+    setDecksModal(true);
+  }
+
+  async function handleLoadDeck(id: number) {
+    try {
+      const { getDeckById, getCardsBySet } = await import('../lib/database');
+      const deck = await getDeckById(id);
+      if (!deck) return;
+      const allCards = await getCardsBySet(deck.set_code);
+      const cardMap = new Map<string, Card[]>();
+      for (const card of allCards) {
+        const list = cardMap.get(card.id) ?? [];
+        list.push(card);
+        cardMap.set(card.id, list);
+      }
+      function resolveIds(json: string): Card[] {
+        const ids: string[] = JSON.parse(json);
+        const used = new Map<string, number>();
+        const result: Card[] = [];
+        for (const id of ids) {
+          const list = cardMap.get(id);
+          if (!list) continue;
+          const usedIdx = used.get(id) ?? 0;
+          result.push(list[usedIdx % list.length]);
+          used.set(id, usedIdx + 1);
+        }
+        return result;
+      }
+      const loadedMain = resolveIds(deck.cards_json);
+      const loadedSide = resolveIds(deck.sideboard_json);
+      setMainboard(loadedMain);
+      setSideboard(loadedSide);
+      setLands({ W: 0, U: 0, B: 0, R: 0, G: 0 });
+      setColumnOverrides({});
+      setTypeOverrides({});
+      setDecksModal(false);
+      setToast(`"${deck.name}" carregado!`);
+      setTimeout(() => setToast(null), 2500);
+    } catch {
+      setToast('Erro ao carregar deck');
+      setTimeout(() => setToast(null), 2500);
+    }
+  }
+
+  async function handleDeleteDeck(id: number, name: string) {
+    if (!confirm(`Deletar "${name}"?`)) return;
+    try {
+      const { deleteDeck } = await import('../lib/database');
+      await deleteDeck(id);
+      setSavedDecks(prev => prev.filter(d => d.id !== id));
+    } catch {
+      setToast('Erro ao deletar deck');
+      setTimeout(() => setToast(null), 2500);
+    }
   }
 
   // ── Right-click zoom ────────────────────────────────────────
@@ -463,6 +544,58 @@ export function DeckBuilderScreen() {
   return (
     <div className="db-screen animate-fade-in" onClick={() => setZoomCard(null)}>
       {toast && <div className="db-toast">{toast}</div>}
+      {/* ── Save Name Modal ─────────────────────────────────── */}
+      {saveModal && (
+        <div className="db-zoom-overlay" onClick={() => setSaveModal(false)}>
+          <div className="db-save-modal glass" onClick={e => e.stopPropagation()}>
+            <div className="db-save-modal-title">💾 Salvar Deck</div>
+            <input
+              className="db-save-input"
+              type="text"
+              placeholder={`Deck ${new Date().toLocaleDateString()}`}
+              value={saveName}
+              onChange={e => setSaveName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleSaveConfirm(); if (e.key === 'Escape') setSaveModal(false); }}
+              autoFocus
+            />
+            <div className="db-save-modal-btns">
+              <button className="btn btn-muted" onClick={() => setSaveModal(false)}>Cancelar</button>
+              <button className="btn btn-gold" onClick={handleSaveConfirm}>Salvar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── My Decks Modal ──────────────────────────────────── */}
+      {decksModal && (
+        <div className="db-zoom-overlay" onClick={() => setDecksModal(false)}>
+          <div className="db-decks-modal glass" onClick={e => e.stopPropagation()}>
+            <div className="db-save-modal-title">📂 Meus Decks</div>
+            {savedDecks.length === 0 ? (
+              <div className="db-decks-empty">Nenhum deck salvo ainda.</div>
+            ) : (
+              <div className="db-decks-list">
+                {savedDecks.map(d => (
+                  <div key={d.id} className="db-deck-row">
+                    <div className="db-deck-info">
+                      <span className="db-deck-name">{d.name}</span>
+                      <span className="db-deck-meta">{d.set_code.toUpperCase()} · {new Date(d.created_at).toLocaleDateString()}</span>
+                    </div>
+                    <div className="db-deck-actions">
+                      <button className="btn btn-gold btn-sm" onClick={() => handleLoadDeck(d.id)}>Carregar</button>
+                      <button className="btn btn-danger btn-sm" onClick={() => handleDeleteDeck(d.id, d.name)}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="db-save-modal-btns">
+              <button className="btn btn-muted" onClick={() => setDecksModal(false)}>Fechar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Card Zoom Overlay ────────────────────────────────── */}
       {zoomCard && (
         <div
@@ -537,6 +670,7 @@ export function DeckBuilderScreen() {
           <button className={`btn btn-muted${typeRows ? ' btn-active' : ''}`} onClick={() => setTypeRows(t => !t)} title="Group cards by type within each CMC column">≡ Types</button>
           <button className="btn btn-muted" onClick={handleAutoBuild}>⚡ Auto-Build</button>
           <button className="btn btn-muted" onClick={handleSave}>💾 Save</button>
+          <button className="btn btn-muted" onClick={handleOpenDecks}>📂 Meus Decks</button>
           <button className="btn btn-gold" onClick={handleStartGame}>▶ Play vs AI</button>
         </div>
       </div>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, memo } from 'react';
 import type { Card } from '../../lib/types';
 import { getTokenImageUrl, preloadTokenImage } from '../../engine/token-images';
 import { useAppStore } from '../../store/useAppStore';
+import { ManaCostPips } from '../game/GameOverlays';
 import './CardImage.css';
 
 const LAND_COLOR_MAP: Record<string, string> = {
@@ -140,7 +141,7 @@ export const CardImage = memo(function CardImage({ card, size = 'medium', select
       >
         <div style={{ fontSize: 10, fontWeight: 700, color: '#e0d0b0', textAlign: 'center', lineHeight: 1.2 }}>{card.name}</div>
         <div style={{ fontSize: 8, color: '#999', marginTop: 2 }}>{typeLine}</div>
-        {card.mana_cost && <div style={{ fontSize: 9, color: '#aaa', marginTop: 2 }}>{card.mana_cost}</div>}
+        {card.mana_cost && <div style={{ marginTop: 3, display: 'flex', justifyContent: 'center' }}><ManaCostPips cost={card.mana_cost} size={10} /></div>}
         {selected && <div className="card-selected-overlay" />}
       </div>
     );

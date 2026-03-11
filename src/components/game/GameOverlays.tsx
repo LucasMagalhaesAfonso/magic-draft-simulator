@@ -5,6 +5,7 @@
 // 14. Instant Priority Banner  15. Stack Priority Banner
 
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import type { GameActions } from '../../hooks/useGameEngine';
 import { CardImage } from '../card/CardImage';
 import * as CardEngine from '../../engine/cards';
@@ -326,7 +327,7 @@ export function ModalOverlay({ pendingModal, onConfirm, onCancel, onViewBattlefi
             >
               <span className="modal-mode-num">{i + 1}</span>
               {mode?.label && <span className="modal-mode-label">{mode.label}</span>}
-              <span className="modal-mode-desc">{describeMode(mode)}</span>
+              <span className="modal-mode-desc"><ManaText text={describeMode(mode)} size={13} /></span>
               {mode?.disabled && <span className="modal-mode-unavailable"> (indisponível)</span>}
             </button>
           ))}
@@ -516,7 +517,7 @@ export const MANA_IMAGES: Record<string, string> = {
   W: manaImgW, U: manaImgU, B: manaImgB, R: manaImgR, G: manaImgG,
 };
 const MANA_PIP_COLORS: Record<string, string> = {
-  C: '#8a8a8a', X: '#555',
+  C: '#8a8a8a', X: '#555', T: '#3a7abf',
 };
 export function ManaCostPips({ cost, size = 18 }: { cost: string; size?: number }) {
   if (!cost) return null;
@@ -544,6 +545,42 @@ export function ManaCostPips({ cost, size = 18 }: { cost: string; size?: number 
             border: '1px solid rgba(255,255,255,0.2)',
           }}>{isNum ? sym : sym}</span>
         );
+      })}
+    </span>
+  );
+}
+
+// ─── Inline mana text renderer (handles mixed text + {X} symbols) ────────────
+/** Renders a string like "Tap: Add {G}" with mana symbols as pip images inline. */
+export function ManaText({ text, size = 14 }: { text: string; size?: number }) {
+  if (!text) return null;
+  const parts = text.split(/(\{[^}]+\})/g);
+  return (
+    <span style={{ display: 'inline', lineHeight: 1.4 }}>
+      {parts.map((part, i) => {
+        if (/^\{[^}]+\}$/.test(part)) {
+          const sym = part.slice(1, -1);
+          if (MANA_IMAGES[sym]) {
+            return (
+              <img key={i} src={MANA_IMAGES[sym]} alt={sym}
+                style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover',
+                         display: 'inline-block', verticalAlign: 'middle', margin: '0 1px' }} />
+            );
+          }
+          const bg = MANA_PIP_COLORS[sym] ?? '#444';
+          const label = sym === 'T' ? '⟳' : sym;
+          return (
+            <span key={i} style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: size, height: size, borderRadius: '50%',
+              background: bg, color: '#eee',
+              fontSize: Math.round(size * 0.58), fontWeight: 700,
+              border: '1px solid rgba(255,255,255,0.2)',
+              verticalAlign: 'middle', margin: '0 1px',
+            }}>{label}</span>
+          );
+        }
+        return <span key={i}>{part}</span>;
       })}
     </span>
   );
@@ -666,7 +703,7 @@ export function SearchLibraryOverlay({ candidates, optional, title, hint, onConf
 
 // ─── Creature Choice Overlay (Blight / Sacrifice / Buff) ────────────────────
 interface CreatureChoiceOverlayProps {
-  creatures: any[]; title?: string; hint?: string; optional?: boolean; skipLabel?: string;
+  creatures: any[]; title?: ReactNode; hint?: string; optional?: boolean; skipLabel?: ReactNode;
   onConfirm: (cardUid: string | null) => void;
 }
 export function CreatureChoiceOverlay({ creatures, title, hint, optional, skipLabel, onConfirm }: CreatureChoiceOverlayProps) {
@@ -1056,7 +1093,7 @@ export function ClashOverlay({ myCard, oppCard, myCmc, oppCmc, won, cardName, on
 }
 
 // ─── Confirm Optional Overlay ────────────────────────────────────────────────
-interface ConfirmOptionalProps { message: string; onConfirm: (confirmed: boolean) => void; }
+interface ConfirmOptionalProps { message: ReactNode; onConfirm: (confirmed: boolean) => void; }
 export function ConfirmOptionalOverlay({ message, onConfirm }: ConfirmOptionalProps) {
   return (
     <div className="overlay-backdrop">
@@ -1078,8 +1115,12 @@ export function UnlessPayOverlay({ spell, costStr, onConfirm }: UnlessPayOverlay
   return (
     <div className="overlay-backdrop">
       <div className="overlay-panel glass" style={{ maxWidth: 420, textAlign: 'center' }}>
-        <h3 className="overlay-title">💸 Pay {costStr}?</h3>
-        <p className="overlay-hint"><strong>{spell?.name}</strong> — pay {costStr} to prevent?</p>
+        <h3 className="overlay-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          💸 Pay <ManaCostPips cost={costStr} size={18} />?
+        </h3>
+        <p className="overlay-hint" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, flexWrap: 'wrap' }}>
+          <strong>{spell?.name}</strong> — pay <ManaCostPips cost={costStr} size={15} /> to prevent?
+        </p>
         <div style={{ display: 'flex', gap: 12 }}>
           <button className="btn btn-gold" style={{ flex: 1 }} onClick={() => onConfirm(true)}>✅ Pay</button>
           <button className="btn btn-muted" style={{ flex: 1 }} onClick={() => onConfirm(false)}>❌ Don't Pay</button>
@@ -1255,7 +1296,7 @@ export function AbilityModal({ card, abilities, onActivate, onClose, availableMa
             <button className="btn btn-muted btn-sm" onClick={onClose}>✕</button>
           </div>
           <p className="overlay-hint" style={{ margin: '8px 0 16px' }}>
-            {describeAbility(ab)}
+            <ManaText text={describeAbility(ab)} size={14} />
           </p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, marginBottom: 20 }}>
             <button
@@ -1349,7 +1390,7 @@ export function AbilityModal({ card, abilities, onActivate, onClose, availableMa
                 ) : (
                   <span className="modal-mode-num">{i + 1}</span>
                 )}
-                <span className="modal-mode-desc">{describeAbility(ab)}{hasX ? ' ✦ Choose X' : ''}</span>
+                <span className="modal-mode-desc"><ManaText text={describeAbility(ab)} size={13} />{hasX ? ' ✦ Choose X' : ''}</span>
               </button>
             );
           })}
@@ -1367,8 +1408,8 @@ export function TriggerCostOverlay({ triggerName, costDesc, effectDesc, onConfir
       <div className="overlay-panel glass" style={{ maxWidth: 460, textAlign: 'center' }}>
         <h3 className="overlay-title">⚡ {triggerName} — Habilidade Opcional</h3>
         {costDesc && (
-          <p className="overlay-hint" style={{ fontSize: 15 }}>
-            Pagar <strong>{costDesc}</strong> para ativar?
+          <p className="overlay-hint" style={{ fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, flexWrap: 'wrap' }}>
+            Pagar <strong><ManaText text={costDesc} size={15} /></strong> para ativar?
           </p>
         )}
         {effectDesc && (

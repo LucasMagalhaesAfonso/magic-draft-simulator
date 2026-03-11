@@ -107,7 +107,7 @@ export function declareBlockers(state, playerId) {
         if (assignedBlockers.length > 0) {
           const _nnRank = aiBrain.scoreActionsSync(_nnBf, assignedBlockers, 'block');
           const _best = assignedBlockers[_nnRank[0]];
-          if (_best) aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(_best, 'block'));
+          if (_best) aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(_best, 'block'), _nnRank[0] === 0);
         }
       } catch { /* non-fatal */ }
     }
@@ -823,7 +823,7 @@ export function _chooseTargets(state, playerId, card) {
                 const top3 = killable.slice(0, 3);
                 const _rank = aiBrain.scoreActionsSync(_bf, top3, 'target');
                 bestTarget = top3[_rank[0]];
-                aiBrain.recordDecision(_bf, aiBrain.extractActionFeatures(bestTarget, 'target'));
+                aiBrain.recordDecision(_bf, aiBrain.extractActionFeatures(bestTarget, 'target'), _rank[0] === 0);
               } catch { bestTarget = killable[0]; }
             }
             targets.push({ type: 'creature', player: opponentId, uid: bestTarget._uid });
@@ -847,7 +847,7 @@ export function _chooseTargets(state, playerId, card) {
                 const top3 = opCreatures.slice(0, 3);
                 const _rank = aiBrain.scoreActionsSync(_bf, top3, 'target');
                 bestExile = top3[_rank[0]];
-                aiBrain.recordDecision(_bf, aiBrain.extractActionFeatures(bestExile, 'target'));
+                aiBrain.recordDecision(_bf, aiBrain.extractActionFeatures(bestExile, 'target'), _rank[0] === 0);
               } catch { bestExile = opCreatures[0]; }
             }
             targets.push({ type: 'creature', player: opponentId, uid: bestExile._uid });
@@ -1274,7 +1274,7 @@ export function playInstantPhase(state, playerId, phase) {
         const _nnRank = aiBrain.scoreActionsSync(_nnBf, _above.map((x: any) => x.card), 'instant');
         const _nnSorted = _nnRank.map((i: number) => _above[i]);
         if (_nnSorted.length > 0) {
-          aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(_nnSorted[0].card, 'instant'));
+          aiBrain.recordDecision(_nnBf, aiBrain.extractActionFeatures(_nnSorted[0].card, 'instant'), _nnRank[0] === 0);
           _nnIterList = [..._nnSorted, ...currentScored.filter((x: any) => x.score <= scoreThreshold)];
         }
       }

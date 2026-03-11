@@ -5,6 +5,7 @@ import * as Cards from './cards';
 import * as Mana from './mana';
 import * as CardUtils from './card-utils';
 import * as GameState from './game-state';
+import { vfxPlay } from './vfx-bridge';
 
 // Legacy name aliases
 const CardEngine = { ...Cards, ...CardUtils };
@@ -412,6 +413,7 @@ export function handleCounterSpell(
   // Track MV for free_cast effects (Press the Enemy)
   state._lastBouncedMV = targetSpell.cmc || 0;
   log.push(`${targetSpell.name} is ${effect.return_to_hand ? 'returned to hand' : 'countered'}.`);
+  vfxPlay('counterSpell', targetSpell._uid);
   return null;
 }
 

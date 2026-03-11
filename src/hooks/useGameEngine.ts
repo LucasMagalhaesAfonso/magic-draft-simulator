@@ -3,12 +3,86 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Card } from '../lib/types';
-import { VfxManager } from '../components/game/VfxLayer';
-import { setVfxBridge } from '../engine/vfx-bridge';
+import { VfxManager, TRAVEL_MS } from '../components/game/VfxLayer';
+import { setVfxBridge, setVfxTextBridge, setCombatVfxBridge } from '../engine/vfx-bridge';
 import { aiBrain } from '../engine/ai-brain';
+import { SoundManager } from '../engine/sound-manager';
 
-// ── Register VFX bridge so engine can trigger animations ──────────────────
-setVfxBridge((type, targetUid) => VfxManager.play(type as any, targetUid));
+// ── Register VFX bridges so engine can trigger animations ─────────────────
+
+// Combat: sequential, one pair at a time with Arena-style travel animation
+let _combatSlot = 0;
+let _lastGroupKey: string | undefined = undefined;
+let _slotResetTimer: ReturnType<typeof setTimeout> | null = null;
+const COMBAT_STEP_MS = 750; // ms between each attacker group
+
+// Text queue: each vfxPlayCombat pre-queues the delay for the next vfxPlayText call
+const _textDelayQueue: number[] = [];
+
+function _getCenter(uid: string): { x: number; y: number } | null {
+  const el = document.querySelector(`[data-uid="${uid}"]`);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+setCombatVfxBridge((fromUid, toUid, revFrom, revTo, groupKey) => {
+  // Capture positions + images NOW (DOM still has pre-combat layout)
+  VfxManager.cacheCardPos(fromUid);
+  VfxManager.cacheCardPos(toUid);
+  const from = _getCenter(fromUid);
+  const to   = _getCenter(toUid);
+  if (!from || !to) return;
+
+  // Optional simultaneous counter-strike (blocker → attacker)
+  const revFromPos = revFrom ? _getCenter(revFrom) : null;
+  const revToPos   = revTo   ? _getCenter(revTo)   : null;
+  if (revFrom) VfxManager.cacheCardPos(revFrom);
+  if (revTo)   VfxManager.cacheCardPos(revTo);
+
+  // Increment slot only when attacker changes (double/triple block = same slot)
+  if (groupKey !== _lastGroupKey) {
+    if (_lastGroupKey !== undefined) _combatSlot++;
+    _lastGroupKey = groupKey;
+  }
+  const slotDelay = _combatSlot * COMBAT_STEP_MS;
+  if (_slotResetTimer) clearTimeout(_slotResetTimer);
+  _slotResetTimer = setTimeout(() => { _combatSlot = 0; _lastGroupKey = undefined; }, slotDelay + 3000);
+
+  // Both damage texts appear on impact
+  const textDelay = slotDelay + 60;
+  _textDelayQueue.push(textDelay);
+  if (revFrom) _textDelayQueue.push(textDelay);
+
+  // Register when this animation ends so ghosts stay alive long enough
+  VfxManager.setCombatAnimEnd(Date.now() + slotDelay + 500);
+
+  setTimeout(() => {
+    VfxManager.play('damage', undefined, to.x, to.y);
+    if (revFromPos && revToPos) VfxManager.play('damage', undefined, revToPos.x, revToPos.y);
+  }, slotDelay);
+});
+
+setVfxBridge((_type, _targetUid) => {
+  // playerDamage é detectado via useEffect de vida no GameScreen (cobre todos os casos)
+  // outros VFX sendo definidos um a um; combat já tratado pelo combatBridge
+});
+
+setVfxTextBridge((text, _targetUid, color) => {
+  // Use pre-queued delay from the corresponding combatStrike call
+  // For text calls that aren't from combat, delay=0
+  const delay = _textDelayQueue.shift() ?? 0;
+  const { x, y } = (() => {
+    const el = _targetUid ? document.querySelector(`[data-uid="${_targetUid}"]`) : null;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+    return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  })();
+  // Capture position now, show later at that fixed position
+  setTimeout(() => VfxManager.playText(text, undefined, color, x, y - 10), delay);
+});
 
 // ── Lazy import helpers (avoid circular deps) ──────────────────────────────
 
@@ -300,6 +374,8 @@ export interface TriggerToastItem {
   imageUrlLarge: string | null;
   controllerId: number;
   effectDesc: string;
+  isToken?: boolean;
+  tokenColors?: string[];
 }
 
 export interface GameSnapshot {
@@ -392,6 +468,9 @@ export interface GameActions {
   resolveBeholdChoice(uid: string | null): void;
   resolveOrderBlockers(manualOrder?: Record<string, string[]>): void;
   resolveUnknownInput(): void;
+
+  // Put card on bottom
+  resolvePutOnBottom(cardUid: string): void;
 
   // Discard overlays
   resolveDiscard(cardUids: string[]): void;
@@ -944,6 +1023,9 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
             _GS.detectAndFireTapTriggers(gs);
           }
           if (_Combat?.fireAttackTriggers) {
+            gs._attackTriggersFireDone = true; // prevent advancePhase from firing triggers again
+            if (!gs._attackedThisTurn) gs._attackedThisTurn = {};
+            gs._attackedThisTurn[0] = true;
             const triggerLogs = _Combat.fireAttackTriggers(gs.combat, gs, 0);
             gs.log.push(...triggerLogs);
           }
@@ -2646,6 +2728,27 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         afterResolve(gs);
         refresh();
       } catch (e) { console.warn('[resolveUnknownInput] error:', e); }
+    },
+
+    // ── Put card on bottom of library ────────────────────────────────────────
+
+    resolvePutOnBottom(cardUid: string) {
+      const gs = gsRef.current;
+      if (!gs) return;
+      try {
+        const hand = gs.players[0].zones.hand;
+        const lib  = gs.players[0].zones.library;
+        const card = hand.getAll().find((c: any) => c._uid === cardUid);
+        if (card) {
+          hand.remove(card._uid);
+          lib.addToBottom(card);
+          gs.log.push(`${card.name} é posto na base do grimório.`);
+        }
+        gs._pendingPutOnBottom = null;
+        gs.waitingForInput = null;
+        afterResolve(gs);
+        refresh();
+      } catch (e) { console.warn('[resolvePutOnBottom] error:', e); }
     },
 
     // ── Discard overlays ────────────────────────────────────────────────────

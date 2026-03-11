@@ -242,6 +242,26 @@ export async function browserGetDecks(): Promise<{ id: number; name: string; set
   return idbGetAll(transaction.objectStore('decks'));
 }
 
+export async function browserGetDeckById(id: number): Promise<{ id: number; name: string; set_code: string; cards_json: string; sideboard_json: string } | null> {
+  const db = await openDb();
+  const transaction = db.transaction('decks', 'readonly');
+  return new Promise((resolve, reject) => {
+    const req = transaction.objectStore('decks').get(id);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function browserDeleteDeck(id: number): Promise<void> {
+  const db = await openDb();
+  const transaction = db.transaction('decks', 'readwrite');
+  return new Promise((resolve, reject) => {
+    const req = transaction.objectStore('decks').delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export async function browserSaveDeck(name: string, cards: Card[], sideboard: Card[], setCode: string): Promise<number> {
   const db = await openDb();
   const transaction = db.transaction('decks', 'readwrite');

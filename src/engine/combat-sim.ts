@@ -501,6 +501,72 @@ export function findBestBlocking(
 }
 
 // ============================================
+// Essential Blocker Assignment
+// ============================================
+
+/**
+ * Determines which of my creatures should stay back to block opponent threats.
+ * Returns a Set of indices (into myCandidates) that should NOT attack.
+ *
+ * Rules:
+ * - A threat is "significant" if its power >= 3, OR myLife <= 10 and it has any power
+ * - Assign the cheapest creature that can block (prefer those that trade or survive)
+ * - Vigilant creatures are exempt — they can both attack and block
+ * - If no blocker can stop a flying threat, skip it (nothing to assign)
+ */
+function _findEssentialBlockers(
+  myCandidates: CreatureSnapshot[],
+  oppThreats: CreatureSnapshot[],
+  myLife: number
+): Set<number> {
+  const reserved = new Set<number>();
+  if (oppThreats.length === 0) return reserved;
+
+  // Sort threats by danger (power, with flying bonus)
+  const sorted = [...oppThreats].sort((a, b) => {
+    const aScore = a.power * (a.flying ? 1.4 : 1) * (a.deathtouch ? 1.3 : 1);
+    const bScore = b.power * (b.flying ? 1.4 : 1) * (b.deathtouch ? 1.3 : 1);
+    return bScore - aScore;
+  });
+
+  for (const opp of sorted) {
+    if (opp.power === 0) continue;
+
+    const isSignificant = opp.power >= 3 || (myLife <= 10 && opp.power >= 2) || (myLife <= 6);
+    if (!isSignificant) continue;
+
+    // Available blockers: not yet reserved, not vigilant (vigilant can still attack), can block
+    const available = myCandidates
+      .map((c, i) => ({ c, i }))
+      .filter(({ c, i }) => {
+        if (reserved.has(i)) return false;
+        if (c.vigilance) return false; // vigilance = free attacker, doesn't need to hold back
+        if (opp.flying && !c.flying && !c.reach) return false;
+        return true;
+      });
+
+    if (available.length === 0) continue;
+
+    // Rank: prefer blockers that survive (toughness > opp.power) and have low value
+    // Avoid assigning a creature much more valuable than the threat unless necessary
+    const ranked = available.sort(({ c: a }, { c: b }) => {
+      const aSurvives = a.toughness > opp.power && !opp.deathtouch;
+      const bSurvives = b.toughness > opp.power && !b.deathtouch;
+      const aKills = a.power >= opp.toughness || a.deathtouch;
+      const bKills = b.power >= opp.toughness || b.deathtouch;
+      // Best: survives AND kills (free block), then survives, then trades, then dies without kill
+      const aScore = (aSurvives ? 4 : 0) + (aKills ? 2 : 0) - creatureValue(a);
+      const bScore = (bSurvives ? 4 : 0) + (bKills ? 2 : 0) - creatureValue(b);
+      return bScore - aScore;
+    });
+
+    reserved.add(ranked[0].i);
+  }
+
+  return reserved;
+}
+
+// ============================================
 // Optimal Attacker Selection
 // ============================================
 
@@ -517,8 +583,33 @@ export function findBestAttackers(
   const candidates = myCreatures.filter(c => !c.defender);
   if (candidates.length === 0) return { attackerIndices: [], score: 0 };
 
-  // Lethal check: unblockable power
-  const unblockablePower = candidates.reduce((sum, c) => {
+  // No blockers: attack with all creatures that have power > 0 — free damage, zero risk
+  if (oppBlockers.length === 0) {
+    const attackers = candidates.map((c, i) => ({ c, i })).filter(({ c }) => c.power > 0);
+    return {
+      attackerIndices: attackers.map(({ i }) => i),
+      score: attackers.reduce((s, { c }) => s + c.power, 0),
+    };
+  }
+
+  // Identify essential blockers: creatures we need to keep back to stop opponent threats
+  // Skip this when winning big (boardScore > 15) — press the advantage
+  const essentialBlockerIdxs = boardScore <= 15
+    ? _findEssentialBlockers(candidates, oppBlockers, myLife)
+    : new Set<number>();
+
+  // Effective candidates = those NOT reserved as essential blockers
+  // Vigilant creatures appear in both pools (they can attack and still block)
+  const effectiveCandidates = candidates.filter((c, i) =>
+    !essentialBlockerIdxs.has(i) || c.vigilance
+  );
+
+  // If ALL candidates are reserved as blockers, still let through
+  // free/safe attackers (flying vs. ground, vigilance, indestructible)
+  const workingCandidates = effectiveCandidates.length > 0 ? effectiveCandidates : candidates;
+
+  // Lethal check: unblockable power (use ALL candidates — essential blockers can still be sent for lethal)
+  const unblockablePower = workingCandidates.reduce((sum, c) => {
     if (c.indestructible || c.vigilance) return sum + c.power;
     const canBeBlocked = oppBlockers.some(b => {
       if (c.flying && !b.flying && !b.reach) return false;
@@ -529,7 +620,7 @@ export function findBestAttackers(
   }, 0);
 
   let trampleExcess = 0;
-  for (const c of candidates) {
+  for (const c of workingCandidates) {
     if (!c.trample) continue;
     const bestBlockerTough = oppBlockers
       .filter(b => !(c.flying && !b.flying && !b.reach))
@@ -539,6 +630,7 @@ export function findBestAttackers(
     }
   }
 
+  // For true lethal, send everything (including blockers)
   if (unblockablePower + trampleExcess >= oppLife) {
     return {
       attackerIndices: candidates.map((_, i) => i),
@@ -547,8 +639,8 @@ export function findBestAttackers(
     };
   }
 
-  // Score each creature for attacking
-  const scores = candidates.map((c, idx) => {
+  // Score each creature for attacking (only working candidates — essential blockers excluded)
+  const scores = workingCandidates.map((c, idx) => {
     let score = 0;
     score += c.power;
 
@@ -665,7 +757,7 @@ export function findBestAttackers(
   const attackerIndices = scores.filter(s => s.score >= threshold).map(s => s.idx);
 
   if (attackerIndices.length > 0) {
-    const selectedSnaps = attackerIndices.map(i => candidates[i]);
+    const selectedSnaps = attackerIndices.map(i => workingCandidates[i]);
     const simResult = findBestBlocking(selectedSnaps, oppBlockers, oppLife, boardScore);
 
     let totalScore = simResult.result.playerDamage * 2;
@@ -680,7 +772,7 @@ export function findBestAttackers(
     if (totalScore < 0) {
       const topN = scores.filter(s => s.score >= threshold + 2).map(s => s.idx);
       if (topN.length > 0 && topN.length < attackerIndices.length) {
-        const topSnaps = topN.map(i => candidates[i]);
+        const topSnaps = topN.map(i => workingCandidates[i]);
         const topResult = findBestBlocking(topSnaps, oppBlockers, oppLife, boardScore);
         let topScore = topResult.result.playerDamage * 2;
         for (const ai of topResult.result.deadAttackers) {
@@ -695,7 +787,7 @@ export function findBestAttackers(
       }
 
       const freeAttackers = scores.filter(s => {
-        const c = candidates[s.idx];
+        const c = workingCandidates[s.idx];
         if (c.vigilance || c.indestructible) return true;
         const canBeBlockedBy = oppBlockers.filter(b => {
           if (c.flying && !b.flying && !b.reach) return false;
@@ -713,7 +805,7 @@ export function findBestAttackers(
 
     // Counter-attack lethal check: if we attack (tapping non-vigilant creatures),
     // will the opponent be able to deal lethal to us on the counter-attack?
-    const finalAttackers = attackerIndices.map(i => candidates[i]);
+    const finalAttackers = attackerIndices.map(i => workingCandidates[i]);
     // Remaining defenders after attack: vigilant attackers + creatures not in candidates
     const remainingDefenders = myCreatures.filter(c =>
       c.vigilance || !finalAttackers.includes(c)
@@ -731,7 +823,7 @@ export function findBestAttackers(
     // If opponent can deal lethal on counter-attack, only send safe/free attackers
     if (oppCounterPower >= myLife) {
       const safeAttackers = scores.filter(s => {
-        const c = candidates[s.idx];
+        const c = workingCandidates[s.idx];
         if (c.vigilance || c.indestructible) return true; // safe to attack
         const canBeBlockedBy = oppBlockers.some(b => {
           if (c.flying && !b.flying && !b.reach) return false;

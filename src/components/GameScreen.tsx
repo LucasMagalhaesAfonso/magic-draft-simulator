@@ -1,7 +1,9 @@
 // GameScreen.tsx — Game UI connected to the real engine via useGameEngine hook
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import ringBearerImg from '../assets/ring-bearer.png';
+import cardBackImg from '../assets/mtg-card-back.jpg';
+import { SoundManager } from '../engine/sound-manager';
 import { useAppStore } from '../store/useAppStore';
 import type { Card } from '../lib/types';
 import { CardImage } from './card/CardImage';
@@ -17,11 +19,12 @@ import {
   LookTopOverlay, RevealPickOverlay, ClashOverlay, ConfirmOptionalOverlay, UnlessPayOverlay, TriggerOrderOverlay,
   MillLandChoiceOverlay, EndureChoiceOverlay, TriggerCostOverlay,
   AbilityModal, ExileOverlay, CombatArrows, GraveyardMultiSelectOverlay,
-  BounceMultiOverlay, CrewOverlay, DistributeCountersOverlay, ManaCostPips, MANA_IMAGES,
+  BounceMultiOverlay, CrewOverlay, DistributeCountersOverlay, ManaCostPips, ManaText, MANA_IMAGES,
   KeyboardHelpOverlay, DistributeDamageOverlay, OrderBlockersOverlay,
   UginUltimateOverlay,
 } from './game/GameOverlays';
 import { VfxLayer, VfxManager } from './game/VfxLayer';
+import { SettingsScreen } from './SettingsScreen';
 import { getLandManaColors, canPay } from '../engine/mana';
 import { getPreprocessedEffects, parseCyclingAbility } from '../engine/cards';
 import type { ManaPool } from '../engine/engine-types';
@@ -49,6 +52,21 @@ function getTokenBg(colors: string[] | undefined): string {
   if (!colors || colors.length === 0) return TOKEN_GRADIENTS.C;
   if (colors.length > 1) return TOKEN_GRADIENTS.GOLD;
   return TOKEN_GRADIENTS[colors[0]] || TOKEN_GRADIENTS.C;
+}
+
+/** Converts a raw mana string like "1G", "WU", "XB", "2" into "{1}{G}", "{W}{U}", "{X}{B}", "{2}" */
+function formatRawMana(raw: string): string {
+  if (!raw) return '';
+  if (raw.includes('{')) return raw; // already brace-formatted
+  let result = '';
+  let i = 0;
+  while (i < raw.length) {
+    let digits = '';
+    while (i < raw.length && /\d/.test(raw[i])) digits += raw[i++];
+    if (digits) result += `{${digits}}`;
+    if (i < raw.length && /[A-Za-z]/i.test(raw[i])) result += `{${raw[i++].toUpperCase()}}`;
+  }
+  return result || `{${raw}}`;
 }
 
 // ── Battlefield token renderer (fetches real image from Scryfall) ─────────────
@@ -152,6 +170,27 @@ interface GameScreenProps {
   multiplayerMode?: boolean;
 }
 
+
+// Returns CSS filter string to colorize sprites by MTG color identity.
+// Technique: saturate(0) → sepia(1) gives a warm ~35° base, then hue-rotate shifts to target color.
+// Target hue → rotation needed: R=0° → 325deg, Y/Gold=50° → 15deg, G=120° → 85deg,
+//              U=240° → 205deg, V/Purple=280° → 245deg
+function _colorHue(colors: string[]): string {
+  const sat = 'saturate(0) sepia(1)';
+  const r = colors.includes('R'), g = colors.includes('G'),
+        w = colors.includes('W'), u = colors.includes('U'), b = colors.includes('B');
+  if (colors.length === 0)  return `${sat} saturate(0.3) brightness(1.3)`;           // colorless → silver
+  if (colors.length >= 3)   return `${sat} hue-rotate(15deg) saturate(3) brightness(1.3)`;  // gold
+  if (r && b)               return `${sat} hue-rotate(245deg) saturate(3) brightness(1.0)`; // purple
+  if (r && g)               return `${sat} hue-rotate(50deg) saturate(3) brightness(1.1)`;  // Gruul green-red
+  if (r)                    return `${sat} hue-rotate(325deg) saturate(3) brightness(1.1)`; // red
+  if (g)                    return `${sat} hue-rotate(85deg) saturate(3) brightness(1.1)`;  // green
+  if (w)                    return `${sat} hue-rotate(15deg) saturate(2) brightness(1.4)`;  // white → gold
+  if (b)                    return `${sat} hue-rotate(245deg) saturate(2) brightness(0.8)`; // black → dark purple
+  if (u)                    return `${sat} hue-rotate(205deg) saturate(3) brightness(1.1)`; // blue
+  return `${sat} hue-rotate(205deg) saturate(2)`;
+}
+
 export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   const { deck, draftPool, aiDraftPool, setScreen, playmat, playmatArt, playmatPosition, playmatSize, landArts, sleeveArt,
     currentUser, mpRole, mpOpponentName, mpConnected, onlineDeck } = useAppStore();
@@ -244,8 +283,10 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   // ── Arena-like animation states ──────────────────────────────────────────
   // Battlefield enter/exit
   const [recentlyEntered, setRecentlyEntered] = useState<Set<string>>(new Set());
-  const [ghosts, setGhosts] = useState<Array<{id: number; imgSrc: string; x: number; y: number; w: number; h: number}>>([]);
+  const [ghosts, setGhosts] = useState<Array<{id: number; imgSrc: string; x: number; y: number; w: number; h: number; fadeDelay: number}>>([]);
   const ghostIdRef = useRef(0);
+  // Captures card positions BEFORE React removes them from the DOM (useLayoutEffect fires before paint)
+  const cardPosSnapRef = useRef<Map<string, { x: number; y: number; w: number; h: number; imgSrc: string }>>(new Map());
   // Floating damage/life numbers
   const [floats, setFloats] = useState<Array<{id: number; value: string; x: number; y: number; type: string}>>([]);
   const floatIdRef = useRef(0);
@@ -266,6 +307,10 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   const aiCastBusyRef = useRef(false);
   const lastAiActionsLenRef = useRef(0);
   const [slowTriggers, setSlowTriggers] = useState(true); // Show trigger notifications
+  const [showQuickSettings, setShowQuickSettings] = useState(false);
+  const [showFullSettings, setShowFullSettings] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(SoundManager.enabled);
+  const [soundVolume, setSoundVolume] = useState(Math.round(SoundManager.volume * 100));
   // Combat edge flash
   const [combatFlash, setCombatFlash] = useState(false);
   const prevPhaseRef = useRef<string | null>(null);
@@ -370,6 +415,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   function showCastAnimation(card: any) {
     if (!card?.image_normal && !card?.image_small) return;
     setCastingCard(card);
+    SoundManager.play('spell_cast');
     setTimeout(() => setCastingCard(null), 900);
   }
 
@@ -432,6 +478,8 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
     const handSize = snap.players[0].hand.length;
     const phase = snap.phase;
     const activePlayer = snap.activePlayer;
+    // Sound: card draw
+    if (handSize > prevHandSizeRef.current) SoundManager.play('card_draw');
     // Warn when hand reaches 8 during player's own turn (before cleanup)
     if (handSize >= 8 && handSize > prevHandSizeRef.current && activePlayer === 0 && phase !== 'cleanup') {
       addToast(`⚠ Hand full (${handSize}) — discard during cleanup!`, 'damage');
@@ -461,12 +509,26 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   const wiType = snap?.waitingForInput?.type;
   useEffect(() => { setViewingBattlefield(false); }, [wiType]);
 
+  // Init sound on first render (unlocks audio context after user interaction)
+  useEffect(() => {
+    const unlock = () => { SoundManager.init(); };
+    window.addEventListener('click', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
   // Delayed winner: wait after life hits 0 so player sees the lethal damage land
   const snapWinner = snap?.winner ?? null;
   useEffect(() => {
     if (snapWinner !== null && displayWinner === null) {
       if (winnerTimerRef.current) clearTimeout(winnerTimerRef.current);
-      winnerTimerRef.current = setTimeout(() => setDisplayWinner(snapWinner), 1800);
+      winnerTimerRef.current = setTimeout(() => {
+        setDisplayWinner(snapWinner);
+        SoundManager.play(snapWinner === 0 ? 'game_win' : 'game_lose');
+      }, 1800);
     } else if (snapWinner === null && displayWinner !== null) {
       if (winnerTimerRef.current) clearTimeout(winnerTimerRef.current);
       winnerTimerRef.current = null;
@@ -487,9 +549,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
       const d0 = p0life - prev[0];
       const d1 = p1life - prev[1];
       if (d0 < 0) VfxManager.play('playerDamage', 'p0');
-      else if (d0 > 0) VfxManager.play('heal', 'p0');
       if (d1 < 0) VfxManager.play('playerDamage', 'p1');
-      else if (d1 > 0) VfxManager.play('heal', 'p1');
     }
     prevLifeVfxRef.current = [p0life, p1life];
   }, [snap?.players[0].life, snap?.players[1].life]); // eslint-disable-line
@@ -518,6 +578,22 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
     }, 1800);
   }
 
+  // Capture all [data-uid] card positions BEFORE React updates the DOM
+  // This runs synchronously after DOM mutation but before paint — so removed cards are still queryable
+  useLayoutEffect(() => {
+    const els = document.querySelectorAll<HTMLElement>('[data-uid]');
+    els.forEach(el => {
+      const uid = el.dataset.uid;
+      if (!uid) return;
+      const rect = el.getBoundingClientRect();
+      const img = el.querySelector('img') as HTMLImageElement | null;
+      cardPosSnapRef.current.set(uid, {
+        x: rect.left, y: rect.top, w: rect.width, h: rect.height,
+        imgSrc: img?.src || '',
+      });
+    });
+  });
+
   // VFX: creature enters/leaves battlefield + Arena-like enter/exit animations
   const prevBfUidsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -529,41 +605,64 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
     const nowSet = new Set<string>(allBfNow);
     const prev = prevBfUidsRef.current;
 
-    // Entering battlefield — VFX + scale-in animation
+    // Entering battlefield — VFX
+    const allBfCards = [...snap.players[0].battlefield, ...snap.players[1].battlefield];
     const newEntries = new Set<string>();
     for (const uid of nowSet) {
       if (!prev.has(uid)) {
         newEntries.add(uid);
-        setTimeout(() => VfxManager.play('buff', uid), 80);
+        const card = allBfCards.find((c: any) => c._uid === uid);
+        const typeLine = (card?.type_line || '').toLowerCase();
+        const isLand = typeLine.includes('land');
+        if (isLand) {
+          setTimeout(() => VfxManager.play('landEtb', uid), 80);
+        } else {
+          const colors: string[] = card?.colors || card?.color_identity || [];
+          const hueFilter = _colorHue(colors);
+          setTimeout(() => VfxManager.play('creatureEtb', uid, undefined, undefined, hueFilter), 80);
+        }
       }
     }
     // card-entering animation removed — WebView2 white GPU layer flash
 
-    // Leaving battlefield — VFX + ghost fade-out
+    // Leaving battlefield — ghost fade-out
+    // Positions captured from cache (set synchronously during combat bridge, before DOM update)
     const newGhosts: typeof ghosts = [];
     for (const uid of prev) {
       if (!nowSet.has(uid)) {
-        VfxManager.play('death', uid);
-        const el = document.querySelector(`[data-uid="${uid}"]`);
-        if (el) {
-          const rect = el.getBoundingClientRect();
-          const img = el.querySelector('img');
-          const imgSrc = img?.src || '';
-          if (imgSrc) {
-            newGhosts.push({
-              id: ++ghostIdRef.current,
-              imgSrc,
-              x: rect.left, y: rect.top,
-              w: rect.width, h: rect.height,
-            });
-          }
+        // Priority: combat cache → pre-render layout snapshot → live DOM (fallback)
+        const cached   = VfxManager.getCachedCardPos(uid);
+        const snapped  = cardPosSnapRef.current.get(uid);
+        const el       = (!cached && !snapped) ? document.querySelector(`[data-uid="${uid}"]`) : null;
+        const pos      = cached ?? snapped ?? (el ? (() => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })() : null);
+        const imgSrc   = cached?.imgSrc ?? snapped?.imgSrc ?? (el as HTMLElement | null)?.querySelector('img')?.getAttribute('src') ?? '';
+        if (pos && imgSrc) {
+          const remaining = VfxManager.combatAnimRemainingMs();
+          const fadeDelay = remaining > 0 ? Math.max(0, remaining - 200) : 0;
+          newGhosts.push({
+            id: ++ghostIdRef.current,
+            imgSrc,
+            x: pos.x, y: pos.y,
+            w: pos.w, h: pos.h,
+            fadeDelay,
+          });
         }
       }
     }
     if (newGhosts.length > 0) {
       setGhosts(g => [...g, ...newGhosts].slice(-10));
       const ids = newGhosts.map(g => g.id);
-      setTimeout(() => setGhosts(g => g.filter(ghost => !ids.includes(ghost.id))), 400);
+      // Fire death VFX at each ghost's position (after combat animation delay)
+      for (const g of newGhosts) {
+        const cx = g.x + g.w / 2;
+        const cy = g.y + g.h / 2;
+        setTimeout(() => VfxManager.play('death', undefined, cx, cy), g.fadeDelay);
+      }
+      // Remove ghost after death animation completes (death_3 finishes at 280+480=760ms) + fade
+      const DEATH_ANIM_MS = 800; // death_2 grows 600ms, death_3 finishes at 760ms
+      const maxFadeDelay = Math.max(...newGhosts.map(g => g.fadeDelay), 0);
+      const ghostDuration = maxFadeDelay + DEATH_ANIM_MS;
+      setTimeout(() => setGhosts(g => g.filter(ghost => !ids.includes(ghost.id))), ghostDuration);
     }
 
     prevBfUidsRef.current = nowSet;
@@ -654,6 +753,23 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
       return filtered.length === prev.length ? prev : filtered;
     });
   }, [snap?.triggerToastQueue]); // eslint-disable-line
+
+  // Async preload images for token trigger toasts that lack an image URL
+  useEffect(() => {
+    const tokenToasts = triggerPanelItems.filter(t => t.isToken && !t.imageUrl && !t.imageUrlLarge);
+    if (!tokenToasts.length) return;
+    let cancelled = false;
+    Promise.all(tokenToasts.map(t =>
+      preloadTokenImage(t.cardName, t.tokenColors || []).then(url => ({ id: t.id, url }))
+    )).then(results => {
+      if (cancelled) return;
+      setTriggerPanelItems(prev => prev.map(item => {
+        const r = results.find(r => r.id === item.id && r.url);
+        return r ? { ...item, imageUrl: r.url, imageUrlLarge: r.url } : item;
+      }));
+    });
+    return () => { cancelled = true; };
+  }, [triggerPanelItems.map(t => t.id).join(',')]); // eslint-disable-line
 
   // Detect active trigger (waitingForInput caused by a trigger)
   const activeTriggerWfiTypes = ['confirm_optional', 'trigger_cost', 'scry', 'surveil', 'graveyard_cast_choice', 'graveyard_card_choice', 'graveyard_choice', 'modal_choice', 'post_modal_target', 'buff_choice', 'distribute_counters', 'trigger_priority'];
@@ -1825,6 +1941,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
       // Lands only in main phase
       if (isLand) {
         if (!isMainPhase) return;
+        SoundManager.play('land_tap');
         actions.playLand(card._uid);
         return;
       }
@@ -2895,6 +3012,13 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
               onClick={() => setSlowTriggers(v => !v)}
               title={slowTriggers ? 'Notificações de trigger: LIGADAS (clique para desligar)' : 'Notificações de trigger: DESLIGADAS (clique para ligar)'}
             >{slowTriggers ? '🔔 Triggers' : '🔕 Auto'}</button>
+            {/* Quick settings button */}
+            <button
+              className="btn btn-muted btn-sm"
+              style={{ fontSize: 11, padding: '1px 7px', opacity: 0.8 }}
+              onClick={() => setShowQuickSettings(v => !v)}
+              title="Configurações rápidas"
+            >⚙</button>
             {/* Keyboard help button */}
             <button
               className="btn btn-muted btn-sm"
@@ -3331,7 +3455,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                         }
                       }}
                       onContextMenu={e => { e.preventDefault(); setZoom(card); }}
-                      title={`${card.name}${hCost ? ` — ${hCost}` : ''} (clique para ativar)`}
+                      title={`${card.name} (clique para ativar)`}
                       style={{ position: 'relative', cursor: canCast ? 'pointer' : 'default', flexShrink: 0, opacity: canCast ? 1 : 0.45 }}
                     >
                       <img
@@ -3344,10 +3468,12 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                       {hCost && (
                         <div style={{
                           position: 'absolute', bottom: '3px', left: 0, right: 0,
-                          textAlign: 'center', fontSize: '9px', fontWeight: 800,
-                          color: '#fff', background: 'rgba(0,0,0,0.75)',
-                          borderRadius: '0 0 4px 4px', padding: '1px 2px',
-                        }}>{hCost}</div>
+                          display: 'flex', justifyContent: 'center', alignItems: 'center',
+                          background: 'rgba(0,0,0,0.75)',
+                          borderRadius: '0 0 4px 4px', padding: '2px 2px',
+                        }}>
+                          <ManaCostPips cost={formatRawMana(hCost)} size={11} />
+                        </div>
                       )}
                     </div>
                   );
@@ -3377,7 +3503,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                         key={card._uid + '-' + abIdx}
                         onClick={() => actions.activateGraveyardAbility(card._uid, abIdx)}
                         onContextMenu={e => { e.preventDefault(); setZoom(card); }}
-                        title={`${card.name}${costMana ? ` — Custo: ${costMana}` : ''} (clique para ativar, clique direito para ver)`}
+                        title={`${card.name} (clique para ativar, clique direito para ver)`}
                         style={{ position: 'relative', cursor: 'pointer', flexShrink: 0 }}
                       >
                         <img
@@ -3389,10 +3515,12 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                         {costMana && (
                           <div style={{
                             position: 'absolute', bottom: '3px', left: 0, right: 0,
-                            textAlign: 'center', fontSize: '9px', fontWeight: 800,
-                            color: '#fff', background: 'rgba(0,0,0,0.75)',
-                            borderRadius: '0 0 4px 4px', padding: '1px 2px',
-                          }}>{costMana}</div>
+                            display: 'flex', justifyContent: 'center', alignItems: 'center',
+                            background: 'rgba(0,0,0,0.75)',
+                            borderRadius: '0 0 4px 4px', padding: '2px 2px',
+                          }}>
+                            <ManaCostPips cost={formatRawMana(costMana)} size={11} />
+                          </div>
                         )}
                       </div>
                     );
@@ -3778,20 +3906,9 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
               />
             );
 
-          // ── Trigger priority (respond before trigger resolves) ────────
+          // ── Trigger priority — handled by side panel only ─────────────
           case 'trigger_priority':
-            return (
-              <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000 }}>
-                <div className="overlay-panel glass" style={{ maxWidth: 460, textAlign: 'center' }}>
-                  <h3 className="overlay-title">⚡ Trigger: {wi.triggerCardName}</h3>
-                  <p style={{ margin: '8px 0 4px', opacity: 0.9 }}>{wi.triggerEffectDesc}</p>
-                  <p style={{ margin: '0 0 16px', opacity: 0.6, fontSize: '0.85em' }}>You may respond with instants or abilities before this resolves.</p>
-                  <button className="btn btn-gold" style={{ minWidth: 160 }} onClick={() => actions.nextPhase()}>
-                    Resolve (Space)
-                  </button>
-                </div>
-              </div>
-            );
+            return null;
 
           // ── Instant priority window ─────────────────────────────────────
           case 'instant_priority':
@@ -3822,6 +3939,32 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                 onConfirm={actions.resolveManaColor}
               />
             ) : null;
+
+          // ── Put card on bottom of library ───────────────────────────────
+          case 'put_card_on_bottom': {
+            const handCards = myHand;
+            return (
+              <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000 }}>
+                <div className="overlay-panel glass" style={{ maxWidth: 500, textAlign: 'center' }}>
+                  <h3 className="overlay-title">📚 Escolha uma carta para o fundo do grimório</h3>
+                  <p style={{ margin: '0 0 14px', opacity: 0.7, fontSize: '0.85em' }}>Você não controla uma criatura lendária.</p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', maxHeight: 260, overflowY: 'auto' }}>
+                    {handCards.map((card: any) => (
+                      <div
+                        key={card._uid}
+                        style={{ cursor: 'pointer', border: '2px solid transparent', borderRadius: 6, transition: 'border-color 0.15s' }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--gold)')}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}
+                        onClick={() => actions.resolvePutOnBottom(card._uid)}
+                      >
+                        <CardImage card={card} width={80} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          }
 
           // ── Discard overlays ────────────────────────────────────────────
           case 'discard': {
@@ -4123,9 +4266,15 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                 fontSize: 15, fontWeight: 600, textAlign: 'center',
                 boxShadow: '0 0 20px rgba(245,158,11,0.5)', minWidth: 280,
               }}>
-                🛡️ {wardPending.creatureName} has Ward{wardPending.wardType === 'life' ? `—Pay ${wardPending.wardCost} life` : ` {${wardPending.wardCost}}`}
-                <div style={{ fontSize: 12, color: '#fbbf24', marginTop: 6 }}>
-                  Pay {wardPending.wardCost} {wardPending.wardType === 'life' ? 'life' : 'mana'} to target this creature, or choose another target.
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  🛡️ {wardPending.creatureName} has Ward
+                  {wardPending.wardType === 'life'
+                    ? `—Pay ${wardPending.wardCost} life`
+                    : <ManaCostPips cost={`{${wardPending.wardCost}}`} size={18} />
+                  }
+                </span>
+                <div style={{ fontSize: 12, color: '#fbbf24', marginTop: 6, display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  Pay {wardPending.wardType === 'life' ? `${wardPending.wardCost} life` : <><ManaCostPips cost={`{${wardPending.wardCost}}`} size={13} /> mana</>} to target this creature, or choose another target.
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }}>
                   {canAfford && (
@@ -4198,7 +4347,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                           )}
                           <div style={{ padding: '6px 4px' }}>
                             <div style={{ fontWeight: 700, fontSize: 11, color: isLand ? '#6b7280' : '#fff' }}>{c.name}</div>
-                            <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 2 }}>{c.mana_cost || ''}</div>
+                            {c.mana_cost && <div style={{ marginTop: 2 }}><ManaCostPips cost={c.mana_cost} size={11} /></div>}
                             {isLand && <div style={{ fontSize: 9, color: '#6b7280', marginTop: 2 }}>Land (skip)</div>}
                           </div>
                         </div>
@@ -4288,15 +4437,18 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
               ? '💀 Additional Cost — Sacrifice lands (click Done when finished)'
               : isForCast
                 ? altCost !== undefined
-                  ? `💀 Additional Cost — Sacrifice a creature or pay {${altCost}}`
+                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>💀 Additional Cost — Sacrifice a creature or pay <ManaCostPips cost={`{${altCost}}`} size={15} /></span>
                   : '💀 Additional Cost — Sacrifice'
                 : '💀 Sacrifice — Choose';
+            const skipLabel = isAnyNumber ? 'Done (proceed)' : altCost !== undefined
+              ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>Pay <ManaCostPips cost={`{${altCost}}`} size={13} /> instead</span>
+              : 'Skip';
             return (
               <CreatureChoiceOverlay
                 creatures={choices}
                 title={title}
                 optional={(wi as any).optional}
-                skipLabel={isAnyNumber ? 'Done (proceed)' : altCost !== undefined ? `Pay {${altCost}} instead` : 'Skip'}
+                skipLabel={skipLabel}
                 onConfirm={uid => actions.resolveSacrifice(uid)}
               />
             );
@@ -4900,7 +5052,9 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
             const wardName = (wi as any).creatureName ?? 'creature';
             return (
               <ConfirmOptionalOverlay
-                message={`${wardName} tem Ward ${wardCost}. Pagar {${wardCost}} mana extra para continuar? (Não = cancelar spell)`}
+                message={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', justifyContent: 'center' }}>
+                  {wardName} tem Ward {wardCost}. Pagar <ManaCostPips cost={`{${wardCost}}`} size={15} /> mana extra para continuar? (Não = cancelar spell)
+                </span>}
                 onConfirm={actions.resolveWardConfirm}
               />
             );
@@ -5036,8 +5190,8 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
             const costEffect = (trigger?.effects || []).find((e: any) => e.cost);
             const tc = trigger?.trigger_cost;
             const costDesc = trigger?.costDescription ||
-              (tc ? [tc.sacrifice ? `Sacrifice a ${tc.sacrifice}` : '', tc.or_mana ? `pay ${tc.or_mana}` : ''].filter(Boolean).join(' or ') : null) ||
-              costEffect?.cost;
+              (tc ? [tc.sacrifice ? `Sacrifice a ${tc.sacrifice}` : '', tc.or_mana ? `pay ${formatRawMana(String(tc.or_mana))}` : ''].filter(Boolean).join(' or ') : null) ||
+              (costEffect?.cost ? formatRawMana(String(costEffect.cost)) : null);
             const triggerEffectDesc = (trigger?.effects || []).map((e: any) => {
               const t = e.type; const amt = e.amount; const tgt = e.target;
               if (t === 'endure') return `Endure ${amt} (put ${amt} +1/+1 counter or create a 1/1 white Spirit token)`;
@@ -5463,11 +5617,10 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
           case 'saurons_ransom_choice': {
             const faceDownPile: any[] = (wi as any).faceDownPile || gs?._pendingSauronsRansom?.faceDownPile || [];
             const faceUpPile: any[] = (wi as any).faceUpPile || gs?._pendingSauronsRansom?.faceUpPile || [];
-            const cardBackUrl = '/src/assets/card-back.png';
             const renderFaceDown = (count: number) => (
               <div style={{display: 'flex', flexDirection: 'column', gap: 6, minWidth: 130, alignItems: 'center'}}>
                 {Array.from({length: count}).map((_, i) => (
-                  <img key={i} src="/src/assets/mtg-card-back.jpg"
+                  <img key={i} src={cardBackImg}
                     style={{width: 88, height: 124, borderRadius: 6, objectFit: 'cover', border: '2px solid #446'}}
                     alt="Card back" />
                 ))}
@@ -5766,7 +5919,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                           <div style={{ flex: 1 }}>
                             <div style={{ color: '#fff', fontSize: '15px', fontWeight: 600 }}>{card.name}</div>
                             <div style={{ color: '#aaa', fontSize: '11px' }}>{card.type_line}</div>
-                            {card.mana_cost && <div style={{ color: '#ccc', fontSize: '11px' }}>{card.mana_cost}</div>}
+                            {card.mana_cost && <div style={{ marginTop: 2 }}><ManaCostPips cost={card.mana_cost} size={13} /></div>}
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             <button onClick={() => moveCard(idx, -1)} disabled={idx === 0}
@@ -6575,7 +6728,10 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                   setCycleOrCastModal(null);
                   actions.activateCycling(c._uid);
                 }}>
-                  Cycle {cycleLabel}<br/>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    Cycle <ManaCostPips cost={cycleLabel} size={14} />
+                  </span>
+                  <br/>
                   <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>{cycleEffect}</span>
                 </button>
               </div>
@@ -6725,6 +6881,82 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
       {/* ── Keyboard help modal ── */}
       {showHelpModal && <KeyboardHelpOverlay onClose={() => setShowHelpModal(false)} />}
 
+      {/* ── Quick settings panel ── */}
+      {showQuickSettings && (
+        <div style={{
+          position: 'fixed', top: 44, right: 12, zIndex: 9500,
+          background: 'var(--panel-bg, #1a1a2e)', border: '1px solid var(--border-color, #333)',
+          borderRadius: 10, padding: '14px 18px', minWidth: 220,
+          boxShadow: '0 4px 24px rgba(0,0,0,0.7)',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--gold, #f0c040)' }}>⚙ Configurações</span>
+            <button className="btn btn-muted btn-sm" style={{ fontSize: 11 }} onClick={() => setShowQuickSettings(false)}>✕</button>
+          </div>
+
+          {/* Som */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <button
+              className={`btn btn-sm ${soundEnabled ? 'btn-gold' : 'btn-muted'}`}
+              style={{ fontSize: 12, minWidth: 70 }}
+              onClick={() => {
+                const next = !soundEnabled;
+                SoundManager.init();
+                SoundManager.setEnabled(next);
+                setSoundEnabled(next);
+                if (next) SoundManager.play('card_draw');
+              }}
+            >{soundEnabled ? '🔊 Som' : '🔇 Mudo'}</button>
+            <input
+              type="range" min={0} max={100} value={soundVolume}
+              onChange={e => {
+                const v = Number(e.target.value);
+                setSoundVolume(v);
+                SoundManager.setVolume(v / 100);
+              }}
+              disabled={!soundEnabled}
+              style={{ flex: 1, accentColor: 'var(--gold, #f0c040)' }}
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-secondary, #999)', width: 32 }}>{soundVolume}%</span>
+          </div>
+
+          {/* Triggers */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <button
+              className={`btn btn-sm ${slowTriggers ? 'btn-gold' : 'btn-muted'}`}
+              style={{ fontSize: 12, minWidth: 70 }}
+              onClick={() => setSlowTriggers(v => !v)}
+            >{slowTriggers ? '🔔 Triggers' : '🔕 Auto'}</button>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary, #999)' }}>
+              {slowTriggers ? 'Notificações visíveis' : 'Sem notificações'}
+            </span>
+          </div>
+
+          {/* Abrir settings completo */}
+          <button
+            className="btn btn-muted btn-sm"
+            style={{ width: '100%', fontSize: 12, marginTop: 4 }}
+            onClick={() => { setShowQuickSettings(false); setShowFullSettings(true); }}
+          >⚙ Abrir Settings completo</button>
+        </div>
+      )}
+
+      {/* ── Full settings overlay (sem sair do jogo) ── */}
+      {showFullSettings && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.92)', overflowY: 'auto' }}
+          onClick={e => { if (e.target === e.currentTarget) setShowFullSettings(false); }}
+        >
+          {/* X fixo no canto — sempre visível */}
+          <button
+            className="btn btn-gold"
+            style={{ position: 'fixed', top: 12, right: 16, zIndex: 10001, fontSize: 13, padding: '6px 14px' }}
+            onClick={() => setShowFullSettings(false)}
+          >✕ Voltar ao jogo</button>
+          <SettingsScreen />
+        </div>
+      )}
+
       {/* Full Control indicator removed — now inline in phase strip */}
 
       {/* ── Combat arrows SVG ── */}
@@ -6759,21 +6991,25 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
         const showResolveBtn = isTriggerPriority && hasInstant;
         return (
           <div className="trigger-toast-panel">
-            {triggerPanelItems.map((toast, idx) => (
-              <div
-                key={toast.id}
-                className={`trigger-toast ${toast.controllerId === 0 ? 'trigger-toast-mine' : 'trigger-toast-opp'}${idx === 0 ? ' trigger-queue-active' : ''}`}
-                style={{ marginTop: idx === 0 ? 0 : `-190px`, marginLeft: `${idx * 20}px`, zIndex: triggerPanelItems.length - idx }}
-              >
-                {(toast.imageUrlLarge || toast.imageUrl) && (
-                  <img src={toast.imageUrlLarge || toast.imageUrl!} alt={toast.cardName} className="trigger-toast-img" />
-                )}
-                <div className="trigger-toast-info">
-                  <div className="trigger-toast-name">{toast.cardName}</div>
-                  <div className="trigger-toast-effect">{toast.effectDesc}</div>
+            {triggerPanelItems.map((toast, idx) => {
+              const toastImgSrc = toast.imageUrlLarge || toast.imageUrl
+                || (toast.isToken ? getTokenImageUrl(toast.cardName) : null);
+              return (
+                <div
+                  key={toast.id}
+                  className={`trigger-toast ${toast.controllerId === 0 ? 'trigger-toast-mine' : 'trigger-toast-opp'}${idx === 0 ? ' trigger-queue-active' : ''}`}
+                  style={{ marginTop: idx === 0 ? 0 : `-190px`, marginLeft: `${idx * 20}px`, zIndex: triggerPanelItems.length - idx }}
+                >
+                  {toastImgSrc && (
+                    <img src={toastImgSrc} alt={toast.cardName} className="trigger-toast-img" />
+                  )}
+                  <div className="trigger-toast-info">
+                    <div className="trigger-toast-name">{toast.cardName}</div>
+                    <div className="trigger-toast-effect">{toast.effectDesc}</div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {showResolveBtn && (
               <div className="trigger-queue-footer">
                 <div className="trigger-queue-respond-hint">You can respond with an instant</div>
@@ -6792,7 +7028,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
         <div
           key={g.id}
           className="exit-ghost"
-          style={{ left: g.x, top: g.y, width: g.w, height: g.h }}
+          style={{ left: g.x, top: g.y, width: g.w, height: g.h, animationDelay: `${g.fadeDelay}ms` }}
         >
           <img src={g.imgSrc} alt="" />
         </div>
@@ -7175,6 +7411,12 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
       {isAttacking && <div className="bf-attacking-indicator">⚔</div>}
       {cantBlock && <div className="bf-cant-block-badge" title="Can't block this turn">🚫</div>}
       {isRingBearer && <div className="bf-ring-bearer" title="Ring-bearer"><img src={ringBearerImg} alt="Ring" /></div>}
+      {/* ── Mana cost top-right ── */}
+      {!isLand && card.mana_cost && (
+        <div className="bf-mana-cost">
+          <ManaCostPips cost={card.mana_cost} size={12} />
+        </div>
+      )}
 
       {/* ── Keyword badges ── */}
       {isCreature && (() => {
@@ -7204,7 +7446,7 @@ function BattlefieldCard({ card, isAttacking, isAttacker, isTargetable, isNotTar
         const push = (label: string, key: string, img?: string) => badges.push({ label, key, img });
         if (has('Flying')) push('✈', 'Flying', abilImg('flying.png'));
         if (has('First Strike')) push('FS', 'First Strike', abilImg('first_strike.png'));
-        if (has('Double Strike')) push('DS', 'Double Strike', abilImg('double _strike.png'));
+        if (has('Double Strike')) push('DS', 'Double Strike', abilImg('double_strike.png'));
         if (has('Deathtouch')) push('☠', 'Deathtouch', abilImg('deathtouch.png'));
         if (has('Lifelink')) push('♥', 'Lifelink', abilImg('lifelink.png'));
         if (has('Trample')) push('Tpl', 'Trample', abilImg('trample.png'));

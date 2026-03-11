@@ -10,6 +10,7 @@ import {
   signOut,
   onAuthStateChanged,
   updateProfile,
+  sendPasswordResetEmail,
   type User,
 } from 'firebase/auth';
 import {
@@ -86,6 +87,13 @@ export async function loginUser(email: string, password: string): Promise<User> 
 
 export async function logoutUser(): Promise<void> {
   await signOut(auth);
+}
+
+export async function resetPassword(email: string): Promise<void> {
+  await withTimeout(
+    sendPasswordResetEmail(auth, email),
+    10000, 'Tempo esgotado. Verifique sua conexão.'
+  );
 }
 
 export function onAuthChange(callback: (user: User | null) => void) {

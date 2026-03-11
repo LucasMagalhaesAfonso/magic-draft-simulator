@@ -5,6 +5,7 @@ import { SoundManager } from '../engine/sound-manager';
 import { VfxManager } from './game/VfxLayer';
 import { getHumanLearnStats, resetHumanLearn } from '../draft/bot-ai';
 import { getSetList, deleteSet } from '../lib/database';
+import { seedBundledSets, syncSingleSet } from '../lib/scryfall';
 import { getRatingsStats, hasRatingsData, preloadRatings } from '../lib/seventeen-lands';
 import * as SelfPlay from '../engine/self-play';
 import './SettingsScreen.css';
@@ -90,6 +91,8 @@ export function SettingsScreen() {
   // Imported sets
   const [importedSets, setImportedSets] = useState<{ set_code: string; set_name: string; card_count: number }[]>([]);
   const [deletingSet, setDeletingSet] = useState<string | null>(null);
+  const [reimportingSet, setReimportingSet] = useState<string | null>(null);
+  const [reimportMsg, setReimportMsg] = useState<string>('');
 
   // Alt art style filters (per-set)
   const [altArtBySet, setAltArtBySet] = useState<Record<string, { style: string; count: number; samples: string[] }[]>>({});
@@ -775,29 +778,65 @@ export function SettingsScreen() {
         {importedSets.length > 0 && (
           <div className="settings-section glass">
             <h2 className="settings-title">📦 Card Database</h2>
-            <p className="settings-desc">Sets importados. Delete um set para reimportá-lo.</p>
+            <p className="settings-desc">Sets importados. Re-importe se tiver problemas de carregamento.</p>
+            {reimportMsg && (
+              <div style={{ fontSize: 12, color: reimportMsg.startsWith('✅') ? '#4aff7a' : reimportMsg.startsWith('❌') ? '#ff6b6b' : '#ffd700', marginBottom: 8, padding: '6px 10px', background: 'rgba(0,0,0,0.3)', borderRadius: 6 }}>
+                {reimportMsg}
+              </div>
+            )}
             <div className="settings-info-grid">
               {importedSets.map(s => (
-                <div key={s.set_code} className="settings-info-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div key={s.set_code} className="settings-info-item" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                   <div>
                     <span className="settings-info-label">{s.set_code.toUpperCase()}</span>
                     <span className="settings-info-value" style={{ fontSize: 11 }}>{s.set_name} ({s.card_count} cards)</span>
                   </div>
-                  <button
-                    className="btn btn-muted"
-                    style={{ fontSize: 11, padding: '3px 10px', color: '#ff6b6b' }}
-                    disabled={deletingSet === s.set_code}
-                    onClick={async () => {
-                      if (!confirm(`Delete ${s.set_code.toUpperCase()} (${s.card_count} cards)? You can reimport from the home screen.`)) return;
-                      setDeletingSet(s.set_code);
-                      await deleteSet(s.set_code);
-                      localStorage.removeItem(`alt_art_${s.set_code.toLowerCase()}`);
-                      setImportedSets(prev => prev.filter(x => x.set_code !== s.set_code));
-                      setDeletingSet(null);
-                    }}
-                  >
-                    {deletingSet === s.set_code ? 'Deleting...' : 'Delete'}
-                  </button>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button
+                      className="btn btn-muted"
+                      style={{ fontSize: 11, padding: '3px 10px', color: '#ffd700' }}
+                      disabled={reimportingSet === s.set_code || deletingSet === s.set_code}
+                      onClick={async () => {
+                        setReimportingSet(s.set_code);
+                        setReimportMsg(`⏳ Reimportando ${s.set_code.toUpperCase()}...`);
+                        try {
+                          await deleteSet(s.set_code);
+                          localStorage.removeItem(`alt_art_${s.set_code.toLowerCase()}`);
+                          const bundled = ['tdm', 'ltr'];
+                          if (bundled.includes(s.set_code.toLowerCase())) {
+                            await seedBundledSets((p) => setReimportMsg(`⏳ ${p.message}`), [s.set_code.toLowerCase()]);
+                          } else {
+                            await syncSingleSet(s.set_code.toLowerCase(), (p) => setReimportMsg(`⏳ ${p.message}`));
+                          }
+                          const fresh = await getSetList();
+                          setImportedSets(fresh);
+                          setReimportMsg(`✅ ${s.set_code.toUpperCase()} reimportado!`);
+                          setTimeout(() => setReimportMsg(''), 3000);
+                        } catch (e: any) {
+                          setReimportMsg(`❌ Erro: ${e?.message || e}`);
+                        } finally {
+                          setReimportingSet(null);
+                        }
+                      }}
+                    >
+                      {reimportingSet === s.set_code ? '...' : '🔄 Re-importar'}
+                    </button>
+                    <button
+                      className="btn btn-muted"
+                      style={{ fontSize: 11, padding: '3px 10px', color: '#ff6b6b' }}
+                      disabled={deletingSet === s.set_code || reimportingSet === s.set_code}
+                      onClick={async () => {
+                        if (!confirm(`Deletar ${s.set_code.toUpperCase()} (${s.card_count} cards)?`)) return;
+                        setDeletingSet(s.set_code);
+                        await deleteSet(s.set_code);
+                        localStorage.removeItem(`alt_art_${s.set_code.toLowerCase()}`);
+                        setImportedSets(prev => prev.filter(x => x.set_code !== s.set_code));
+                        setDeletingSet(null);
+                      }}
+                    >
+                      {deletingSet === s.set_code ? '...' : 'Delete'}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

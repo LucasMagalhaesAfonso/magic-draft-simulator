@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { registerUser, loginUser } from '../../lib/firebase';
+import { registerUser, loginUser, resetPassword } from '../../lib/firebase';
 import { useAppStore } from '../../store/useAppStore';
 import './LoginScreen.css';
 
@@ -13,6 +13,9 @@ export function LoginScreen() {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showReset, setShowReset] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetMsg, setResetMsg] = useState('');
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -105,6 +108,60 @@ export function LoginScreen() {
             {loading ? 'Aguarde...' : tab === 'login' ? 'Entrar' : 'Criar Conta'}
           </button>
         </form>
+
+        {tab === 'login' && !showReset && (
+          <button
+            className="login-back"
+            style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12, marginTop: 0 }}
+            onClick={() => { setShowReset(true); setResetEmail(email); setResetMsg(''); }}
+          >
+            Esqueceu sua senha?
+          </button>
+        )}
+
+        {showReset && (
+          <div style={{ marginTop: 12, padding: '14px 16px', background: 'rgba(0,0,0,0.35)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)' }}>
+            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 10 }}>Redefinir senha</div>
+            <input
+              type="email"
+              placeholder="seu@email.com"
+              value={resetEmail}
+              onChange={e => setResetEmail(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.07)', color: '#fff', fontSize: 13, boxSizing: 'border-box', marginBottom: 8 }}
+            />
+            {resetMsg && (
+              <div style={{ fontSize: 12, marginBottom: 8, color: resetMsg.startsWith('✅') ? '#4aff7a' : '#ff6b6b' }}>{resetMsg}</div>
+            )}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                className="btn btn-gold"
+                style={{ flex: 1, fontSize: 12, padding: '7px 0' }}
+                disabled={loading}
+                onClick={async () => {
+                  if (!resetEmail.trim()) { setResetMsg('Digite seu e-mail.'); return; }
+                  setLoading(true);
+                  try {
+                    await resetPassword(resetEmail.trim());
+                    setResetMsg('✅ E-mail enviado! Verifique sua caixa de entrada.');
+                  } catch (e: any) {
+                    setResetMsg(e?.code === 'auth/user-not-found' ? 'E-mail não encontrado.' : e?.message || 'Erro ao enviar.');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                {loading ? 'Enviando...' : 'Enviar e-mail'}
+              </button>
+              <button
+                className="btn btn-muted"
+                style={{ fontSize: 12, padding: '7px 12px' }}
+                onClick={() => { setShowReset(false); setResetMsg(''); }}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
 
         <button className="login-back" onClick={() => setScreen('home')}>
           ← Voltar ao Menu

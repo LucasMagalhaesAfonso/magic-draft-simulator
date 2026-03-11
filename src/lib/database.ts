@@ -225,6 +225,31 @@ export async function setPref(key: string, value: string): Promise<void> {
 // Bulk Import
 // ============================================
 
+const COLS = `id, oracle_id, name, mana_cost, cmc, type_line, oracle_text,
+  power, toughness, loyalty, colors, color_identity, keywords,
+  set_code, set_name, collector_number, rarity,
+  image_small, image_normal, image_art_crop, layout, produced_mana,
+  back_face_name, back_face_mana_cost, back_face_type_line,
+  back_face_oracle_text, back_face_power, back_face_toughness, back_face_image_normal`;
+const N_COLS = 29;
+
+function cardToParams(card: CardRow): unknown[] {
+  return [
+    card.id, card.oracle_id || '', card.name, card.mana_cost || null, card.cmc || 0,
+    card.type_line || '', card.oracle_text || null, card.power || null,
+    card.toughness || null, card.loyalty || null,
+    card.colors || null, card.color_identity || null, card.keywords || null,
+    card.set_code, card.set_name || null, card.collector_number || null,
+    card.rarity || 'common',
+    card.image_small || null, card.image_normal || null, card.image_art_crop || null,
+    card.layout || 'normal', card.produced_mana || null,
+    card.back_face_name || null, card.back_face_mana_cost || null,
+    card.back_face_type_line || null, card.back_face_oracle_text || null,
+    card.back_face_power || null, card.back_face_toughness || null,
+    card.back_face_image_normal || null,
+  ];
+}
+
 export async function bulkInsertCards(
   cards: CardRow[],
   onProgress?: (inserted: number, total: number) => void
@@ -234,39 +259,31 @@ export async function bulkInsertCards(
     return browserBulkInsertCards(cards, onProgress);
   }
   const db = await getTauriDb();
-  for (let i = 0; i < cards.length; i++) {
-    const card = cards[i];
-    try {
+
+  // Use batched multi-row inserts inside a transaction.
+  // SQLite variable limit is 999; with N_COLS=29 cols each batch holds floor(999/29)=34 rows.
+  const BATCH = 30;
+  let inserted = 0;
+
+  await db.execute('BEGIN TRANSACTION', []);
+  try {
+    for (let i = 0; i < cards.length; i += BATCH) {
+      const batch = cards.slice(i, i + BATCH);
+      const placeholders = batch.map((_, bi) => {
+        const base = bi * N_COLS;
+        return `(${Array.from({ length: N_COLS }, (_, j) => `$${base + j + 1}`).join(',')})`;
+      }).join(',');
+      const params = batch.flatMap(cardToParams);
       await db.execute(
-        `INSERT OR REPLACE INTO cards (
-          id, oracle_id, name, mana_cost, cmc, type_line, oracle_text,
-          power, toughness, loyalty, colors, color_identity, keywords,
-          set_code, set_name, collector_number, rarity,
-          image_small, image_normal, image_art_crop, layout, produced_mana,
-          back_face_name, back_face_mana_cost, back_face_type_line,
-          back_face_oracle_text, back_face_power, back_face_toughness, back_face_image_normal
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
-        [
-          card.id, card.oracle_id || '', card.name, card.mana_cost || null, card.cmc || 0,
-          card.type_line || '', card.oracle_text || null, card.power || null,
-          card.toughness || null, card.loyalty || null,
-          card.colors || null, card.color_identity || null, card.keywords || null,
-          card.set_code, card.set_name || null, card.collector_number || null,
-          card.rarity || 'common',
-          card.image_small || null, card.image_normal || null, card.image_art_crop || null,
-          card.layout || 'normal', card.produced_mana || null,
-          card.back_face_name || null, card.back_face_mana_cost || null,
-          card.back_face_type_line || null, card.back_face_oracle_text || null,
-          card.back_face_power || null, card.back_face_toughness || null,
-          card.back_face_image_normal || null
-        ]
+        `INSERT OR REPLACE INTO cards (${COLS}) VALUES ${placeholders}`,
+        params
       );
-    } catch (e) {
-      console.error(`Failed to insert card "${card.name}" (${card.id}):`, e);
-      continue;
+      inserted += batch.length;
+      onProgress?.(Math.min(inserted, cards.length), cards.length);
     }
-    if (onProgress && (i % 10 === 0 || i === cards.length - 1)) {
-      onProgress(i + 1, cards.length);
-    }
+    await db.execute('COMMIT', []);
+  } catch (e) {
+    await db.execute('ROLLBACK', []).catch(() => {});
+    throw e; // propagate so caller knows seeding failed
   }
 }

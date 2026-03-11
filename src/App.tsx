@@ -1,4 +1,4 @@
-import { useEffect, Component, type ReactNode } from 'react';
+import { useEffect, useState, Component, type ReactNode } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { getCardCount, getSetList } from './lib/database';
 import { seedBundledSets, fetchAltArt } from './lib/scryfall';
@@ -57,6 +57,7 @@ class ErrorBoundary extends Component<
 
 function App() {
   const { screen, setDbReady, setTotalCards, setCurrentUser, setSyncing } = useAppStore();
+  const [seedError, setSeedError] = useState<string | null>(null);
 
   useEffect(() => {
     initDatabase();
@@ -76,6 +77,7 @@ function App() {
   }, []);
 
   async function initDatabase() {
+    setSeedError(null);
     try {
       const count = await getCardCount();
       setTotalCards(count);
@@ -87,7 +89,16 @@ function App() {
 
       if (missingSets.length > 0) {
         setSyncing(true, 'Preparando cards...');
-        await seedBundledSets((p) => setSyncing(true, p.message), missingSets);
+        try {
+          await seedBundledSets((p) => setSyncing(true, p.message), missingSets);
+        } catch (seedErr) {
+          const msg = seedErr instanceof Error ? seedErr.message : String(seedErr);
+          console.error('[initDatabase] Seed failed:', msg);
+          setSyncing(false);
+          setSeedError(msg);
+          setDbReady(true);
+          return;
+        }
         setSyncing(false);
         const newCount = await getCardCount();
         setTotalCards(newCount);
@@ -102,7 +113,9 @@ function App() {
 
       setDbReady(true);
     } catch (e) {
-      console.error('Database init failed:', e);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('Database init failed:', msg);
+      setSeedError(msg);
       setDbReady(true);
     }
   }
@@ -141,6 +154,23 @@ function App() {
         </ErrorBoundary>
       </main>
       <UpdateChecker />
+      {seedError && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(180,30,30,0.97)', color: '#fff', borderRadius: 10,
+          padding: '16px 24px', zIndex: 99999, maxWidth: 480, textAlign: 'center',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.6)',
+        }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Erro ao carregar cards</div>
+          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 12, wordBreak: 'break-all' }}>{seedError}</div>
+          <button
+            className="btn btn-gold btn-sm"
+            onClick={() => initDatabase()}
+          >
+            🔄 Tentar novamente
+          </button>
+        </div>
+      )}
     </div>
   );
 }

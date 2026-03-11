@@ -344,7 +344,7 @@ export async function seedBundledSets(
       }
     } catch (e) {
       console.error(`[seedBundledSets] Failed to seed ${setCode}:`, e);
-      // Non-fatal: user can import manually
+      throw e; // propagate so App.tsx can show retry button
     }
   }
 }

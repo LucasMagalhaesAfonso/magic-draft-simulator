@@ -29,6 +29,9 @@ async function getTauriDb() {
   if (_tauriDb) return _tauriDb;
   const { default: Database } = await import('@tauri-apps/plugin-sql');
   _tauriDb = await Database.load('sqlite:magic_draft.db');
+  // WAL mode allows concurrent reads during writes; busy_timeout retries instead of failing instantly
+  await _tauriDb.execute('PRAGMA journal_mode=WAL');
+  await _tauriDb.execute('PRAGMA busy_timeout=5000');
   return _tauriDb;
 }
 

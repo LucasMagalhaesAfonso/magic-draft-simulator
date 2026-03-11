@@ -3942,7 +3942,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
 
           // ── Put card on bottom of library ───────────────────────────────
           case 'put_card_on_bottom': {
-            const handCards = myHand;
+            const handCards = snap?.players?.[0]?.hand ?? [];
             return (
               <div className="overlay-backdrop" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9000 }}>
                 <div className="overlay-panel glass" style={{ maxWidth: 500, textAlign: 'center' }}>
@@ -3957,7 +3957,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
                         onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}
                         onClick={() => actions.resolvePutOnBottom(card._uid)}
                       >
-                        <CardImage card={card} width={80} />
+                        <CardImage card={card} size="small" />
                       </div>
                     ))}
                   </div>

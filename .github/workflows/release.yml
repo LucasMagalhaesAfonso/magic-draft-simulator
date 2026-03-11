@@ -20,29 +20,41 @@ jobs:
         id: get_version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      - name: Create release
+      - name: Create or get release
         id: create-release
         uses: actions/github-script@v7
         with:
           script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            // Try to get existing release first
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              // Reset to draft so build jobs can upload assets cleanly
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: data.id,
+                draft: true,
+              });
+              return String(data.id);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            // Create new release
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: context.ref.replace('refs/tags/', ''),
-              name: `Magic Draft ${context.ref.replace('refs/tags/', '')}`,
-              body: `## Magic Draft Simulator ${context.ref.replace('refs/tags/', '')}
-
-            ### Instalação
-            - **Windows**: baixe \`Magic Draft_x.x.x_x64-setup.exe\` e execute para instalar.
-            - **Linux**: baixe \`magic-draft_x.x.x_amd64.AppImage\`, dê permissão de execução (\`chmod +x\`) e execute.
-
-            ### Sets incluídos
-            - Tarkir Dragonstorm (TDM)
-            - Lord of the Rings (LTR)`,
+              tag_name: tag,
+              name: `Magic Draft ${tag}`,
+              body: `## Magic Draft Simulator ${tag}\n\n### Instalação\n- **Windows**: baixe \`Magic Draft_x.x.x_x64-setup.exe\` e execute.\n- **Linux**: baixe \`magic-draft_x.x.x_amd64.AppImage\`, dê permissão (\`chmod +x\`) e execute.\n\n### Sets incluídos\n- Tarkir Dragonstorm (TDM)\n- Lord of the Rings (LTR)`,
               draft: true,
               prerelease: false,
             });
-            return data.id;
+            return String(data.id);
           result-encoding: string
 
   build:

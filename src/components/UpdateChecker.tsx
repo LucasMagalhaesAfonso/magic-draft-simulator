@@ -1,66 +1,65 @@
 import { useEffect, useState } from 'react';
 
-const CURRENT_VERSION = __APP_VERSION__;
-const RELEASES_API = 'https://api.github.com/repos/LucasMagalhaesAfonso/magic-draft-simulator/releases/latest';
-
-function parseVersion(v: string) {
-  return v.replace(/^v/, '').split('.').map(Number);
-}
-
-function isNewer(latest: string, current: string) {
-  const a = parseVersion(latest);
-  const b = parseVersion(current);
-  for (let i = 0; i < 3; i++) {
-    if ((a[i] ?? 0) > (b[i] ?? 0)) return true;
-    if ((a[i] ?? 0) < (b[i] ?? 0)) return false;
-  }
-  return false;
-}
-
-interface ReleaseInfo {
-  version: string;
-  exeUrl: string | null;
-  appImageUrl: string | null;
-}
+type UpdateState =
+  | { phase: 'idle' }
+  | { phase: 'available'; version: string }
+  | { phase: 'downloading'; progress: number }
+  | { phase: 'ready' };
 
 export function UpdateChecker() {
-  const [release, setRelease] = useState<ReleaseInfo | null>(null);
+  const [state, setState] = useState<UpdateState>({ phase: 'idle' });
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(RELEASES_API, { headers: { 'User-Agent': 'magic-draft-app' } });
-        if (!res.ok) return;
-        const data = await res.json();
-        const tag = data.tag_name as string;
-        if (!isNewer(tag, CURRENT_VERSION)) return;
-
-        const assets: { name: string; browser_download_url: string }[] = data.assets ?? [];
-        const exeAsset      = assets.find(a => a.name.endsWith('_x64-setup.exe'));
-        const appImageAsset = assets.find(a => a.name.endsWith('.AppImage'));
-
-        setRelease({
-          version: tag.replace(/^v/, ''),
-          exeUrl:      exeAsset?.browser_download_url ?? null,
-          appImageUrl: appImageAsset?.browser_download_url ?? null,
-        });
-      } catch {
-        // offline or error — silent fail
-      }
-    }, 4000);
+    const timer = setTimeout(checkForUpdate, 4000);
     return () => clearTimeout(timer);
   }, []);
 
-  if (!release) return null;
+  async function checkForUpdate() {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check();
+      if (update?.available) {
+        setState({ phase: 'available', version: update.version });
+      }
+    } catch {
+      // offline or error — silent fail
+    }
+  }
 
   async function handleUpdate() {
-    if (!release) return;
-    const { openUrl } = await import('@tauri-apps/plugin-opener');
-    // Open direct download URL — browser downloads the installer automatically
-    const url = release.exeUrl ?? release.appImageUrl ?? 'https://github.com/LucasMagalhaesAfonso/magic-draft-simulator/releases/latest';
-    openUrl(url);
+    setState({ phase: 'downloading', progress: 0 });
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      const update = await check();
+      if (!update?.available) return;
+
+      let downloaded = 0;
+      let total = 0;
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          total = event.data.contentLength ?? 0;
+        } else if (event.event === 'Progress') {
+          downloaded += event.data.chunkLength;
+          const pct = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+          setState({ phase: 'downloading', progress: pct });
+        } else if (event.event === 'Finished') {
+          setState({ phase: 'ready' });
+        }
+      });
+
+      await relaunch();
+    } catch {
+      // fallback: open releases page
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      openUrl('https://github.com/LucasMagalhaesAfonso/magic-draft-simulator/releases/latest');
+      setState({ phase: 'idle' });
+    }
   }
+
+  if (dismissed || state.phase === 'idle') return null;
 
   return (
     <div style={{
@@ -69,30 +68,58 @@ export function UpdateChecker() {
       borderRadius: 12, padding: '14px 20px', zIndex: 9999,
       display: 'flex', alignItems: 'center', gap: 16,
       boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
-      minWidth: 300,
+      minWidth: 320,
     }}>
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 700, color: '#ffd700', fontSize: 14 }}>
-          Nova versão disponível: v{release.version}
-        </div>
-        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 3 }}>
-          O instalador vai baixar automaticamente.
-        </div>
+        {state.phase === 'available' && (
+          <>
+            <div style={{ fontWeight: 700, color: '#ffd700', fontSize: 14 }}>
+              Nova versão disponível: v{state.version}
+            </div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 3 }}>
+              Clique para atualizar automaticamente.
+            </div>
+          </>
+        )}
+        {state.phase === 'downloading' && (
+          <>
+            <div style={{ fontWeight: 700, color: '#ffd700', fontSize: 14 }}>
+              Baixando atualização... {state.progress}%
+            </div>
+            <div style={{
+              marginTop: 6, height: 4, background: 'rgba(255,255,255,0.15)',
+              borderRadius: 2, overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%', width: `${state.progress}%`,
+                background: '#ffd700', transition: 'width 0.2s',
+              }} />
+            </div>
+          </>
+        )}
+        {state.phase === 'ready' && (
+          <div style={{ fontWeight: 700, color: '#4ade80', fontSize: 14 }}>
+            ✅ Atualização instalada! Reiniciando...
+          </div>
+        )}
       </div>
-      <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-        <button
-          onClick={() => setRelease(null)}
-          style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}
-        >
-          Agora não
-        </button>
-        <button
-          onClick={handleUpdate}
-          style={{ background: '#ffd700', color: '#000', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}
-        >
-          Baixar
-        </button>
-      </div>
+
+      {state.phase === 'available' && (
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <button
+            onClick={() => setDismissed(true)}
+            style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}
+          >
+            Agora não
+          </button>
+          <button
+            onClick={handleUpdate}
+            style={{ background: '#ffd700', color: '#000', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}
+          >
+            Atualizar
+          </button>
+        </div>
+      )}
     </div>
   );
 }

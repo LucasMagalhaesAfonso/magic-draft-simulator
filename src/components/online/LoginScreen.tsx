@@ -16,6 +16,8 @@ export function LoginScreen() {
   const [showReset, setShowReset] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
   const [resetMsg, setResetMsg] = useState('');
+  const [guestName, setGuestName] = useState('');
+  const [showGuest, setShowGuest] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -162,6 +164,60 @@ export function LoginScreen() {
             </div>
           </div>
         )}
+
+        <div style={{ margin: '14px 0 4px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 14 }}>
+          {!showGuest ? (
+            <button
+              className="btn btn-muted"
+              style={{ width: '100%', fontSize: 13, padding: '9px 0' }}
+              onClick={() => setShowGuest(true)}
+            >
+              👤 Entrar como Convidado
+            </button>
+          ) : (
+            <div>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginBottom: 8 }}>
+                Escolha um nome para jogar sem conta
+              </div>
+              <input
+                type="text"
+                placeholder="Seu nome"
+                value={guestName}
+                onChange={e => setGuestName(e.target.value)}
+                maxLength={24}
+                autoFocus
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.07)', color: '#fff', fontSize: 13, boxSizing: 'border-box', marginBottom: 8 }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && guestName.trim()) {
+                    setCurrentUser({ uid: 'guest_' + Math.random().toString(36).slice(2, 9), email: '', displayName: guestName.trim() });
+                    setScreen('online_lobby');
+                  }
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="btn btn-gold"
+                  style={{ flex: 1, fontSize: 13, padding: '8px 0' }}
+                  disabled={!guestName.trim()}
+                  onClick={() => {
+                    if (!guestName.trim()) return;
+                    setCurrentUser({ uid: 'guest_' + Math.random().toString(36).slice(2, 9), email: '', displayName: guestName.trim() });
+                    setScreen('online_lobby');
+                  }}
+                >
+                  Jogar
+                </button>
+                <button
+                  className="btn btn-muted"
+                  style={{ fontSize: 13, padding: '8px 12px' }}
+                  onClick={() => { setShowGuest(false); setGuestName(''); }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         <button className="login-back" onClick={() => setScreen('home')}>
           ← Voltar ao Menu

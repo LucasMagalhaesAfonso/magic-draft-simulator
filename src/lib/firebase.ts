@@ -52,20 +52,35 @@ export const auth = getAuth(app!);
 export const db = getFirestore(app!);
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
+function withTimeout<T>(promise: Promise<T>, ms: number, msg: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(msg)), ms)
+    ),
+  ]);
+}
+
 export async function registerUser(email: string, password: string, displayName: string): Promise<User> {
-  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  const cred = await withTimeout(
+    createUserWithEmailAndPassword(auth, email, password),
+    10000, 'Tempo esgotado. Verifique sua conexão.'
+  );
   await updateProfile(cred.user, { displayName });
-  // Create user doc in Firestore
-  await setDoc(doc(db, 'users', cred.user.uid), {
+  // Create user doc in Firestore — non-blocking so it never hangs the UI
+  setDoc(doc(db, 'users', cred.user.uid), {
     displayName,
     email,
     createdAt: serverTimestamp(),
-  });
+  }).catch(() => {});
   return cred.user;
 }
 
 export async function loginUser(email: string, password: string): Promise<User> {
-  const cred = await signInWithEmailAndPassword(auth, email, password);
+  const cred = await withTimeout(
+    signInWithEmailAndPassword(auth, email, password),
+    10000, 'Tempo esgotado. Verifique sua conexão.'
+  );
   return cred.user;
 }
 

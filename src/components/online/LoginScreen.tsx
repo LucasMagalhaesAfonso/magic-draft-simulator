@@ -35,9 +35,11 @@ export function LoginScreen() {
     } catch (e: any) {
       const msg = e?.code === 'auth/user-not-found' ? 'Usuário não encontrado.'
         : e?.code === 'auth/wrong-password' ? 'Senha incorreta.'
+        : e?.code === 'auth/invalid-credential' ? 'E-mail ou senha incorretos.'
         : e?.code === 'auth/email-already-in-use' ? 'E-mail já cadastrado.'
         : e?.code === 'auth/weak-password' ? 'Senha muito fraca (mínimo 6 caracteres).'
         : e?.code === 'auth/invalid-email' ? 'E-mail inválido.'
+        : e?.code === 'auth/network-request-failed' ? 'Sem conexão com a internet.'
         : e?.message || 'Erro desconhecido.';
       setError(msg);
     } finally {

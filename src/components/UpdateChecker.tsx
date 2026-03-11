@@ -40,8 +40,8 @@ export function UpdateChecker() {
   if (!newVersion) return null;
 
   async function openDownload() {
-    const { open } = await import('@tauri-apps/plugin-opener');
-    open(RELEASES_PAGE);
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    openUrl(RELEASES_PAGE);
   }
 
   return (

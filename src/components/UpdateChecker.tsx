@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 
 const CURRENT_VERSION = __APP_VERSION__;
 const RELEASES_API = 'https://api.github.com/repos/LucasMagalhaesAfonso/magic-draft-simulator/releases/latest';
-const RELEASES_PAGE = 'https://github.com/LucasMagalhaesAfonso/magic-draft-simulator/releases/latest';
 
 function parseVersion(v: string) {
   return v.replace(/^v/, '').split('.').map(Number);
@@ -18,8 +17,14 @@ function isNewer(latest: string, current: string) {
   return false;
 }
 
+interface ReleaseInfo {
+  version: string;
+  exeUrl: string | null;
+  appImageUrl: string | null;
+}
+
 export function UpdateChecker() {
-  const [newVersion, setNewVersion] = useState<string | null>(null);
+  const [release, setRelease] = useState<ReleaseInfo | null>(null);
 
   useEffect(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
@@ -29,7 +34,17 @@ export function UpdateChecker() {
         if (!res.ok) return;
         const data = await res.json();
         const tag = data.tag_name as string;
-        if (isNewer(tag, CURRENT_VERSION)) setNewVersion(tag.replace(/^v/, ''));
+        if (!isNewer(tag, CURRENT_VERSION)) return;
+
+        const assets: { name: string; browser_download_url: string }[] = data.assets ?? [];
+        const exeAsset      = assets.find(a => a.name.endsWith('_x64-setup.exe'));
+        const appImageAsset = assets.find(a => a.name.endsWith('.AppImage'));
+
+        setRelease({
+          version: tag.replace(/^v/, ''),
+          exeUrl:      exeAsset?.browser_download_url ?? null,
+          appImageUrl: appImageAsset?.browser_download_url ?? null,
+        });
       } catch {
         // offline or error — silent fail
       }
@@ -37,11 +52,14 @@ export function UpdateChecker() {
     return () => clearTimeout(timer);
   }, []);
 
-  if (!newVersion) return null;
+  if (!release) return null;
 
-  async function openDownload() {
+  async function handleUpdate() {
+    if (!release) return;
     const { openUrl } = await import('@tauri-apps/plugin-opener');
-    openUrl(RELEASES_PAGE);
+    // Open direct download URL — browser downloads the installer automatically
+    const url = release.exeUrl ?? release.appImageUrl ?? 'https://github.com/LucasMagalhaesAfonso/magic-draft-simulator/releases/latest';
+    openUrl(url);
   }
 
   return (
@@ -55,21 +73,21 @@ export function UpdateChecker() {
     }}>
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 700, color: '#ffd700', fontSize: 14 }}>
-          Nova versão disponível: v{newVersion}
+          Nova versão disponível: v{release.version}
         </div>
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 3 }}>
-          Clique em Baixar para instalar a atualização.
+          O instalador vai baixar automaticamente.
         </div>
       </div>
       <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
         <button
-          onClick={() => setNewVersion(null)}
+          onClick={() => setRelease(null)}
           style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}
         >
           Agora não
         </button>
         <button
-          onClick={openDownload}
+          onClick={handleUpdate}
           style={{ background: '#ffd700', color: '#000', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}
         >
           Baixar

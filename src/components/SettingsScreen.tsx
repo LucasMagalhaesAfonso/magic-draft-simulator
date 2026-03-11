@@ -1128,6 +1128,9 @@ function CardArtSearchModal({ title, currentArt, onSelect, onClose }: CardArtSea
           )}
         </div>
       </div>
+      <div style={{ textAlign: 'center', padding: '12px 0 4px', color: 'rgba(255,255,255,0.25)', fontSize: 11 }}>
+        Magic Draft Simulator v{__APP_VERSION__}
+      </div>
     </div>
   );
 }

@@ -228,6 +228,9 @@ export function SettingsScreen() {
 
   return (
     <div className="settings-screen animate-fade-in">
+      <div style={{ position: 'fixed', top: 10, right: 14, fontSize: 10, color: 'rgba(255,255,255,0.25)', pointerEvents: 'none', zIndex: 10 }}>
+        v{__APP_VERSION__}
+      </div>
       <div className="settings-content">
 
         {/* Theme Section */}
@@ -1127,9 +1130,6 @@ function CardArtSearchModal({ title, currentArt, onSelect, onClose }: CardArtSea
             </div>
           )}
         </div>
-      </div>
-      <div style={{ textAlign: 'center', padding: '12px 0 4px', color: 'rgba(255,255,255,0.25)', fontSize: 11 }}>
-        Magic Draft Simulator v{__APP_VERSION__}
       </div>
     </div>
   );

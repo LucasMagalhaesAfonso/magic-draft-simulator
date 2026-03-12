@@ -13,6 +13,9 @@
     "sql:allow-close",
     "updater:default",
     "process:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "fs:allow-write",
+    "fs:allow-read",
+    { "identifier": "fs:scope", "allow": [{ "path": "$TEMP/**" }] }
   ]
 }

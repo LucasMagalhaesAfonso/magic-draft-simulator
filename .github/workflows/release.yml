@@ -118,88 +118,21 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
-
-  sign-and-publish:
+  publish-release:
     needs: [create-release, build]
     permissions:
       contents: write
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Sign installers and upload latest.json
+      - name: Publish release
+        uses: actions/github-script@v7
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
-        run: |
-          set -e
-          REPO="${{ github.repository }}"
-          VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
-          BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
-          EXE_NAME="Magic.Draft_${VERSION}_x64-setup.exe"
-          APPIMAGE_NAME="Magic.Draft_${VERSION}_amd64.AppImage"
-          echo "Version: ${VERSION}"
-
-          ASSETS=$(curl -sf -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets")
-
-          EXE_URL=$(echo "$ASSETS" | jq -r '.[] | select(.name | endswith("x64-setup.exe")) | .url')
-          APPIMAGE_URL=$(echo "$ASSETS" | jq -r '.[] | select(.name | endswith(".AppImage")) | .url')
-
-          echo "Downloading EXE..."
-          curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Accept: application/octet-stream" "${EXE_URL}" -o installer.exe
-
-          echo "Downloading AppImage..."
-          curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Accept: application/octet-stream" "${APPIMAGE_URL}" -o installer.AppImage
-
-          echo "Signing..."
-          npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.exe
-          npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.AppImage
-          EXE_SIG=$(cat installer.exe.sig)
-          APPIMAGE_SIG=$(cat installer.AppImage.sig)
-          echo "EXE sig length: ${#EXE_SIG}"
-          echo "AppImage sig length: ${#APPIMAGE_SIG}"
-          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-          echo "Generating latest.json..."
-          jq -n \
-            --arg version "$VERSION" \
-            --arg date "$DATE" \
-            --arg exe_url "${BASE}/${EXE_NAME}" \
-            --arg exe_sig "$EXE_SIG" \
-            --arg appimage_url "${BASE}/${APPIMAGE_NAME}" \
-            --arg appimage_sig "$APPIMAGE_SIG" \
-            '{version:$version,notes:("Magic Draft v"+$version),pub_date:$date,platforms:{"windows-x86_64":{url:$exe_url,signature:$exe_sig},"linux-x86_64":{url:$appimage_url,signature:$appimage_sig}}}' \
-            > latest.json
-
-          cat latest.json
-
-          echo "Uploading latest.json..."
-          curl -fL -X POST \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "https://uploads.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets?name=latest.json" \
-            --data-binary @latest.json
-
-          echo "Publishing release..."
-          curl -fL -X PATCH \
-            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}" \
-            -d '{"draft":false}'
-
-          echo "Done!"
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: parseInt(process.env.RELEASE_ID),
+              draft: false,
+            });

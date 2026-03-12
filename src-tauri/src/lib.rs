@@ -1,4 +1,31 @@
 use tauri_plugin_sql::{Migration, MigrationKind};
+use std::io::Write;
+
+#[tauri::command]
+async fn run_installer(path: String) -> Result<(), String> {
+    std::process::Command::new(&path)
+        .spawn()
+        .map_err(|e| format!("spawn: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn download_update(url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .user_agent("magic-draft-app/1.0")
+        .build()
+        .map_err(|e| format!("client build: {}", e))?;
+    let response = client.get(&url).send().await.map_err(|e| format!("request: {}", e))?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    let bytes = response.bytes().await.map_err(|e| format!("read body: {}", e))?;
+    let path = std::env::temp_dir().join("magic-draft-update.exe");
+    let mut file = std::fs::File::create(&path).map_err(|e| format!("create file: {}", e))?;
+    file.write_all(&bytes).map_err(|e| format!("write file: {}", e))?;
+    Ok(path.to_string_lossy().to_string())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -84,6 +111,7 @@ pub fn run() {
     ];
 
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![download_update, run_installer])
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

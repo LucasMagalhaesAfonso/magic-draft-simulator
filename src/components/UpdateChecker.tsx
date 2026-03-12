@@ -20,6 +20,7 @@ type State =
   | { phase: 'idle' }
   | { phase: 'available'; version: string; exeUrl: string }
   | { phase: 'downloading'; progress: number }
+  | { phase: 'error'; message: string; exeUrl: string }
   | { phase: 'done' };
 
 export function UpdateChecker() {
@@ -54,47 +55,28 @@ export function UpdateChecker() {
     setState({ phase: 'downloading', progress: 0 });
 
     try {
-      // Download with progress
-      const res = await fetch(exeUrl);
-      const total = parseInt(res.headers.get('content-length') || '0');
-      const reader = res.body!.getReader();
-      const chunks: Uint8Array[] = [];
-      let downloaded = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        downloaded += value.length;
-        if (total) setState({ phase: 'downloading', progress: Math.round(downloaded / total * 100) });
-      }
-
-      // Combine chunks into single Uint8Array
-      const combined = new Uint8Array(downloaded);
-      let offset = 0;
-      for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.length; }
-
-      // Save to temp dir
-      const { tempDir, join } = await import('@tauri-apps/api/path');
-      const { writeFile } = await import('@tauri-apps/plugin-fs');
-      const tmpPath = await join(await tempDir(), 'magic-draft-update.exe');
-      await writeFile(tmpPath, combined);
+      // Download via Rust command (saves to temp dir, no fs permission needed)
+      const { invoke } = await import('@tauri-apps/api/core');
+      const tmpPath = await invoke<string>('download_update', { url: exeUrl });
 
       setState({ phase: 'done' });
 
-      // Launch installer then exit app
-      const { openPath } = await import('@tauri-apps/plugin-opener');
-      await openPath(tmpPath);
+      // Launch installer via Rust (bypasses opener sandbox), then exit app
+      await invoke('run_installer', { path: tmpPath });
       await new Promise(r => setTimeout(r, 1500));
       const { exit } = await import('@tauri-apps/plugin-process');
       await exit(0);
     } catch (e) {
       console.error('Update failed:', e);
-      // Fallback: open direct download in browser (auto-downloads)
-      const { openUrl } = await import('@tauri-apps/plugin-opener');
-      openUrl(exeUrl);
-      setState({ phase: 'idle' });
+      setState({ phase: 'error', message: String(e), exeUrl });
     }
+  }
+
+  async function handleBrowserDownload() {
+    if (state.phase !== 'error') return;
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    openUrl(state.exeUrl);
+    setDismissed(true);
   }
 
   if (dismissed || state.phase === 'idle') return null;
@@ -121,10 +103,10 @@ export function UpdateChecker() {
         {state.phase === 'downloading' && (
           <>
             <div style={{ fontWeight: 700, color: '#ffd700', fontSize: 14 }}>
-              Baixando... {state.progress}%
+              Baixando atualização...
             </div>
             <div style={{ marginTop: 6, height: 4, background: 'rgba(255,255,255,0.15)', borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${state.progress}%`, background: '#ffd700', transition: 'width 0.2s' }} />
+              <div style={{ height: '100%', width: '100%', background: 'linear-gradient(90deg, transparent, #ffd700, transparent)', backgroundSize: '200% 100%', animation: 'shimmer 1.2s infinite' }} />
             </div>
           </>
         )}
@@ -132,6 +114,16 @@ export function UpdateChecker() {
           <div style={{ fontWeight: 700, color: '#4ade80', fontSize: 14 }}>
             ✅ Instalando atualização...
           </div>
+        )}
+        {state.phase === 'error' && (
+          <>
+            <div style={{ fontWeight: 700, color: '#f87171', fontSize: 13 }}>
+              Erro no download:
+            </div>
+            <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', marginTop: 2, wordBreak: 'break-all', maxWidth: 400 }}>
+              {state.message}
+            </div>
+          </>
         )}
       </div>
       {state.phase === 'available' && (
@@ -143,6 +135,18 @@ export function UpdateChecker() {
           <button onClick={handleUpdate}
             style={{ background: '#ffd700', color: '#000', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>
             Atualizar
+          </button>
+        </div>
+      )}
+      {state.phase === 'error' && (
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <button onClick={() => setDismissed(true)}
+            style={{ background: 'none', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 12 }}>
+            Fechar
+          </button>
+          <button onClick={handleBrowserDownload}
+            style={{ background: '#f87171', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>
+            Baixar no navegador
           </button>
         </div>
       )}

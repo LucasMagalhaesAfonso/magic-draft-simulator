@@ -2,7 +2,22 @@ import { io, type Socket } from 'socket.io-client';
 
 // ── Server URL ────────────────────────────────────────────────────────────────
 // In dev: localhost:3001. In prod: set VITE_SOCKET_SERVER_URL in .env
-const SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL || 'http://localhost:3001';
+export const SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL || 'http://localhost:3001';
+const IS_RENDER = SERVER_URL.includes('onrender.com');
+
+// Wake up Render free-tier server before connecting (cold start takes ~25-30s).
+// Returns a promise that resolves when the HTTP endpoint responds (or after timeout).
+export async function wakeServer(timeoutMs = 40000): Promise<void> {
+  if (!IS_RENDER) return; // local dev, no need
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    await fetch(SERVER_URL, { signal: ctrl.signal });
+    clearTimeout(t);
+  } catch {
+    // ignore — socket.io will handle reconnection
+  }
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type MultiplayerRole = 'host' | 'guest' | null;
@@ -40,10 +55,10 @@ export function getSocket(): Socket {
     _socket = io(SERVER_URL, {
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: 20,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 10000,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 8000,
+      timeout: 45000, // Render free tier cold-start can take ~30s
     });
   }
   return _socket;

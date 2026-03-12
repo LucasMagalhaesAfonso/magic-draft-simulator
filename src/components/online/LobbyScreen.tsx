@@ -3,7 +3,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { logoutUser } from '../../lib/firebase';
 import { getCardsBySet } from '../../lib/database';
 import {
-  connectSocket, disconnectSocket, createRoom, joinRoom, sendStartGame, sendDraftEvent,
+  connectSocket, disconnectSocket, createRoom, joinRoom, sendStartGame, sendDraftEvent, wakeServer,
 } from '../../lib/multiplayerSocket';
 import type { Card } from '../../lib/types';
 import './LobbyScreen.css';
@@ -88,6 +88,7 @@ export function LobbyScreen() {
   const [joinCode, setJoinCode] = useState('');
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [warmingUp, setWarmingUp] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [humanPlayers, setHumanPlayers] = useState<{ displayName: string; seatIndex: number }[]>([]);
   const socketRef = useRef<ReturnType<typeof connectSocket> | null>(null);
@@ -194,7 +195,11 @@ export function LobbyScreen() {
     });
 
     setConnecting(true);
-    if (!socket.connected) socket.connect();
+    setWarmingUp(true);
+    wakeServer().finally(() => {
+      setWarmingUp(false);
+      if (!socket.connected) socket.connect();
+    });
 
     return () => {
       socket.off('connect');
@@ -297,7 +302,7 @@ export function LobbyScreen() {
       <div className="lobby-status-bar">
         <span className={`lobby-connection-dot ${socketConnected ? 'connected' : 'disconnected'}`} />
         <span className="lobby-connection-label">
-          {connecting && !socketConnected ? 'Conectando ao servidor...' : socketConnected ? 'Servidor online' : 'Servidor offline'}
+          {warmingUp ? 'Acordando servidor (pode levar ~30s)...' : connecting && !socketConnected ? 'Conectando ao servidor...' : socketConnected ? 'Servidor online' : 'Servidor offline'}
         </span>
       </div>
 

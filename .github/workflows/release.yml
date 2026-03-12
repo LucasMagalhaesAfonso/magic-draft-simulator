@@ -140,7 +140,7 @@ jobs:
       - name: Sign installers and upload latest.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
@@ -167,8 +167,8 @@ jobs:
             -H "Accept: application/octet-stream" "${APPIMAGE_URL}" -o installer.AppImage
 
           echo "Signing..."
-          EXE_SIG=$(npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "" installer.exe)
-          APPIMAGE_SIG=$(npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "" installer.AppImage)
+          EXE_SIG=$(npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.exe)
+          APPIMAGE_SIG=$(npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.AppImage)
           echo "EXE sig: ${EXE_SIG:0:40}..."
           echo "AppImage sig: ${APPIMAGE_SIG:0:40}..."
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)

@@ -12,14 +12,26 @@ import {
 } from './card-utils';
 import { vfxPlay, vfxPlayText, vfxPlayCombat } from './vfx-bridge';
 
-/** Pick attack VFX type based on creature color identity */
+/** Pick attack VFX type based on oracle text / name first, then color identity */
 function _attackVfx(card: any): string {
+  const text  = ((card.oracle_text || '') + ' ' + (card.name || '')).toLowerCase();
   const colors: string[] = card.colors || card.color_identity || [];
   const r = colors.includes('R');
   const u = colors.includes('U');
   const g = colors.includes('G');
   const b = colors.includes('B');
   const w = colors.includes('W');
+
+  // Oracle/name keywords override color
+  if (/lightning|thunder|bolt|shock|static|spark|zap/.test(text))       return 'attackLightning';
+  if (/frost|ice|freeze|frozen|snow|blizzard|glacial|cold/.test(text))  return 'attackIce';
+  if (/fire|flame|burn|scorch|blaze|inferno|lava|ember|ignite|dragon/.test(text)) return 'attackFire';
+  if (/blood|wound|gore|slash|claw|savage|feral|bite/.test(text))       return 'attackBlood';
+  if (/shadow|death|grave|decay|rot|poison|corrupt|dark|void|necro/.test(text))   return 'attackDark';
+  if (/water|wave|flood|tide|aqua|river|sea|ocean|torrent|rain/.test(text))       return 'attackWater';
+  if (/nature|vine|root|growth|forest|leaf|earth|seed|herb|grove/.test(text))     return 'attackGreen';
+
+  // Fall back to card color
   if (r && b) return 'attackBlood';
   if (u && r) return 'attackLightning';
   if (r)      return 'attackFire';

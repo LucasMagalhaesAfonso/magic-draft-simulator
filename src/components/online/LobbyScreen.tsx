@@ -1,10 +1,50 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { logoutUser } from '../../lib/firebase';
+import { getCardsBySet } from '../../lib/database';
 import {
   connectSocket, disconnectSocket, createRoom, joinRoom, sendStartGame, sendDraftEvent,
 } from '../../lib/multiplayerSocket';
+import type { Card } from '../../lib/types';
 import './LobbyScreen.css';
+
+// ── Sealed pack generation ────────────────────────────────────────────────────
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function pickUnique(pool: Card[], n: number): Card[] {
+  const s = shuffle(pool);
+  const result: Card[] = [];
+  const used = new Set<string>();
+  for (const c of s) {
+    if (result.length >= n) break;
+    if (!used.has(c.name)) { result.push(c); used.add(c.name); }
+  }
+  while (result.length < n && result.length < pool.length) {
+    const c = s[result.length];
+    if (c && !result.includes(c)) result.push(c);
+    else break;
+  }
+  return result;
+}
+
+function generateSealedPool(cards: Card[]): Card[] {
+  // 6 packs × 15 cards (1 rare/mythic + 3 uncommon + 11 common each)
+  const commons   = cards.filter(c => c.rarity === 'common');
+  const uncommons = cards.filter(c => c.rarity === 'uncommon');
+  const rarePool  = cards.filter(c => c.rarity === 'rare' || c.rarity === 'mythic');
+  const pool: Card[] = [];
+  for (let i = 0; i < 6; i++) {
+    pool.push(...pickUnique(rarePool, 1), ...pickUnique(uncommons, 3), ...pickUnique(commons, 11));
+  }
+  return pool;
+}
 
 const AVAILABLE_SETS = [
   { code: 'tdm', name: 'Tarkir Dragonstorm (TDM)' },
@@ -36,9 +76,11 @@ export function LobbyScreen() {
     mpRole, mpRoomCode,
     setMpRoom, setMpConnected, clearMp,
     mySeatIndex, setMySeatIndex,
-    setPodPlayers,
+    setPodPlayers, setPodPicks,
     draftSetCode, setDraftSetCode,
     deck, onlineDeck, setOnlineDeck,
+    setDraftPool, setDeck,
+    setDeckbuilderReturn,
   } = useAppStore();
 
   const [tab, setTab] = useState<'create' | 'join'>('create');
@@ -126,13 +168,28 @@ export function LobbyScreen() {
       setMySeatIndex(null);
     });
 
-    // Draft start signal from host
+    // Draft / sealed start signals from host
     socket.on('draft_event', (data: any) => {
       if (data.type === 'draft_start_signal') {
-        // Update set code and pod players for guest
         if (data.setCode) setDraftSetCode(data.setCode);
         if (data.podPlayers) setPodPlayers(data.podPlayers);
         setScreen('online_draft');
+      }
+
+      if (data.type === 'sealed_start_signal') {
+        const myPool = (data.poolsBySeats as { seatIndex: number; pool: Card[]; isBot: boolean }[])
+          .find(p => p.seatIndex === mySeatIndex)?.pool ?? [];
+        // Store full pod picks (all seats) so pod_lobby works after deckbuilder
+        const podPicksData = (data.podPlayers as any[]).map((p: any) => {
+          const entry = (data.poolsBySeats as any[]).find((x: any) => x.seatIndex === p.seatIndex);
+          return { seatIndex: p.seatIndex, displayName: p.displayName, isBot: p.isBot, picks: entry?.pool ?? [] };
+        });
+        if (data.podPlayers) setPodPlayers(data.podPlayers);
+        setPodPicks(podPicksData);
+        setDraftPool(myPool);
+        setDeck(null);
+        setDeckbuilderReturn('pod_lobby');
+        setScreen('deckbuilder');
       }
     });
 
@@ -184,6 +241,22 @@ export function LobbyScreen() {
     const selectedDeck = onlineDeck || deck;
     sendStartGame({ hostDeck: selectedDeck });
     setScreen('online_game');
+  }
+
+  async function handleStartSealed() {
+    const cards = await getCardsBySet(draftSetCode);
+    if (!cards || cards.length < 120) {
+      setError('Cartas insuficientes para selado. Importe o set primeiro.');
+      return;
+    }
+    const podPlayers = seats.map(s => ({ displayName: s.displayName, seatIndex: s.seatIndex, isBot: s.isBot }));
+    setPodPlayers(podPlayers);
+    const poolsBySeats = seats.map(s => ({
+      seatIndex: s.seatIndex,
+      isBot: s.isBot,
+      pool: generateSealedPool(cards),
+    }));
+    sendDraftEvent({ type: 'sealed_start_signal', poolsBySeats, podPlayers, setCode: draftSetCode });
   }
 
   async function handleLogout() {
@@ -345,12 +418,28 @@ export function LobbyScreen() {
               </button>
               <button
                 className="btn btn-gold lobby-start-btn"
+                onClick={handleStartSealed}
+                style={{ background: 'linear-gradient(135deg, #16a085, #1abc9c)' }}
+              >
+                Iniciar Selado
+              </button>
+              <button
+                className="btn btn-gold lobby-start-btn"
                 onClick={handleStartGame}
                 disabled={humanPlayers.length < 2 || (!onlineDeck && !deck)}
-                title="Jogar partida 1v1 com deck pronto"
+                title={(!onlineDeck && !deck) ? 'Construa um deck no Deckbuilder primeiro' : 'Jogar partida 1v1 com deck pronto'}
               >
                 Jogar 1v1 (deck pronto)
               </button>
+              {(!onlineDeck && !deck) && (
+                <button
+                  className="btn btn-muted lobby-start-btn"
+                  onClick={() => { setDeckbuilderReturn('lobby'); setScreen('deckbuilder'); }}
+                  title="Construir ou carregar deck para usar no 1v1"
+                >
+                  Construir Deck para 1v1
+                </button>
+              )}
             </div>
           )}
 

@@ -53,6 +53,8 @@ export function PodLobbyScreen() {
     setDeck,
     currentUser,
     setOnlineDraftPicks,
+    setDraftPool,
+    setDeckbuilderReturn,
   } = useAppStore();
 
   const [challenge, setChallenge] = useState<ChallengeState | null>(null);
@@ -74,22 +76,17 @@ export function PodLobbyScreen() {
         const isInvolved = data.fromSeat === mySeatIndex || data.toSeat === mySeatIndex;
         if (!isInvolved) return;
 
-        // Determine my deck
+        // Use pre-built deck if available, otherwise auto-build from picks
         const myEntry = podPicks?.find(p => p.seatIndex === mySeatIndex);
-        if (myEntry) {
-          const myDeckList = makeDeckFromPicks(myEntry.picks);
-          setOnlineDeck(myDeckList);
-        }
+        const myDeckList = deck ?? (myEntry ? makeDeckFromPicks(myEntry.picks) : null);
+        if (myDeckList) setOnlineDeck(myDeckList);
 
-        // If host (seat-based, the challenger who accepted becomes host of 1v1)
         const amChallenger = data.fromSeat === mySeatIndex;
         if (amChallenger) {
-          const myDeckList = makeDeckFromPicks(podPicks?.find(p => p.seatIndex === mySeatIndex)?.picks ?? []);
           sendStartGame({ hostDeck: myDeckList });
           setMpRoom('host', null);
           setScreen('online_game');
         } else {
-          // Guest side
           setMpRoom('guest', null);
           setMpConnected(true);
           setScreen('online_game');
@@ -170,7 +167,9 @@ export function PodLobbyScreen() {
   function handleBuildMyDeck() {
     const myEntry = podPicks?.find(p => p.seatIndex === mySeatIndex);
     if (myEntry) {
-      setOnlineDraftPicks(myEntry.picks);
+      setDraftPool(myEntry.picks);         // draftPool is what DeckBuilderScreen shows
+      setOnlineDraftPicks(myEntry.picks);  // keep for compatibility
+      setDeckbuilderReturn('pod_lobby');   // "Jogar Online" returns here after building
       setScreen('deckbuilder');
     }
   }

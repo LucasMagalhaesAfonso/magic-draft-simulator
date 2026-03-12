@@ -178,27 +178,28 @@
 
 .od-pack-grid {
   display: grid;
-  grid-template-columns: repeat(5, 100px);
-  gap: 8px;
+  grid-template-columns: repeat(5, 148px);
+  gap: 12px;
   justify-content: center;
 }
 
 .od-card {
   position: relative;
-  width: 100px;
-  height: 140px;
-  border-radius: 6px;
-  overflow: hidden;
+  width: 148px;
+  height: 206px;
+  border-radius: 8px;
+  overflow: visible;
   cursor: pointer;
   border: 2px solid transparent;
-  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, transform 0.2s, box-shadow 0.2s;
   background: rgba(255,255,255,0.04);
   flex-shrink: 0;
 }
 
 .od-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 16px rgba(0,0,0,0.5);
+  transform: translateY(-4px) scale(1.55);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.8);
+  z-index: 10;
 }
 
 .od-card.selected {
@@ -212,6 +213,7 @@
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: 6px;
 }
 
 .od-card-placeholder {

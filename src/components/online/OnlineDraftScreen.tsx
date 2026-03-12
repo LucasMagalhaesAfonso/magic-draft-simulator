@@ -50,17 +50,45 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 // ── Pack generation ───────────────────────────────────────────────────────────
+// Generates a single pack: 1 rare/mythic + 3 uncommons + 11 commons (15 cards).
+// Draws independently each time (with replacement across packs), like real paper.
+function generatePack(cards: Card[]): Card[] {
+  const commons    = cards.filter(c => c.rarity === 'common');
+  const uncommons  = cards.filter(c => c.rarity === 'uncommon');
+  const rares      = cards.filter(c => c.rarity === 'rare');
+  const mythics    = cards.filter(c => c.rarity === 'mythic');
+  const rarePool   = [...rares, ...mythics]; // ~1/8 chance mythic in real packs
+
+  const pick = (pool: Card[], n: number): Card[] => {
+    if (pool.length === 0) return [];
+    const s = shuffle(pool);
+    const result: Card[] = [];
+    const used = new Set<string>();
+    for (const c of s) {
+      if (result.length >= n) break;
+      if (!used.has(c.name)) { result.push(c); used.add(c.name); }
+    }
+    // fill remainder if not enough unique names
+    while (result.length < n && result.length < pool.length) {
+      const c = s[result.length];
+      if (c && !result.includes(c)) result.push(c);
+      else break;
+    }
+    return result;
+  };
+
+  const rare    = pick(rarePool, 1);
+  const uncommon = pick(uncommons, 3);
+  const common  = pick(commons, 11);
+  return [...rare, ...uncommon, ...common];
+}
+
 function generateAllPacks(cards: Card[]): Card[][][] {
   const allPacks: Card[][][] = [];
-  const usedIds = new Set<string>();
   for (let round = 0; round < 3; round++) {
     const roundPacks: Card[][] = [];
     for (let seat = 0; seat < 8; seat++) {
-      const available = cards.filter(c => !usedIds.has(c.id));
-      const shuffled = shuffle(available);
-      const pack = shuffled.slice(0, 15);
-      pack.forEach(c => usedIds.add(c.id));
-      roundPacks.push(pack);
+      roundPacks.push(generatePack(cards));
     }
     allPacks.push(roundPacks);
   }
@@ -135,15 +163,16 @@ export function OnlineDraftScreen() {
 
   // Host-only refs (large data, not state)
   const allPacksRef = useRef<Card[][][]>([]); // [round][seat][card]
-  const currentRoundPacksRef = useRef<Card[][]>([]); // remaining cards per seat this round
+  const packQueueRef = useRef<Record<number, Card[][]>>({}); // seat → queue of packs waiting to be picked
   const allPicksBySeatRef = useRef<Record<number, Card[]>>({}); // seat → picks array
-  const pickedThisTurnRef = useRef<Set<number>>(new Set());
+  const picksInRoundBySeatRef = useRef<Record<number, number>>({}); // seat → picks made this round
   const currentRoundRef = useRef(0);
-  const currentPickInRoundRef = useRef(0);
   const humanSeatsRef = useRef<number[]>([]);
   const botSeatsRef = useRef<number[]>([]);
   const initDoneRef = useRef(false);
   const myRemainingPackRef = useRef<Card[]>([]); // after picking, wait for new_pack
+  // Exposed so socket listener can call it too
+  const drainBotQueuesRef = useRef<(startSeats: number[]) => void>(() => {});
 
   // ── Host initializes draft ────────────────────────────────────────────────
   useEffect(() => {
@@ -171,27 +200,57 @@ export function OnlineDraftScreen() {
       humanSeatsRef.current = humanSeats;
       botSeatsRef.current = botSeats;
 
-      // Init current round packs for round 0
-      currentRoundPacksRef.current = allPacks[0].map(pack => [...pack]);
       currentRoundRef.current = 0;
-      currentPickInRoundRef.current = 0;
-      pickedThisTurnRef.current = new Set();
 
-      // Auto-pick for bots in round 0
-      for (const botSeat of botSeats) {
-        const pack = currentRoundPacksRef.current[botSeat];
-        const pick = botPick(pack);
-        currentRoundPacksRef.current[botSeat] = pack.filter(c => c.id !== pick.id);
-        allPicksBySeatRef.current[botSeat].push(pick);
-        sendDraftEvent({ type: 'bot_picked', seatIndex: botSeat, cardName: pick.name });
+      // Helper: bot picks from its queued pack and passes remaining to next seat
+      function drainBotQueues(startSeats: number[]) {
+        const toProcess = [...startSeats];
+        const visited = new Set<string>();
+        while (toProcess.length > 0) {
+          const seat = toProcess.shift()!;
+          if (!botSeats.includes(seat)) continue;
+          const queue = packQueueRef.current[seat] ?? [];
+          if (queue.length === 0) continue;
+          const pack = queue[0];
+          if (!pack || pack.length === 0) { packQueueRef.current[seat] = queue.slice(1); continue; }
+          const pick = botPick(pack);
+          const remaining = pack.filter(c => c.id !== pick.id);
+          packQueueRef.current[seat] = queue.slice(1);
+          allPicksBySeatRef.current[seat] = [...(allPicksBySeatRef.current[seat] ?? []), pick];
+          picksInRoundBySeatRef.current[seat] = (picksInRoundBySeatRef.current[seat] ?? 0) + 1;
+          sendDraftEvent({ type: 'bot_picked', seatIndex: seat, cardName: pick.name });
+          if (remaining.length > 0) {
+            const dir = currentRoundRef.current % 2 === 0 ? 1 : -1;
+            const nextSeat = (seat + dir + 8) % 8;
+            packQueueRef.current[nextSeat] = [...(packQueueRef.current[nextSeat] ?? []), remaining];
+            const key = `${nextSeat}-${packQueueRef.current[nextSeat].length}`;
+            if (botSeats.includes(nextSeat) && !visited.has(key)) { visited.add(key); toProcess.push(nextSeat); }
+          }
+          if ((packQueueRef.current[seat] ?? []).length > 0) toProcess.push(seat);
+        }
       }
 
-      // Send round_start to everyone (server broadcasts to all including host)
+      // Expose drainBotQueues for socket listener
+      drainBotQueuesRef.current = drainBotQueues;
+
+      // Initialize per-seat pick counters and pack queues
+      for (let i = 0; i < 8; i++) {
+        packQueueRef.current[i] = [allPacks[0][i].slice()];
+        picksInRoundBySeatRef.current[i] = 0;
+      }
+
+      // Bot seats: pick immediately and pass packs
+      drainBotQueues(botSeats);
+
+      // Send round_start to everyone
       sendDraftEvent({
         type: 'round_start',
         round: 0,
         pickInRound: 0,
-        packsForSeats: humanSeats.map(s => ({ seatIndex: s, pack: allPacks[0][s] })),
+        packsForSeats: humanSeats.map(s => ({
+          seatIndex: s,
+          pack: packQueueRef.current[s][0] ?? [],
+        })),
         podPlayers: podPlayers,
       });
     }
@@ -223,8 +282,10 @@ export function OnlineDraftScreen() {
       }
 
       if (data.type === 'new_pack') {
-        const myPack = (data.packsForSeats as { seatIndex: number; pack: Card[] }[])
-          .find(p => p.seatIndex === mySeatIndex)?.pack ?? [];
+        const myEntry = (data.packsForSeats as { seatIndex: number; pack: Card[] }[])
+          .find(p => p.seatIndex === mySeatIndex);
+        if (!myEntry) return; // this pack delivery is for another seat
+        const myPack = myEntry.pack;
         myRemainingPackRef.current = myPack;
         setState(s => ({
           ...s,
@@ -279,87 +340,77 @@ export function OnlineDraftScreen() {
         const seatIdx = data.seatIndex as number;
         const cardId = data.cardId as string;
         const cardName = data.cardName as string;
+        const humanSeats = humanSeatsRef.current;
+        const botSeats = botSeatsRef.current;
+        const round = currentRoundRef.current;
 
-        // Remove from that seat's remaining pack
-        currentRoundPacksRef.current[seatIdx] = currentRoundPacksRef.current[seatIdx].filter(c => c.id !== cardId);
-        // Find card object and store pick
-        const picked = allPacksRef.current.flat().flat().find(c => c.id === cardId);
-        if (picked) allPicksBySeatRef.current[seatIdx].push(picked);
+        // Pop the front pack from this seat's queue
+        const queue = packQueueRef.current[seatIdx] ?? [];
+        const pack = queue[0] ?? [];
+        const remaining = cardId === '__empty__' ? [] : pack.filter(c => c.id !== cardId);
+        packQueueRef.current[seatIdx] = queue.slice(1);
 
-        pickedThisTurnRef.current.add(seatIdx);
+        // Record pick
+        if (cardId !== '__empty__') {
+          const picked = pack.find(c => c.id === cardId);
+          if (picked) allPicksBySeatRef.current[seatIdx].push(picked);
+        }
+        picksInRoundBySeatRef.current[seatIdx] = (picksInRoundBySeatRef.current[seatIdx] ?? 0) + 1;
 
-        // Broadcast pick_confirmed so all can see who picked
         sendDraftEvent({ type: 'pick_confirmed', seatIndex: seatIdx, cardName });
 
-        // Check if all human seats have picked
-        const humanSeats = humanSeatsRef.current;
-        const allHumansPicked = humanSeats.every(s => pickedThisTurnRef.current.has(s));
-        if (allHumansPicked) {
-          currentPickInRoundRef.current++;
-          if (currentPickInRoundRef.current >= PICKS_PER_ROUND) {
-            // End of round
-            const nextRound = currentRoundRef.current + 1;
-            if (nextRound >= TOTAL_ROUNDS) {
-              // Draft complete
-              const podPlayersSnap = podPlayers;
-              sendDraftEvent({
-                type: 'draft_complete',
-                allPicks: allPicksBySeatRef.current,
-                podPlayers: podPlayersSnap,
-              });
-            } else {
-              sendDraftEvent({ type: 'round_transition', round: nextRound });
-              currentRoundRef.current = nextRound;
-              currentPickInRoundRef.current = 0;
-              pickedThisTurnRef.current = new Set();
-              // Start new round
-              const newRoundPacks = allPacksRef.current[nextRound].map(pack => [...pack]);
-              currentRoundPacksRef.current = newRoundPacks;
-              // Bot picks for new round
-              for (const botSeat of botSeatsRef.current) {
-                const pack = currentRoundPacksRef.current[botSeat];
-                const pick = botPick(pack);
-                currentRoundPacksRef.current[botSeat] = pack.filter(c => c.id !== pick.id);
-                allPicksBySeatRef.current[botSeat].push(pick);
-                sendDraftEvent({ type: 'bot_picked', seatIndex: botSeat, cardName: pick.name });
-              }
-              sendDraftEvent({
-                type: 'round_start',
-                round: nextRound,
-                pickInRound: 0,
-                packsForSeats: humanSeats.map(s => ({ seatIndex: s, pack: currentRoundPacksRef.current[s] })),
-                podPlayers: podPlayers,
-              });
-            }
-          } else {
-            // Rotate packs
-            const direction = currentRoundRef.current % 2 === 0 ? 'left' : 'right';
-            const newPacks: Card[][] = new Array(8);
-            for (let i = 0; i < 8; i++) {
-              if (direction === 'left') {
-                newPacks[i] = currentRoundPacksRef.current[(i - 1 + 8) % 8];
-              } else {
-                newPacks[i] = currentRoundPacksRef.current[(i + 1) % 8];
-              }
-            }
-            currentRoundPacksRef.current = newPacks;
-
-            // Bot picks on new packs
-            for (const botSeat of botSeatsRef.current) {
-              const pack = currentRoundPacksRef.current[botSeat];
-              if (!pack || pack.length === 0) continue;
-              const pick = botPick(pack);
-              currentRoundPacksRef.current[botSeat] = pack.filter(c => c.id !== pick.id);
-              allPicksBySeatRef.current[botSeat].push(pick);
-              sendDraftEvent({ type: 'bot_picked', seatIndex: botSeat, cardName: pick.name });
-            }
-
-            pickedThisTurnRef.current = new Set();
+        // Pass remaining pack to next seat immediately
+        if (remaining.length > 0) {
+          const dir = round % 2 === 0 ? 1 : -1;
+          const nextSeat = (seatIdx + dir + 8) % 8;
+          const nextQueue = packQueueRef.current[nextSeat] ?? [];
+          const nextWasEmpty = nextQueue.length === 0;
+          packQueueRef.current[nextSeat] = [...nextQueue, remaining];
+          if (botSeats.includes(nextSeat)) {
+            drainBotQueuesRef.current([nextSeat]);
+          } else if (nextWasEmpty) {
+            // Human had no pack — send immediately
             sendDraftEvent({
               type: 'new_pack',
-              round: currentRoundRef.current,
-              pickInRound: currentPickInRoundRef.current,
-              packsForSeats: humanSeats.map(s => ({ seatIndex: s, pack: currentRoundPacksRef.current[s] })),
+              round,
+              pickInRound: picksInRoundBySeatRef.current[nextSeat] ?? 0,
+              packsForSeats: [{ seatIndex: nextSeat, pack: packQueueRef.current[nextSeat][0] }],
+            });
+          }
+        }
+
+        // If this human seat has more packs queued, send the next one now
+        if (packQueueRef.current[seatIdx].length > 0) {
+          sendDraftEvent({
+            type: 'new_pack',
+            round,
+            pickInRound: picksInRoundBySeatRef.current[seatIdx] ?? 0,
+            packsForSeats: [{ seatIndex: seatIdx, pack: packQueueRef.current[seatIdx][0] }],
+          });
+        }
+
+        // Check if all seats completed PICKS_PER_ROUND picks
+        const allDone = [...humanSeats, ...botSeats].every(
+          s => (picksInRoundBySeatRef.current[s] ?? 0) >= PICKS_PER_ROUND
+        );
+        if (allDone) {
+          const nextRound = round + 1;
+          if (nextRound >= TOTAL_ROUNDS) {
+            sendDraftEvent({ type: 'draft_complete', allPicks: allPicksBySeatRef.current, podPlayers });
+          } else {
+            sendDraftEvent({ type: 'round_transition', round: nextRound });
+            currentRoundRef.current = nextRound;
+            for (let i = 0; i < 8; i++) {
+              packQueueRef.current[i] = [allPacksRef.current[nextRound][i].slice()];
+              picksInRoundBySeatRef.current[i] = 0;
+            }
+            drainBotQueuesRef.current(botSeats);
+            sendDraftEvent({
+              type: 'round_start',
+              round: nextRound,
+              pickInRound: 0,
+              packsForSeats: humanSeats.map(s => ({ seatIndex: s, pack: packQueueRef.current[s][0] ?? [] })),
+              podPlayers,
             });
           }
         }
@@ -373,6 +424,12 @@ export function OnlineDraftScreen() {
   // ── Timer countdown ───────────────────────────────────────────────────────
   useEffect(() => {
     if (state.phase !== 'picking') return;
+    // If pack is empty (shouldn't happen), skip to waiting
+    if (state.currentPack.length === 0) {
+      setState(s => ({ ...s, phase: 'waiting_others' }));
+      sendDraftEvent({ type: 'pick', seatIndex: mySeatIndex, cardId: '__empty__', cardName: '' });
+      return;
+    }
     if (state.timer <= 0) {
       const card = autoPick(state.currentPack, state.myPicks, state.selectedCard);
       if (card) handlePick(card);
@@ -382,7 +439,7 @@ export function OnlineDraftScreen() {
       setState(s => ({ ...s, timer: s.timer - 1 }));
     }, 1000);
     return () => clearInterval(t);
-  }, [state.phase, state.timer]);
+  }, [state.phase, state.timer, state.currentPack.length]);
 
   // ── Handle pick ───────────────────────────────────────────────────────────
   const handlePick = useCallback((card: Card) => {
@@ -420,7 +477,6 @@ export function OnlineDraftScreen() {
   function renderSeatRow(seat: SeatInfo) {
     const hasPicked = state.seatsPicked.has(seat.seatIndex) || seat.isBot;
     const isMe = seat.seatIndex === mySeatIndex && !seat.isBot;
-    const last = state.lastPickBySeat[seat.seatIndex];
     return (
       <div key={seat.seatIndex} className={`od-seat-row ${hasPicked ? 'picked' : ''} ${isMe ? 'me' : ''}`}>
         <span className="od-seat-num">#{seat.seatIndex + 1}</span>
@@ -428,7 +484,7 @@ export function OnlineDraftScreen() {
         {seat.isBot && <span className="od-seat-tag bot">Bot</span>}
         {isMe && <span className="od-seat-tag me">Você</span>}
         {hasPicked
-          ? <span className="od-seat-status done">Pickado {last ? `— ${last}` : ''}</span>
+          ? <span className="od-seat-status done">✓ Pickado</span>
           : <span className="od-seat-status waiting">Aguardando...</span>
         }
       </div>

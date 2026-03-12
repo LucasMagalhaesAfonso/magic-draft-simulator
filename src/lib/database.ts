@@ -24,15 +24,24 @@ export function isTauri(): boolean {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _tauriDb: any = null;
+// Single promise prevents race: if two callers arrive before DB is ready,
+// both await the same promise instead of each opening their own connection.
+let _tauriDbPromise: Promise<any> | null = null;
 
 async function getTauriDb() {
   if (_tauriDb) return _tauriDb;
-  const { default: Database } = await import('@tauri-apps/plugin-sql');
-  _tauriDb = await Database.load('sqlite:magic_draft.db');
-  // WAL mode allows concurrent reads during writes; busy_timeout retries instead of failing instantly
-  await _tauriDb.execute('PRAGMA journal_mode=WAL');
-  await _tauriDb.execute('PRAGMA busy_timeout=5000');
-  return _tauriDb;
+  if (!_tauriDbPromise) {
+    _tauriDbPromise = (async () => {
+      const { default: Database } = await import('@tauri-apps/plugin-sql');
+      const db = await Database.load('sqlite:magic_draft.db');
+      // WAL mode allows concurrent reads during writes; busy_timeout retries instead of failing instantly
+      await db.execute('PRAGMA journal_mode=WAL');
+      await db.execute('PRAGMA busy_timeout=10000');
+      _tauriDb = db;
+      return db;
+    })();
+  }
+  return _tauriDbPromise;
 }
 
 // ============================================
@@ -263,43 +272,25 @@ export async function bulkInsertCards(
   }
   const db = await getTauriDb();
 
-  // Use batched multi-row inserts inside a transaction.
-  // SQLite variable limit is 999; with N_COLS=29 cols each batch holds floor(999/29)=34 rows.
+  // Insert in small batches without manual transaction management.
+  // tauri-plugin-sql uses a connection pool — BEGIN/COMMIT across separate
+  // execute() calls may hit different connections, causing spurious locks.
+  // Each batch auto-commits; busy_timeout=10000 handles any brief contention.
   const BATCH = 30;
   let inserted = 0;
 
-  // BEGIN IMMEDIATE acquires write lock upfront, avoiding "database is locked"
-  // from concurrent background operations (e.g. fetchAltArt fire-and-forget)
-  let begun = false;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      await db.execute('BEGIN IMMEDIATE', []);
-      begun = true;
-      break;
-    } catch {
-      await new Promise(r => setTimeout(r, 300 + attempt * 200));
-    }
-  }
-  if (!begun) throw new Error('database is locked — tente novamente em alguns segundos');
-
-  try {
-    for (let i = 0; i < cards.length; i += BATCH) {
-      const batch = cards.slice(i, i + BATCH);
-      const placeholders = batch.map((_, bi) => {
-        const base = bi * N_COLS;
-        return `(${Array.from({ length: N_COLS }, (_, j) => `$${base + j + 1}`).join(',')})`;
-      }).join(',');
-      const params = batch.flatMap(cardToParams);
-      await db.execute(
-        `INSERT OR REPLACE INTO cards (${COLS}) VALUES ${placeholders}`,
-        params
-      );
-      inserted += batch.length;
-      onProgress?.(Math.min(inserted, cards.length), cards.length);
-    }
-    await db.execute('COMMIT', []);
-  } catch (e) {
-    await db.execute('ROLLBACK', []).catch(() => {});
-    throw e; // propagate so caller knows seeding failed
+  for (let i = 0; i < cards.length; i += BATCH) {
+    const batch = cards.slice(i, i + BATCH);
+    const placeholders = batch.map((_, bi) => {
+      const base = bi * N_COLS;
+      return `(${Array.from({ length: N_COLS }, (_, j) => `$${base + j + 1}`).join(',')})`;
+    }).join(',');
+    const params = batch.flatMap(cardToParams);
+    await db.execute(
+      `INSERT OR REPLACE INTO cards (${COLS}) VALUES ${placeholders}`,
+      params
+    );
+    inserted += batch.length;
+    onProgress?.(Math.min(inserted, cards.length), cards.length);
   }
 }

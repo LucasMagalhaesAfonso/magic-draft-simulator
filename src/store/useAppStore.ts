@@ -139,6 +139,10 @@ interface AppState {
 
   draftSetCode: string;
   setDraftSetCode: (code: string) => void;
+
+  // Where to return after deckbuilder (e.g. 'pod_lobby', 'lobby')
+  deckbuilderReturn: string | null;
+  setDeckbuilderReturn: (screen: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -241,4 +245,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   draftSetCode: 'tdm',
   setDraftSetCode: (draftSetCode) => set({ draftSetCode }),
+
+  deckbuilderReturn: null,
+  setDeckbuilderReturn: (deckbuilderReturn) => set({ deckbuilderReturn }),
 }));

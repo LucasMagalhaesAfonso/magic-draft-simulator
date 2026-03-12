@@ -57,6 +57,10 @@ class ErrorBoundary extends Component<
   }
 }
 
+// Module-level guard: prevents concurrent initDatabase calls (React StrictMode
+// runs effects twice in dev, and retry button could overlap with auto-init).
+let _dbInitPromise: Promise<void> | null = null;
+
 function App() {
   const { screen, setDbReady, setTotalCards, setCurrentUser, setSyncing } = useAppStore();
   const [seedError, setSeedError] = useState<string | null>(null);
@@ -79,6 +83,16 @@ function App() {
   }, []);
 
   async function initDatabase() {
+    if (_dbInitPromise) return _dbInitPromise;
+    _dbInitPromise = _doInitDatabase();
+    try {
+      await _dbInitPromise;
+    } finally {
+      _dbInitPromise = null;
+    }
+  }
+
+  async function _doInitDatabase() {
     setSeedError(null);
     try {
       const count = await getCardCount();
@@ -167,6 +181,10 @@ function App() {
           padding: '16px 24px', zIndex: 99999, maxWidth: 480, textAlign: 'center',
           boxShadow: '0 4px 20px rgba(0,0,0,0.6)',
         }}>
+          <button
+            onClick={() => setSeedError(null)}
+            style={{ position: 'absolute', top: 8, right: 10, background: 'none', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: 16 }}
+          >✕</button>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Erro ao carregar cards</div>
           <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 12, wordBreak: 'break-all' }}>{seedError}</div>
           <button

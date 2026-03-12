@@ -35,7 +35,7 @@ const CARD_BACK = 'https://backs.scryfall.io/large/59/482d0001-547e-4a13-a0f7-45
 const imgError = (e: React.SyntheticEvent<HTMLImageElement>) => { e.currentTarget.src = CARD_BACK; };
 
 export function DeckBuilderScreen() {
-  const { draftPool, deck, setDeck, setScreen, landArts, selectedSet } = useAppStore();
+  const { draftPool, deck, setDeck, setScreen, landArts, selectedSet, deckbuilderReturn, setDeckbuilderReturn, setOnlineDeck } = useAppStore();
 
   const [mainboard, setMainboard] = useState<Card[]>(deck?.mainboard ?? []);
   const [sideboard, setSideboard] = useState<Card[]>(() => {
@@ -286,6 +286,15 @@ export function DeckBuilderScreen() {
   function handleStartGame() {
     setDeck({ mainboard, sideboard, lands });
     setScreen('game');
+  }
+
+  function handlePlayOnline() {
+    const dl = { mainboard, sideboard, lands };
+    setDeck(dl);
+    setOnlineDeck(dl);
+    const ret = deckbuilderReturn;
+    setDeckbuilderReturn(null);
+    setScreen((ret ?? 'lobby') as any);
   }
 
   function handleSave() {
@@ -671,6 +680,9 @@ export function DeckBuilderScreen() {
           <button className="btn btn-muted" onClick={handleAutoBuild}>⚡ Auto-Build</button>
           <button className="btn btn-muted" onClick={handleSave}>💾 Save</button>
           <button className="btn btn-muted" onClick={handleOpenDecks}>📂 Meus Decks</button>
+          {deckbuilderReturn && (
+            <button className="btn btn-gold" onClick={handlePlayOnline} style={{ background: 'linear-gradient(135deg, #16a085, #1abc9c)' }}>▶ Jogar Online</button>
+          )}
           <button className="btn btn-gold" onClick={handleStartGame}>▶ Play vs AI</button>
         </div>
       </div>

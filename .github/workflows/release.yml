@@ -114,29 +114,125 @@ jobs:
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_SOCKET_SERVER_URL: ${{ secrets.VITE_SOCKET_SERVER_URL }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
-          createUpdaterArtifacts: v2Compatible
 
 
-  publish-release:
+  sign-and-publish:
     needs: [create-release, build]
     permissions:
       contents: write
     runs-on: ubuntu-22.04
     steps:
-      - name: Publish release
-        uses: actions/github-script@v7
-        env:
-          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          script: |
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: parseInt(process.env.RELEASE_ID),
-              draft: false,
-            });
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Sign installers and upload latest.json
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+        run: |
+          set -e
+
+          export VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          REPO="${{ github.repository }}"
+          BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
+
+          echo "Version: ${VERSION}"
+          echo "Repo: ${REPO}"
+
+          # Download installers from draft release via API (needs auth for drafts)
+          EXE_NAME="Magic.Draft_${VERSION}_x64-setup.exe"
+          APPIMAGE_NAME="Magic.Draft_${VERSION}_amd64.AppImage"
+
+          EXE_URL=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets" | \
+            python3 -c "import json,sys; assets=json.load(sys.stdin); \
+            print(next((a['url'] for a in assets if a['name'].endswith('x64-setup.exe')), ''))")
+
+          APPIMAGE_URL=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets" | \
+            python3 -c "import json,sys; assets=json.load(sys.stdin); \
+            print(next((a['url'] for a in assets if a['name'].endswith('.AppImage')), ''))")
+
+          echo "Downloading EXE from: ${EXE_URL}"
+          curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "${EXE_URL}" -o installer.exe
+
+          echo "Downloading AppImage from: ${APPIMAGE_URL}"
+          curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            "${APPIMAGE_URL}" -o installer.AppImage
+
+          echo "Signing installers..."
+          npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" installer.exe
+          npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" installer.AppImage
+
+          export EXE_SIG=$(cat installer.exe.sig)
+          export APPIMAGE_SIG=$(cat installer.AppImage.sig)
+          export DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          export BASE_URL="${BASE}"
+          export EXE_NAME="${EXE_NAME}"
+          export APPIMAGE_NAME="${APPIMAGE_NAME}"
+
+          echo "Generating latest.json..."
+          python3 - <<'PYEOF'
+import json, os
+
+version = os.environ["VERSION"]
+base = os.environ["BASE_URL"]
+exe_name = os.environ["EXE_NAME"]
+appimage_name = os.environ["APPIMAGE_NAME"]
+
+data = {
+  "version": version,
+  "notes": f"Magic Draft v{version}",
+  "pub_date": os.environ["DATE"],
+  "platforms": {
+    "windows-x86_64": {
+      "url": f"{base}/{exe_name}",
+      "signature": os.environ["EXE_SIG"]
+    },
+    "linux-x86_64": {
+      "url": f"{base}/{appimage_name}",
+      "signature": os.environ["APPIMAGE_SIG"]
+    }
+  }
+}
+
+with open("latest.json", "w") as f:
+    json.dump(data, f, indent=2)
+
+print("Generated latest.json:")
+print(open("latest.json").read())
+PYEOF
+
+          echo "Uploading latest.json to release..."
+          curl -fL \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://uploads.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets?name=latest.json" \
+            --data-binary @latest.json
+
+          echo "Publishing release..."
+          curl -fL \
+            -X PATCH \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}" \
+            -d '{"draft": false}'
+
+          echo "Done!"

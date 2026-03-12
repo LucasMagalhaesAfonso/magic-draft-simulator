@@ -55,6 +55,7 @@ export function PodLobbyScreen() {
     setOnlineDraftPicks,
     setDraftPool,
     setDeckbuilderReturn,
+    setGameReturnScreen,
   } = useAppStore();
 
   const [challenge, setChallenge] = useState<ChallengeState | null>(null);
@@ -157,6 +158,7 @@ export function PodLobbyScreen() {
     }
     // Store bot deck as onlineDeck so GameScreen can use it for AI
     setOnlineDeck(botDeckList);
+    setGameReturnScreen('pod_lobby');
     setScreen('game');
   }
 

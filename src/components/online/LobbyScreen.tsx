@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { logoutUser } from '../../lib/firebase';
 import { getCardsBySet } from '../../lib/database';
@@ -81,7 +81,12 @@ export function LobbyScreen() {
     deck, onlineDeck, setOnlineDeck,
     setDraftPool, setDeck,
     setDeckbuilderReturn,
+    setSealedPacks,
   } = useAppStore();
+
+  // Ref so socket listeners always see latest mySeatIndex (avoids stale closure)
+  const mySeatIndexRef = useRef(mySeatIndex);
+  useEffect(() => { mySeatIndexRef.current = mySeatIndex; }, [mySeatIndex]);
 
   const [tab, setTab] = useState<'create' | 'join'>('create');
   const [phase, setPhase] = useState<'idle' | 'lobby'>('idle');
@@ -178,9 +183,11 @@ export function LobbyScreen() {
       }
 
       if (data.type === 'sealed_start_signal') {
-        const myPool = (data.poolsBySeats as { seatIndex: number; pool: Card[]; isBot: boolean }[])
-          .find(p => p.seatIndex === mySeatIndex)?.pool ?? [];
-        // Store full pod picks (all seats) so pod_lobby works after deckbuilder
+        const seatIdx = mySeatIndexRef.current;
+        const myEntry = (data.poolsBySeats as { seatIndex: number; pool: Card[]; isBot: boolean }[])
+          .find(p => p.seatIndex === seatIdx && !p.isBot);
+        const myPool = myEntry?.pool ?? [];
+        // Store full pod picks so pod_lobby works after deckbuilder
         const podPicksData = (data.podPlayers as any[]).map((p: any) => {
           const entry = (data.poolsBySeats as any[]).find((x: any) => x.seatIndex === p.seatIndex);
           return { seatIndex: p.seatIndex, displayName: p.displayName, isBot: p.isBot, picks: entry?.pool ?? [] };
@@ -190,7 +197,11 @@ export function LobbyScreen() {
         setDraftPool(myPool);
         setDeck(null);
         setDeckbuilderReturn('pod_lobby');
-        setScreen('deckbuilder');
+        // Split pool into 6 packs of 15 for the reveal animation
+        const packs: Card[][] = [];
+        for (let i = 0; i < 6; i++) packs.push(myPool.slice(i * 15, (i + 1) * 15));
+        setSealedPacks(packs);
+        setScreen('sealed');
       }
     });
 

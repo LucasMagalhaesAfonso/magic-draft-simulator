@@ -193,7 +193,8 @@ function _colorHue(colors: string[]): string {
 
 export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   const { deck, draftPool, aiDraftPool, setScreen, playmat, playmatArt, playmatPosition, playmatSize, landArts, sleeveArt,
-    currentUser, mpRole, mpOpponentName, mpConnected, onlineDeck } = useAppStore();
+    currentUser, mpRole, mpOpponentName, mpConnected, onlineDeck,
+    gameReturnScreen, setGameReturnScreen } = useAppStore();
 
   // Resolve land art override for basic lands
   const LAND_COLOR_MAP: Record<string, string> = {
@@ -2461,15 +2462,21 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
           <h2 className={displayWinner === 0 ? 'win' : 'lose'}>{winnerMsg}</h2>
           <p>Turn {turn} · {p0.life} vs {p1.life} life</p>
           <div className="game-over-actions">
-            {multiplayerMode ? (
+            {gameReturnScreen ? (
+              <button className="btn btn-gold" onClick={() => { setGameReturnScreen(null); setScreen(gameReturnScreen as any); }}>
+                Voltar ao Pod
+              </button>
+            ) : multiplayerMode ? (
               <button className="btn btn-gold" onClick={() => setScreen('online_lobby')}>Voltar ao Lobby</button>
             ) : (
               <button className="btn btn-gold" onClick={() => actions.restartGame()}>Play Again</button>
             )}
-            <button className="btn" onClick={() => setScreen(multiplayerMode ? 'online_lobby' : 'deckbuilder')}>
-              {multiplayerMode ? 'Trocar Deck' : 'Back to Deck'}
-            </button>
-            <button className="btn btn-muted" onClick={() => setScreen('home')}>Home</button>
+            {!gameReturnScreen && (
+              <button className="btn" onClick={() => setScreen(multiplayerMode ? 'online_lobby' : 'deckbuilder')}>
+                {multiplayerMode ? 'Trocar Deck' : 'Back to Deck'}
+              </button>
+            )}
+            <button className="btn btn-muted" onClick={() => { setGameReturnScreen(null); setScreen('home'); }}>Home</button>
           </div>
         </div>
       </div>
@@ -6938,6 +6945,18 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
             style={{ width: '100%', fontSize: 12, marginTop: 4 }}
             onClick={() => { setShowQuickSettings(false); setShowFullSettings(true); }}
           >⚙ Abrir Settings completo</button>
+
+          {/* Conceder / Sair do jogo */}
+          <button
+            className="btn btn-sm"
+            style={{ width: '100%', fontSize: 12, marginTop: 6, background: 'rgba(220,50,50,0.15)', border: '1px solid rgba(220,50,50,0.35)', color: '#f87171' }}
+            onClick={() => {
+              setShowQuickSettings(false);
+              const ret = gameReturnScreen;
+              setGameReturnScreen(null);
+              setScreen((ret ?? 'deckbuilder') as any);
+            }}
+          >🏳 {gameReturnScreen ? 'Conceder e Voltar ao Pod' : 'Conceder e Sair'}</button>
         </div>
       )}
 

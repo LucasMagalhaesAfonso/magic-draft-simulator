@@ -143,6 +143,10 @@ interface AppState {
   // Where to return after deckbuilder (e.g. 'pod_lobby', 'lobby')
   deckbuilderReturn: string | null;
   setDeckbuilderReturn: (screen: string | null) => void;
+
+  // Where to return after a game ends or player concedes (e.g. 'pod_lobby')
+  gameReturnScreen: string | null;
+  setGameReturnScreen: (screen: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -248,4 +252,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   deckbuilderReturn: null,
   setDeckbuilderReturn: (deckbuilderReturn) => set({ deckbuilderReturn }),
+
+  gameReturnScreen: null,
+  setGameReturnScreen: (gameReturnScreen) => set({ gameReturnScreen }),
 }));

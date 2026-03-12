@@ -167,10 +167,12 @@ jobs:
             -H "Accept: application/octet-stream" "${APPIMAGE_URL}" -o installer.AppImage
 
           echo "Signing..."
-          EXE_SIG=$(npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.exe)
-          APPIMAGE_SIG=$(npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.AppImage)
-          echo "EXE sig: ${EXE_SIG:0:40}..."
-          echo "AppImage sig: ${APPIMAGE_SIG:0:40}..."
+          npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.exe
+          npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" installer.AppImage
+          EXE_SIG=$(cat installer.exe.sig)
+          APPIMAGE_SIG=$(cat installer.AppImage.sig)
+          echo "EXE sig length: ${#EXE_SIG}"
+          echo "AppImage sig length: ${#APPIMAGE_SIG}"
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
           echo "Generating latest.json..."

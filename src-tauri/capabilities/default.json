@@ -14,8 +14,8 @@
     "updater:default",
     "process:default",
     "process:allow-restart",
-    "fs:allow-write",
-    "fs:allow-read",
-    { "identifier": "fs:scope", "allow": [{ "path": "$TEMP/**" }] }
+    { "identifier": "fs:allow-write-file", "allow": [{ "path": "$TEMP/**" }] },
+    { "identifier": "fs:allow-read-file", "allow": [{ "path": "$TEMP/**" }] },
+    { "identifier": "fs:allow-exists", "allow": [{ "path": "$TEMP/**" }] }
   ]
 }

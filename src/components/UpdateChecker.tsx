@@ -75,9 +75,9 @@ export function UpdateChecker() {
       for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.length; }
 
       // Save to temp dir
-      const { tempDir } = await import('@tauri-apps/api/path');
+      const { tempDir, join } = await import('@tauri-apps/api/path');
       const { writeFile } = await import('@tauri-apps/plugin-fs');
-      const tmpPath = (await tempDir()) + 'magic-draft-update.exe';
+      const tmpPath = await join(await tempDir(), 'magic-draft-update.exe');
       await writeFile(tmpPath, combined);
 
       setState({ phase: 'done' });
@@ -90,8 +90,9 @@ export function UpdateChecker() {
       await exit(0);
     } catch (e) {
       console.error('Update failed:', e);
+      // Fallback: open direct download in browser (auto-downloads)
       const { openUrl } = await import('@tauri-apps/plugin-opener');
-      openUrl('https://github.com/LucasMagalhaesAfonso/magic-draft-simulator/releases/latest');
+      openUrl(exeUrl);
       setState({ phase: 'idle' });
     }
   }

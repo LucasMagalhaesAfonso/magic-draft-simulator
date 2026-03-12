@@ -6956,7 +6956,7 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
               setGameReturnScreen(null);
               setScreen((ret ?? 'deckbuilder') as any);
             }}
-          >🏳 {gameReturnScreen ? 'Conceder e Voltar ao Pod' : 'Conceder e Sair'}</button>
+          >🏳 {gameReturnScreen ? 'Conceder e Voltar ao Pod' : 'Conceder (Jogar de Novo)'}</button>
         </div>
       )}
 

@@ -144,95 +144,60 @@ jobs:
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
           set -e
-
-          export VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
           REPO="${{ github.repository }}"
+          VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
           BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
-
-          echo "Version: ${VERSION}"
-          echo "Repo: ${REPO}"
-
-          # Download installers from draft release via API (needs auth for drafts)
           EXE_NAME="Magic.Draft_${VERSION}_x64-setup.exe"
           APPIMAGE_NAME="Magic.Draft_${VERSION}_amd64.AppImage"
+          echo "Version: ${VERSION}"
 
-          EXE_URL=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets" | \
-            python3 -c "import json,sys; assets=json.load(sys.stdin); \
-            print(next((a['url'] for a in assets if a['name'].endswith('x64-setup.exe')), ''))")
+          ASSETS=$(curl -sf -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets")
 
-          APPIMAGE_URL=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets" | \
-            python3 -c "import json,sys; assets=json.load(sys.stdin); \
-            print(next((a['url'] for a in assets if a['name'].endswith('.AppImage')), ''))")
+          EXE_URL=$(echo "$ASSETS" | jq -r '.[] | select(.name | endswith("x64-setup.exe")) | .url')
+          APPIMAGE_URL=$(echo "$ASSETS" | jq -r '.[] | select(.name | endswith(".AppImage")) | .url')
 
-          echo "Downloading EXE from: ${EXE_URL}"
+          echo "Downloading EXE..."
           curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            "${EXE_URL}" -o installer.exe
+            -H "Accept: application/octet-stream" "${EXE_URL}" -o installer.exe
 
-          echo "Downloading AppImage from: ${APPIMAGE_URL}"
+          echo "Downloading AppImage..."
           curl -fL -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-            -H "Accept: application/octet-stream" \
-            "${APPIMAGE_URL}" -o installer.AppImage
+            -H "Accept: application/octet-stream" "${APPIMAGE_URL}" -o installer.AppImage
 
-          echo "Signing installers..."
+          echo "Signing..."
           npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" installer.exe
           npx @tauri-apps/cli signer sign -k "${TAURI_SIGNING_PRIVATE_KEY}" installer.AppImage
 
-          export EXE_SIG=$(cat installer.exe.sig)
-          export APPIMAGE_SIG=$(cat installer.AppImage.sig)
-          export DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          export BASE_URL="${BASE}"
-          export EXE_NAME="${EXE_NAME}"
-          export APPIMAGE_NAME="${APPIMAGE_NAME}"
+          EXE_SIG=$(cat installer.exe.sig)
+          APPIMAGE_SIG=$(cat installer.AppImage.sig)
+          DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
           echo "Generating latest.json..."
-          python3 - <<'PYEOF'
-import json, os
+          jq -n \
+            --arg version "$VERSION" \
+            --arg date "$DATE" \
+            --arg exe_url "${BASE}/${EXE_NAME}" \
+            --arg exe_sig "$EXE_SIG" \
+            --arg appimage_url "${BASE}/${APPIMAGE_NAME}" \
+            --arg appimage_sig "$APPIMAGE_SIG" \
+            '{version:$version,notes:("Magic Draft v"+$version),pub_date:$date,platforms:{"windows-x86_64":{url:$exe_url,signature:$exe_sig},"linux-x86_64":{url:$appimage_url,signature:$appimage_sig}}}' \
+            > latest.json
 
-version = os.environ["VERSION"]
-base = os.environ["BASE_URL"]
-exe_name = os.environ["EXE_NAME"]
-appimage_name = os.environ["APPIMAGE_NAME"]
+          cat latest.json
 
-data = {
-  "version": version,
-  "notes": f"Magic Draft v{version}",
-  "pub_date": os.environ["DATE"],
-  "platforms": {
-    "windows-x86_64": {
-      "url": f"{base}/{exe_name}",
-      "signature": os.environ["EXE_SIG"]
-    },
-    "linux-x86_64": {
-      "url": f"{base}/{appimage_name}",
-      "signature": os.environ["APPIMAGE_SIG"]
-    }
-  }
-}
-
-with open("latest.json", "w") as f:
-    json.dump(data, f, indent=2)
-
-print("Generated latest.json:")
-print(open("latest.json").read())
-PYEOF
-
-          echo "Uploading latest.json to release..."
-          curl -fL \
-            -X POST \
+          echo "Uploading latest.json..."
+          curl -fL -X POST \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Content-Type: application/json" \
             "https://uploads.github.com/repos/${REPO}/releases/${RELEASE_ID}/assets?name=latest.json" \
             --data-binary @latest.json
 
           echo "Publishing release..."
-          curl -fL \
-            -X PATCH \
+          curl -fL -X PATCH \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Content-Type: application/json" \
             "https://api.github.com/repos/${REPO}/releases/${RELEASE_ID}" \
-            -d '{"draft": false}'
+            -d '{"draft":false}'
 
           echo "Done!"

@@ -55,17 +55,18 @@ export function UpdateChecker() {
     setState({ phase: 'downloading', progress: 0 });
 
     try {
-      // Download via Rust command (saves to temp dir, no fs permission needed)
       const { invoke } = await import('@tauri-apps/api/core');
+      // Download via Rust (saves to %TEMP%/magic-draft-update.exe)
       const tmpPath = await invoke<string>('download_update', { url: exeUrl });
-
-      setState({ phase: 'done' });
-
-      // Launch installer via Rust (bypasses opener sandbox), then exit app
+      // Launch installer — after this the installer process is running
       await invoke('run_installer', { path: tmpPath });
+      setState({ phase: 'done' });
+      // Close app so installer can replace files; ignore permission errors
       await new Promise(r => setTimeout(r, 1500));
-      const { exit } = await import('@tauri-apps/plugin-process');
-      await exit(0);
+      try {
+        const { exit } = await import('@tauri-apps/plugin-process');
+        await exit(0);
+      } catch { /* installer is running, user can close the app manually */ }
     } catch (e) {
       console.error('Update failed:', e);
       setState({ phase: 'error', message: String(e), exeUrl });

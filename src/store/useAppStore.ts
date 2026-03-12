@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Screen, Card, DeckList, MultiplayerRole, OnlineUser } from '../lib/types';
 
-export type ThemeId = 'spark' | 'nyx' | 'phyrexian' | 'kamigawa' | 'obscura';
+export type ThemeId = 'spark' | 'nyx' | 'phyrexian' | 'kamigawa' | 'obscura' | 'eldrazi';
 export type PlaymatId = 'default' | 'forest' | 'ocean' | 'mountain' | 'plains' | 'swamp' | 'nyx' | 'custom';
 
 const PLAYMAT_KEY = 'mtg_draft_playmat';

@@ -376,3 +376,27 @@ body.theme-obscura .app-main::before {
   z-index: 1;
 }
 
+
+/* ── Eldrazi theme ──────────────────────────────────────────────────── */
+body.theme-eldrazi {
+  --accent: #ff6a00;
+  --accent-hover: #ff8c33;
+  --bg-primary: #0f0800;
+  --bg-secondary: #1a0e00;
+  --bg-card: #201200;
+  --shadow-glow: 0 0 20px rgba(255,106,0,0.25);
+}
+body.theme-eldrazi .app-layout {
+  background: linear-gradient(160deg, #0f0800 0%, #1a0e00 40%, #0a0500 100%);
+}
+body.theme-eldrazi .glass {
+  background: rgba(20,10,0,0.88);
+  border-color: rgba(255,106,0,0.15);
+}
+body.theme-eldrazi .btn-gold { background: linear-gradient(135deg, #ff6a00, #cc4400); color: #fff; border: none; }
+body.theme-eldrazi .btn-gold:hover { background: linear-gradient(135deg, #ff8c33, #dd5500); }
+body.theme-eldrazi .game-life.mine { color: #ff6a00; text-shadow: 0 0 12px rgba(255,106,0,0.5); }
+body.theme-eldrazi .game-active-indicator { background: #ff6a00; color: #000; }
+body.theme-eldrazi .game-phase-step.active { background: #ff6a00; color: #000; box-shadow: 0 0 12px rgba(255,106,0,0.6); }
+body.theme-eldrazi .draft-progress-fill { background: linear-gradient(90deg, #cc4400, #ff6a00); }
+body.theme-eldrazi .db-curve-bar { background: linear-gradient(to top, #cc4400, #ff6a00); }

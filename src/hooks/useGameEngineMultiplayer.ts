@@ -185,10 +185,15 @@ function flipCombatForGuest(combat: any): any {
       ...a,
       controllerId: a.controllerId !== undefined ? flip(a.controllerId) : a.controllerId,
     })),
-    blockers: (combat.blockers || []).map((b: any) => ({
-      ...b,
-      controllerId: b.controllerId !== undefined ? flip(b.controllerId) : b.controllerId,
-    })),
+    blockers: Object.fromEntries(
+      Object.entries(combat.blockers || {}).map(([atkUid, blockerList]: [string, any]) => [
+        atkUid,
+        (Array.isArray(blockerList) ? blockerList : []).map((b: any) => ({
+          ...b,
+          controllerId: b.controllerId !== undefined ? flip(b.controllerId) : b.controllerId,
+        })),
+      ])
+    ),
   };
 }
 

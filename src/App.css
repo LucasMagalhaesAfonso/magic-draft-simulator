@@ -10,6 +10,12 @@
   overflow: hidden;
 }
 
+@media (max-width: 1024px) {
+  .app-main {
+    overflow: auto;
+  }
+}
+
 .placeholder-screen {
   display: flex;
   flex-direction: column;

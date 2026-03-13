@@ -1365,10 +1365,6 @@ export const CardEffectsDB: Record<string, any> = {
   },
 
   // =================== TDM - INSTANTS ===================
-
-  "twin bolt": {
-    cast: [{ type: "damage", amount: 2, target: "divided", max_targets: 2 }]
-  },
   "snakeskin veil": {
     cast: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature" }, { type: "grant", keywords: ["hexproof"], target: "creature", duration: "end_of_turn" }]
   },

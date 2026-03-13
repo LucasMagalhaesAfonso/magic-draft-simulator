@@ -307,6 +307,13 @@ body.theme-obscura .game-phase-step.active { background: #a8a8a8; color: #000; }
 body.theme-obscura .draft-progress-fill { background: linear-gradient(90deg, #555, #aaa); }
 body.theme-obscura .db-curve-bar { background: linear-gradient(to top, #555, #aaa); }
 
+/* ── Mobile / Tablet: allow scrolling instead of clipping ── */
+@media (max-width: 1024px) {
+  html, body, #root {
+    overflow: auto;
+  }
+}
+
 /* ── Theme background images (pseudo-element overlay, low opacity) ─── */
 
 .app-main {

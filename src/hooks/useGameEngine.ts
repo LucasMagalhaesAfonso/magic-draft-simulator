@@ -663,7 +663,7 @@ function _describeEffect(e: any): string {
   return e.type || '?';
 }
 
-export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
+export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer: boolean = false) {
   const [snap, setSnap] = useState<GameSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -951,6 +951,10 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (!gs.mulliganDone[1]) {
           _GS.keepHand(gs, 1, []); // AI always keeps opening hand
         }
+
+        // In multiplayer mode, opponent is human — switch after auto-mulligan
+        // so the engine won't auto-play p1's turns
+        if (isMultiplayer) gs.players[1].isHuman = true;
 
         // Stay in mulligan phase for human player
         gs.waitingForInput = { type: 'mulligan', playerId: 0 };
@@ -4083,6 +4087,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[]) {
         if (!gs.mulliganDone[1]) {
           _GS.keepHand(gs, 1, []);
         }
+        if (isMultiplayer) gs.players[1].isHuman = true;
         gs.waitingForInput = { type: 'mulligan', playerId: 0 };
         gsRef.current = gs;
         refresh();

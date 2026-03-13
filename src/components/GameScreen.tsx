@@ -354,7 +354,8 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
   // ── Local engine (single-player or host mode) ─────────────────────────────
   const { snap: localSnap, loading, error, actions: localActions, gsRef, canUndoMana, undoManaCount } = useGameEngine(
     isGuest ? [] : playerDeck,
-    isGuest ? [] : (multiplayerMode ? [] : aiDeck),
+    isGuest ? [] : aiDeck,
+    isHost,
   );
 
   // Host: broadcast state to guest after every action

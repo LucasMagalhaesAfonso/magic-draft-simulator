@@ -56,6 +56,7 @@ export function PodLobbyScreen() {
     setDraftPool,
     setDeckbuilderReturn,
     setGameReturnScreen,
+    setAiDraftPool,
   } = useAppStore();
 
   const [challenge, setChallenge] = useState<ChallengeState | null>(null);
@@ -82,8 +83,15 @@ export function PodLobbyScreen() {
         const myDeckList = deck ?? (myEntry ? makeDeckFromPicks(myEntry.picks) : null);
         if (myDeckList) setOnlineDeck(myDeckList);
 
-        const amChallenger = data.fromSeat === mySeatIndex;
-        if (amChallenger) {
+        // IMPORTANT: The server only accepts game_state_update/start_game from the
+        // original socket room host. So the socket host (mpRole==='host') MUST always
+        // be the game engine host, regardless of who sent the challenge.
+        const amSocketHost = mpRole === 'host';
+        if (amSocketHost) {
+          // Load opponent's deck into aiDraftPool so GameScreen builds it correctly
+          const opponentSeat = data.fromSeat === mySeatIndex ? data.toSeat : data.fromSeat;
+          const opponentEntry = podPicks?.find(p => p.seatIndex === opponentSeat);
+          if (opponentEntry) setAiDraftPool(opponentEntry.picks);
           sendStartGame({ hostDeck: myDeckList });
           setMpRoom('host', null);
           setScreen('online_game');

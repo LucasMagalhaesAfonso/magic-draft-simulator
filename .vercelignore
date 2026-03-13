@@ -1,0 +1,16 @@
+node_modules
+legacy-pure-js/node_modules
+server/node_modules
+src-tauri
+dist
+.git
+prints
+img
+legacy-pure-js
+server
+tools
+tests
+*.txt
+*.md
+*.bat
+*.key.pub

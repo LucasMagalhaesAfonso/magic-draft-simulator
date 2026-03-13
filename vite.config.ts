@@ -5,7 +5,10 @@ import { resolve } from "path";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
-const appVersion = JSON.parse(readFileSync(resolve(__dirname, "src-tauri/tauri.conf.json"), "utf-8")).version;
+let appVersion = "0.0.0";
+try {
+  appVersion = JSON.parse(readFileSync(resolve(__dirname, "src-tauri/tauri.conf.json"), "utf-8")).version;
+} catch { /* Vercel/web build: src-tauri not available */ }
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({

@@ -82,6 +82,7 @@ export function LobbyScreen() {
     setDraftPool, setDeck,
     setDeckbuilderReturn,
     setSealedPacks,
+    setSelectedSet,
   } = useAppStore();
 
   // Ref so socket listeners always see latest mySeatIndex (avoids stale closure)
@@ -197,6 +198,7 @@ export function LobbyScreen() {
         setDraftPool(myPool);
         setDeck(null);
         setDeckbuilderReturn('pod_lobby');
+        if (data.setCode) setSelectedSet(data.setCode); // fix pack image for guest
         // Split pool into 6 packs of 15 for the reveal animation
         const packs: Card[][] = [];
         for (let i = 0; i < 6; i++) packs.push(myPool.slice(i * 15, (i + 1) * 15));
@@ -273,6 +275,23 @@ export function LobbyScreen() {
       pool: generateSealedPool(cards),
     }));
     sendDraftEvent({ type: 'sealed_start_signal', poolsBySeats, podPlayers, setCode: draftSetCode });
+
+    // Host also navigates to sealed with their own pool (same flow as guest)
+    const myEntry = poolsBySeats.find(s => s.seatIndex === mySeatIndex && !s.isBot);
+    const myPool = myEntry?.pool ?? [];
+    const podPicksData = podPlayers.map(p => {
+      const entry = poolsBySeats.find(x => x.seatIndex === p.seatIndex);
+      return { seatIndex: p.seatIndex, displayName: p.displayName, isBot: p.isBot, picks: entry?.pool ?? [] };
+    });
+    setPodPicks(podPicksData);
+    setDraftPool(myPool);
+    setDeck(null);
+    setDeckbuilderReturn('pod_lobby');
+    setSelectedSet(draftSetCode); // fix pack image for host
+    const packs: Card[][] = [];
+    for (let i = 0; i < 6; i++) packs.push(myPool.slice(i * 15, (i + 1) * 15));
+    setSealedPacks(packs);
+    setScreen('sealed');
   }
 
   async function handleLogout() {

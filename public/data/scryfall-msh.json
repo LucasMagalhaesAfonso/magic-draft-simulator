@@ -1,0 +1,36 @@
+{"set": "MSH", "total": 2, "cards": [
+  {
+    "object": "card",
+    "id": "msh-sadistic-slash",
+    "oracle_id": "msh-sadistic-slash-oracle",
+    "name": "Sadistic Slash",
+    "mana_cost": "{3}{B}",
+    "cmc": 4.0,
+    "type_line": "Instant",
+    "oracle_text": "Target creature gets -5/-5 until end of turn.\nMayhem {1}{B} (You may cast this card from your graveyard for {1}{B} if you discarded it this turn.)",
+    "colors": ["B"],
+    "color_identity": ["B"],
+    "keywords": [],
+    "rarity": "common",
+    "set": "msh",
+    "set_name": "Marvel Super Heroes",
+    "collector_number": "999"
+  },
+  {
+    "object": "card",
+    "id": "msh-cruel-alliance",
+    "oracle_id": "msh-cruel-alliance-oracle",
+    "name": "Cruel Alliance",
+    "mana_cost": "{2}{B}",
+    "cmc": 3.0,
+    "type_line": "Sorcery",
+    "oracle_text": "Teamwork 2 (As an additional cost to cast this spell, you may tap any number of creatures you control with total power 2 or more.)\nExile target creature with mana value 3 or less. If this spell was cast using teamwork, instead exile target creature and you gain 3 life.",
+    "colors": ["B"],
+    "color_identity": ["B"],
+    "keywords": [],
+    "rarity": "uncommon",
+    "set": "msh",
+    "set_name": "Marvel Super Heroes",
+    "collector_number": "998"
+  }
+]}

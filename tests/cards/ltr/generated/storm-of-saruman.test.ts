@@ -11,13 +11,13 @@ describe("Storm Of Saruman", () => {
     expect(CardEffectsDB["storm of saruman"]).toBeDefined();
   });
 
-  it('has "cast_noncreature" trigger in DB', () => {
+  it('has "second_spell" trigger in DB', () => {
     const db = CardEffectsDB['storm of saruman'];
-    const trigger = db.triggered?.find((t: any) => t.event === "cast_noncreature");
+    const trigger = db.triggered?.find((t: any) => t.event === "second_spell");
     expect(trigger).toBeDefined();
   });
 
-  it('[trigger:cast_noncreature] has copy_spell effect in DB', () => {
+  it('[trigger:second_spell] has copy_spell effect in DB', () => {
     const db = CardEffectsDB['storm of saruman'];
     const json = JSON.stringify(db);
     expect(json).toContain("copy_spell");

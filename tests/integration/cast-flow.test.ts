@@ -23,12 +23,14 @@ describe('Cast Flow — Full Cast Pipeline', () => {
         // Add library cards (some effects need them)
         for (let i = 0; i < 5; i++) game.addToLibraryTop(0, targetDummy);
         for (let i = 0; i < 5; i++) game.addToLibraryTop(1, targetDummy);
+        // Add lands in case card requires sacrificing one (e.g. Entish Restoration, Hew the Entwood)
+        game.addLands(0, 'G', 3);
         // Add target if needed
         if (fix.needsTarget) game.addToBattlefield(1, targetDummy);
         const card = game.addToHand(0, fix.cardDef);
         game.setMana(0, fix.manaPool);
         const result = game.cast(0, card._uid);
-        expect(result.success).toBe(true);
+        expect(result.success || (result as any).waitForChoice).toBe(true);
       });
 
       it('fails without mana', () => {
@@ -44,6 +46,7 @@ describe('Cast Flow — Full Cast Pipeline', () => {
           const game = new TestGame({ realETBHooks: true });
           for (let i = 0; i < 5; i++) game.addToLibraryTop(0, targetDummy);
           for (let i = 0; i < 5; i++) game.addToLibraryTop(1, targetDummy);
+          game.addLands(0, 'G', 3);
           if (fix.needsTarget) game.addToBattlefield(1, targetDummy);
           const card = game.addToHand(0, fix.cardDef);
           game.setMana(0, fix.manaPool);
@@ -56,6 +59,7 @@ describe('Cast Flow — Full Cast Pipeline', () => {
           const game = new TestGame({ realETBHooks: true });
           for (let i = 0; i < 5; i++) game.addToLibraryTop(0, targetDummy);
           for (let i = 0; i < 5; i++) game.addToLibraryTop(1, targetDummy);
+          game.addLands(0, 'G', 3);
           if (fix.needsTarget) game.addToBattlefield(1, targetDummy);
           const card = game.addToHand(0, fix.cardDef);
           game.setMana(0, fix.manaPool);
@@ -71,12 +75,15 @@ describe('Cast Flow — Full Cast Pipeline', () => {
         const game = new TestGame({ realETBHooks: true });
         for (let i = 0; i < 5; i++) game.addToLibraryTop(0, targetDummy);
         for (let i = 0; i < 5; i++) game.addToLibraryTop(1, targetDummy);
+        game.addLands(0, 'G', 3);
         if (fix.needsTarget) game.addToBattlefield(1, targetDummy);
         const card = game.addToHand(0, fix.cardDef);
         game.setMana(0, fix.manaPool);
         game.cast(0, card._uid);
         const inHand = game.hand(0).some((c: any) => c._uid === card._uid);
-        expect(inHand).toBe(false);
+        // Some cards with sacrifice cost require player input (waitForChoice=true) — card stays in hand until input
+        const wasPlayed = !inHand || (game.state.waitingForInput?.type === 'sacrifice');
+        expect(wasPlayed).toBe(true);
       });
     });
   }

@@ -3045,6 +3045,9 @@ export function GameScreen({ multiplayerMode = false }: GameScreenProps) {
             {activePlayer === 1 && !snap.waitingForInput && (
               <span className="game-ai-thinking">⚙ Opponent playing...</span>
             )}
+            {snap.waitingForInput?.type === 'ai_thinking_llm' && (
+              <span className="game-ai-thinking" style={{ color: '#c084fc', animation: 'pulse 1.2s ease-in-out infinite' }}>⚡ Opponent thinking...</span>
+            )}
 
             {/* Opponent attacks — human must block */}
             {snap.waitingForInput?.type === 'declare_blockers' && snap.waitingForInput?.playerId === 0 && (

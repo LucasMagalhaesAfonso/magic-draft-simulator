@@ -16,8 +16,8 @@
     "process:default",
     "process:allow-restart",
     "process:allow-exit",
-    { "identifier": "fs:allow-write-file", "allow": [{ "path": "$TEMP/**" }] },
-    { "identifier": "fs:allow-read-file", "allow": [{ "path": "$TEMP/**" }] },
-    { "identifier": "fs:allow-exists", "allow": [{ "path": "$TEMP/**" }] }
+    { "identifier": "fs:allow-write-file", "allow": [{ "path": "$TEMP/**" }, { "path": "$APPDATA/**" }] },
+    { "identifier": "fs:allow-read-file", "allow": [{ "path": "$TEMP/**" }, { "path": "$APPDATA/**" }] },
+    { "identifier": "fs:allow-exists", "allow": [{ "path": "$TEMP/**" }, { "path": "$APPDATA/**" }] }
   ]
 }

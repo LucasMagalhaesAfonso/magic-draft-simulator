@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useAppStore, type ThemeId, type PlaymatId } from '../store/useAppStore';
+import { useAppStore, type ThemeId, type PlaymatId, type AiDifficulty, type AiProvider } from '../store/useAppStore';
+import { testApiKey, testOllama } from '../engine/llm-ai';
 import { aiBrain, type AiBrainStats } from '../engine/ai-brain';
 import { SoundManager } from '../engine/sound-manager';
 import { VfxManager } from './game/VfxLayer';
@@ -8,6 +9,9 @@ import { getSetList, deleteSet } from '../lib/database';
 import { seedBundledSets, syncSingleSet } from '../lib/scryfall';
 import { getRatingsStats, hasRatingsData, preloadRatings } from '../lib/seventeen-lands';
 import * as SelfPlay from '../engine/self-play';
+import { gameRecorder, type GameRecord } from '../engine/game-recorder';
+import { getCoverageStats, getComplexCards, type CardCoverage } from '../engine/effect-coverage';
+import { generateLlmEffectsForSet } from '../engine/generated-effects-db';
 import './SettingsScreen.css';
 
 const PLAYMATS: { id: PlaymatId; label: string; color: string; artUrl: string }[] = [
@@ -68,9 +72,31 @@ function SoundSettings() {
 }
 
 export function SettingsScreen() {
-  const { theme, setTheme, playmat, playmatArt, playmatPosition, playmatSize, setPlaymat, setPlaymatPosition, setPlaymatSize, landArts, setLandArt, resetLandArts, sleeveArt, setSleeveArt } = useAppStore();
+  const { theme, setTheme, playmat, playmatArt, playmatPosition, playmatSize, setPlaymat, setPlaymatPosition, setPlaymatSize, landArts, setLandArt, resetLandArts, sleeveArt, setSleeveArt, aiDifficulty, setAiDifficulty, aiProvider, setAiProvider, anthropicApiKey, setAnthropicApiKey, ollamaUrl, setOllamaUrl, ollamaModel, setOllamaModel } = useAppStore();
   const [sleeveZoom, setSleeveZoom] = useState(false);
   const [customArtUrl, setCustomArtUrl] = useState(playmatArt || '');
+  const [apiKeyInput, setApiKeyInput] = useState(anthropicApiKey);
+  const [apiKeyStatus, setApiKeyStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [apiKeyError, setApiKeyError] = useState('');
+  const [ollamaUrlInput, setOllamaUrlInput] = useState(ollamaUrl);
+  const [ollamaModelInput, setOllamaModelInput] = useState(ollamaModel);
+  const [ollamaStatus, setOllamaStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [ollamaError, setOllamaError] = useState('');
+
+  // Game history
+  const [gameHistory, setGameHistory] = useState<GameRecord[]>(() => gameRecorder.getHistory());
+  const [expandedGame, setExpandedGame] = useState<string | null>(null);
+
+  useEffect(() => {
+    gameRecorder.load().then(() => setGameHistory(gameRecorder.getHistory()));
+  }, []);
+
+  // Card coverage
+  const [coverageStats, setCoverageStats] = useState(() => getCoverageStats());
+  const [complexCards, setComplexCards]   = useState<CardCoverage[]>(() => getComplexCards());
+  const [llmGenerating, setLlmGenerating] = useState(false);
+  const [llmProgress, setLlmProgress]     = useState({ done: 0, total: 0, current: '' });
+  const llmAbortRef = useRef({ aborted: false });
 
   // AI Brain stats
   const [aiStats, setAiStats] = useState<AiBrainStats>(() => aiBrain.getStats());
@@ -233,6 +259,358 @@ export function SettingsScreen() {
         v{__APP_VERSION__}
       </div>
       <div className="settings-content">
+
+        {/* AI Opponent Section */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">🤖 AI Opponent</h2>
+          <p className="settings-desc">Choose the difficulty level. Easy and Medium use the offline heuristic AI. Hard and Extreme use an LLM for strategic decisions.</p>
+
+          {/* Difficulty selector */}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            {([
+              { id: 'easy',    label: 'Easy',    desc: 'Makes random mistakes on purpose' },
+              { id: 'medium',  label: 'Medium',  desc: 'Solid heuristic AI (default)' },
+              { id: 'hard',    label: 'Hard',    desc: 'LLM decides main phase and attacks' },
+              { id: 'extreme', label: 'Extreme', desc: 'LLM with full context and strategic reasoning' },
+            ] as { id: AiDifficulty; label: string; desc: string }[]).map(d => (
+              <button
+                key={d.id}
+                className={`btn btn-sm ${aiDifficulty === d.id ? 'btn-gold' : ''}`}
+                title={d.desc}
+                onClick={() => setAiDifficulty(d.id)}
+                style={{ minWidth: 80, position: 'relative' }}
+              >
+                {d.label}
+                {aiDifficulty === d.id && <span style={{ marginLeft: 4 }}>✓</span>}
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 16, marginTop: 0 }}>
+            {aiDifficulty === 'easy' && 'Easy: AI randomly skips optimal plays ~30% of the time.'}
+            {aiDifficulty === 'medium' && 'Medium: Heuristic AI using 17lands and MTGO data. 100% offline.'}
+            {aiDifficulty === 'hard' && 'Hard: LLM decides main phase and attacks. Falls back to heuristic if LLM unavailable.'}
+            {aiDifficulty === 'extreme' && 'Extreme: LLM with full context. Falls back to heuristic if LLM unavailable.'}
+          </p>
+
+          {/* LLM provider config (shown for hard/extreme) */}
+          {(aiDifficulty === 'hard' || aiDifficulty === 'extreme') && (
+            <div style={{ background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: 8, padding: 12 }}>
+              {/* Provider selector */}
+              <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 8 }}>LLM Provider</p>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                {([
+                  { id: 'ollama',    label: '🦙 Ollama (local, free)', desc: 'Runs on your machine via Ollama' },
+                  { id: 'anthropic', label: '☁️ Anthropic API (paid)', desc: 'Claude via Anthropic API key' },
+                ] as { id: AiProvider; label: string; desc: string }[]).map(p => (
+                  <button
+                    key={p.id}
+                    className={`btn btn-sm ${aiProvider === p.id ? 'btn-gold' : ''}`}
+                    title={p.desc}
+                    onClick={() => setAiProvider(p.id)}
+                    style={{ flex: 1 }}
+                  >
+                    {p.label}
+                    {aiProvider === p.id && <span style={{ marginLeft: 4 }}>✓</span>}
+                  </button>
+                ))}
+              </div>
+
+              {/* Ollama config */}
+              {aiProvider === 'ollama' && (
+                <div>
+                  <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                    Ollama must be running locally. Install from <strong>ollama.ai</strong> and run <code style={{ background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: 3 }}>ollama pull llama3.1</code>.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 50 }}>URL</span>
+                      <input
+                        type="text"
+                        placeholder="http://localhost:11434"
+                        value={ollamaUrlInput}
+                        onChange={e => { setOllamaUrlInput(e.target.value); setOllamaStatus('idle'); }}
+                        style={{ flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, padding: '6px 10px', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', width: 50 }}>Model</span>
+                      <input
+                        type="text"
+                        placeholder="llama3.2:3b"
+                        value={ollamaModelInput}
+                        onChange={e => { setOllamaModelInput(e.target.value); setOllamaStatus('idle'); }}
+                        style={{ flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, padding: '6px 10px', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace' }}
+                      />
+                    </div>
+                    <button
+                      className="btn btn-sm"
+                      disabled={ollamaStatus === 'testing'}
+                      style={{ alignSelf: 'flex-start' }}
+                      onClick={async () => {
+                        const url = ollamaUrlInput.trim() || 'http://localhost:11434';
+                        const model = ollamaModelInput.trim() || 'llama3.1';
+                        setOllamaStatus('testing');
+                        const result = await testOllama(url, model);
+                        if (result.ok) {
+                          setOllamaUrl(url);
+                          setOllamaModel(model);
+                          setOllamaStatus('ok');
+                        } else {
+                          setOllamaStatus('error');
+                          setOllamaError(result.error || 'Could not connect to Ollama');
+                        }
+                      }}
+                    >
+                      {ollamaStatus === 'testing' ? '...' : 'Save & Test'}
+                    </button>
+                  </div>
+                  {ollamaStatus === 'ok' && (
+                    <p style={{ fontSize: 12, color: '#4ade80', marginTop: 6 }}>✓ Ollama connected — model ready</p>
+                  )}
+                  {ollamaStatus === 'error' && (
+                    <p style={{ fontSize: 12, color: '#f87171', marginTop: 6 }}>✗ {ollamaError}</p>
+                  )}
+                  {ollamaUrl && ollamaModel && ollamaStatus === 'idle' && (
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>Configured: {ollamaModel} @ {ollamaUrl}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Anthropic config */}
+              {aiProvider === 'anthropic' && (
+                <div>
+                  <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                    Anthropic API key — get yours at <strong>console.anthropic.com</strong>. Stored only in your browser.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      type="password"
+                      placeholder="sk-ant-..."
+                      value={apiKeyInput}
+                      onChange={e => { setApiKeyInput(e.target.value); setApiKeyStatus('idle'); }}
+                      style={{ flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, padding: '6px 10px', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace' }}
+                    />
+                    <button
+                      className="btn btn-sm"
+                      disabled={apiKeyStatus === 'testing'}
+                      onClick={async () => {
+                        const key = apiKeyInput.trim();
+                        if (!key) { setApiKeyStatus('error'); setApiKeyError('Enter your API key first'); return; }
+                        setApiKeyStatus('testing');
+                        const result = await testApiKey(key);
+                        if (result.ok) {
+                          setAnthropicApiKey(key);
+                          setApiKeyStatus('ok');
+                        } else {
+                          setApiKeyStatus('error');
+                          setApiKeyError(result.error || 'Unknown error');
+                        }
+                      }}
+                    >
+                      {apiKeyStatus === 'testing' ? '...' : 'Save & Test'}
+                    </button>
+                  </div>
+                  {apiKeyStatus === 'ok' && (
+                    <p style={{ fontSize: 12, color: '#4ade80', marginTop: 6 }}>✓ API key saved and validated</p>
+                  )}
+                  {apiKeyStatus === 'error' && (
+                    <p style={{ fontSize: 12, color: '#f87171', marginTop: 6 }}>✗ {apiKeyError}</p>
+                  )}
+                  {anthropicApiKey && apiKeyStatus === 'idle' && (
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 6 }}>✓ API key is configured</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Game History Section */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">📜 Histórico de Partidas</h2>
+          {(() => {
+            const stats = gameRecorder.getStats();
+            return (
+              <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Total: <strong style={{ color: 'var(--text-primary)' }}>{stats.total}</strong>
+                </span>
+                <span style={{ fontSize: 13, color: '#4ade80' }}>
+                  Vitórias: <strong>{stats.wins}</strong>
+                </span>
+                <span style={{ fontSize: 13, color: '#f87171' }}>
+                  Derrotas: <strong>{stats.losses}</strong>
+                </span>
+                {stats.draws > 0 && (
+                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                    Empates: <strong>{stats.draws}</strong>
+                  </span>
+                )}
+                {stats.total > 0 && (
+                  <span style={{ fontSize: 13, color: 'var(--gold)' }}>
+                    Win rate: <strong>{Math.round((stats.wins / stats.total) * 100)}%</strong>
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+          {gameHistory.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Nenhuma partida registrada ainda. Jogue uma partida para começar.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 400, overflowY: 'auto' }}>
+              {gameHistory.map(game => {
+                const isExpanded = expandedGame === game.id;
+                const winColor = game.winner === 'human' ? '#4ade80' : game.winner === 'ai' ? '#f87171' : '#a3a3a3';
+                const winLabel = game.winner === 'human' ? '✓ Vitória' : game.winner === 'ai' ? '✗ Derrota' : '= Empate';
+                const date = game.startedAt ? new Date(game.startedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
+                return (
+                  <div key={game.id} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 6, overflow: 'hidden' }}>
+                    <div
+                      style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', cursor: 'pointer' }}
+                      onClick={() => setExpandedGame(isExpanded ? null : game.id)}
+                    >
+                      <span style={{ fontSize: 13, color: winColor, fontWeight: 600, minWidth: 72 }}>{winLabel}</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)', flex: 1 }}>{date}</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{game.totalTurns} turnos</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-secondary)', transition: 'transform 0.2s', display: 'inline-block', transform: isExpanded ? 'rotate(180deg)' : 'none' }}>▼</span>
+                    </div>
+                    {isExpanded && (
+                      <div style={{ borderTop: '1px solid rgba(255,255,255,0.07)', padding: '8px 12px', maxHeight: 220, overflowY: 'auto' }}>
+                        {game.actions.length === 0 ? (
+                          <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Sem ações gravadas.</p>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {game.actions.map((a, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 8, fontSize: 12 }}>
+                                <span style={{ color: 'var(--text-secondary)', minWidth: 52, flexShrink: 0 }}>T{a.turn} {a.isHuman ? '👤' : '🤖'}</span>
+                                <span style={{ color: a.isHuman ? '#93c5fd' : '#fbbf24', flex: 1 }}>{a.description}</span>
+                                <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{a.life[0]}❤ vs {a.life[1]}❤</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {gameHistory.length > 0 && (
+            <button
+              className="btn btn-sm"
+              style={{ marginTop: 12 }}
+              onClick={() => {
+                const json = gameRecorder.exportJson();
+                const blob = new Blob([json], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `mtg-game-history-${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+            >
+              ↓ Exportar histórico JSON
+            </button>
+          )}
+        </div>
+
+        {/* Card Coverage Section */}
+        <div className="settings-section glass">
+          <h2 className="settings-title">📊 Cobertura de Cartas</h2>
+          <p className="settings-desc">Mostra quantas cartas dos sets importados têm efeitos implementados no engine. Cartas sem cobertura podem ser geradas com IA (Ollama).</p>
+
+          {(() => {
+            const s = coverageStats;
+            const barW = (n: number) => `${s.total > 0 ? Math.round((n / s.total) * 100) : 0}%`;
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 16, marginBottom: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, color: '#4ade80' }}>✓ Manual: <strong>{s.hardcoded}</strong></span>
+                  <span style={{ fontSize: 13, color: '#60a5fa' }}>⚡ Auto: <strong>{s.generated}</strong></span>
+                  <span style={{ fontSize: 13, color: '#f87171' }}>✗ Complexas: <strong>{s.complex}</strong></span>
+                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Sem texto: <strong>{s.no_oracle}</strong></span>
+                  {s.total > 0 && <span style={{ fontSize: 13, color: 'var(--gold)', fontWeight: 700 }}>Coberto: {s.pct}%</span>}
+                </div>
+                {s.total > 0 && (
+                  <div style={{ height: 8, borderRadius: 4, background: 'rgba(255,255,255,0.08)', overflow: 'hidden', display: 'flex' }}>
+                    <div style={{ width: barW(s.hardcoded), background: '#4ade80', transition: 'width 0.3s' }} />
+                    <div style={{ width: barW(s.generated), background: '#60a5fa', transition: 'width 0.3s' }} />
+                    <div style={{ width: barW(s.no_oracle), background: 'rgba(255,255,255,0.15)', transition: 'width 0.3s' }} />
+                  </div>
+                )}
+                {s.total === 0 && <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Importe um set para ver a cobertura.</p>}
+              </div>
+            );
+          })()}
+
+          <div style={{ marginBottom: 16 }}>
+            {!llmGenerating ? (
+              <button
+                className="btn btn-sm btn-gold"
+                disabled={complexCards.length === 0 || !ollamaModel}
+                onClick={async () => {
+                  setLlmGenerating(true);
+                  llmAbortRef.current.aborted = false;
+                  const toGenerate = complexCards.map(c => ({
+                    name: c.name, oracle_text: c.oracle_text, type_line: c.type_line, keywords: [] as string[],
+                  }));
+                  if (toGenerate.length === 0) { setLlmGenerating(false); return; }
+                  await generateLlmEffectsForSet(
+                    toGenerate,
+                    ollamaUrl || 'http://localhost:11434',
+                    ollamaModel || 'llama3.2:3b',
+                    (done, total, current) => {
+                      setLlmProgress({ done, total, current });
+                      if (done === total) {
+                        setCoverageStats(getCoverageStats());
+                        setComplexCards(getComplexCards());
+                        setLlmGenerating(false);
+                      }
+                    },
+                    llmAbortRef.current
+                  );
+                }}
+              >
+                🤖 Gerar com IA ({complexCards.length} cartas pendentes)
+              </button>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Gerando {llmProgress.done}/{llmProgress.total}{llmProgress.current ? ` — ${llmProgress.current}` : ''}
+                </span>
+                <button className="btn btn-sm" onClick={() => { llmAbortRef.current.aborted = true; setLlmGenerating(false); }}>
+                  Parar
+                </button>
+              </div>
+            )}
+          </div>
+
+          {complexCards.length > 0 && (
+            <div>
+              <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                Cartas complexas pendentes ({complexCards.length}) — precisam de IA ou implementação manual:
+              </p>
+              <div style={{ maxHeight: 300, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {complexCards.slice(0, 100).map(c => (
+                  <div key={c.name} style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 4, padding: '6px 10px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{c.name}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{c.type_line}</span>
+                    </div>
+                    <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>{c.oracle_text}</p>
+                  </div>
+                ))}
+                {complexCards.length > 100 && (
+                  <p style={{ fontSize: 12, color: 'var(--text-secondary)', textAlign: 'center', padding: 8 }}>
+                    +{complexCards.length - 100} mais cartas
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Theme Section */}
         <div className="settings-section glass">

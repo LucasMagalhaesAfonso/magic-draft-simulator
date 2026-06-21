@@ -1783,6 +1783,8 @@ export function _checkEffectCondition(state, controllerId, effect, data?: any) {
     const oppId = pid === 0 ? 1 : 0;
     const bf = state.players[pid].zones.battlefield.cards;
     switch (cond) {
+      case 'if_teamwork_paid':
+        return !!state._teamworkPaidThisCast;
       case 'if_beheld_dragon':
         return !!(state._beholding && state._beholding[pid]);
       case 'if_discarded_nonland':
@@ -4369,6 +4371,13 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             CardEngine.isCreature(c) && (!effect.other || c._uid !== data.cardUid)
           );
           candidates.sort((a, b) => CardEngine.getPower(b) - CardEngine.getPower(a));
+        } else if (effect.target === 'creature_mv3_or_less_unless_teamwork') {
+          // Cruel Alliance: if teamwork not paid, restrict to MV ≤ 3; otherwise any creature
+          const noTeamwork = !state._teamworkPaidThisCast;
+          candidates = state.players[opponentId].zones.battlefield.cards.filter((c: any) =>
+            CardEngine.isCreature(c) && (noTeamwork ? (c.cmc || 0) <= 3 : true)
+          );
+          candidates.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
         } else {
           // Legacy behavior: target creatures (for backwards compatibility)
           candidates = state.players[targetId].zones.battlefield.cards.filter(c =>
@@ -5099,6 +5108,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             if (nonlands.length > 0) {
               nonlands.sort((a: any, b: any) => (a.cmc || 0) - (b.cmc || 0));
               const discard = nonlands[0];
+              discard._discardedOnTurn = state.turn;
               odHand.remove(discard._uid);
               state.players[controllerId].zones.graveyard.add(discard);
               state.log.push(`Discards ${discard.name}.`);
@@ -5772,13 +5782,20 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         return `Saruman copies and may cast ${sarPicked.name} for free!`;
       }
       case 'sauron_necromancer_attack': {
-        // Sauron the Necromancer: exile target creature card from own GY → create tapped attacking 3/3 black Wraith token copy.
+        // Sauron the Necromancer: exile target creature card from own GY → create tapped attacking 3/3 black Zombie Wraith token copy.
         // At beginning of next end step, exile that token unless Sauron is ring-bearer.
         const snGy = state.players[controllerId].zones.graveyard;
         const snCreatures = snGy.cards.filter((c: any) => CardEngine.isCreature(c));
-        if (snCreatures.length === 0) return null;
 
-        if (state.players[controllerId].isHuman) {
+        let snTokenName = 'Zombie Wraith';
+        if (snCreatures.length > 0 && !state.players[controllerId].isHuman) {
+          // AI: exile highest CMC creature and copy it
+          snCreatures.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
+          const snPicked = snCreatures[0];
+          snGy.remove(snPicked._uid);
+          state.players[controllerId].zones.exile.add(snPicked);
+          snTokenName = snPicked.name;
+        } else if (snCreatures.length > 0 && state.players[controllerId].isHuman) {
           state._pendingGraveyardCardChoice = {
             playerId: controllerId,
             cards: snCreatures,
@@ -5786,21 +5803,16 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
             minAmount: 1,
             effect: { type: 'sauron_necromancer_resolve' },
             controller: controllerId,
-            message: 'Sauron: exile a creature card from your graveyard to create a Wraith token.',
+            message: 'Sauron: exile a creature card from your graveyard to create a Zombie Wraith token.',
           };
           state.waitingForInput = { type: 'graveyard_card_choice', playerId: controllerId };
           return '__paused__';
         }
+        // When GY is empty, still create a 3/3 black Zombie Wraith (simplified — no exile)
 
-        // AI: pick highest CMC creature
-        snCreatures.sort((a: any, b: any) => (b.cmc || 0) - (a.cmc || 0));
-        const snPicked = snCreatures[0];
-        snGy.remove(snPicked._uid);
-        state.players[controllerId].zones.exile.add(snPicked);
-
-        // Create 3/3 black Wraith with menace, tapped and attacking
-        const snToken = CardEngine.createToken(controllerId, 3, 3, snPicked.name, ['menace']);
-        snToken.type_line = 'Token Creature — Wraith';
+        // Create 3/3 black Zombie Wraith with menace, tapped and attacking
+        const snToken = CardEngine.createToken(controllerId, 3, 3, snTokenName, ['menace']);
+        snToken.type_line = 'Token Creature — Zombie Wraith';
         snToken.colors = ['B']; snToken.color_identity = ['B'];
         snToken._tapped = true; snToken._attacking = true;
         snToken._wraith_from_sauron = true;
@@ -5816,7 +5828,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         if (!state._wraith_tokens_to_check) state._wraith_tokens_to_check = [];
         state._wraith_tokens_to_check.push({ uid: snToken._uid, controllerId });
 
-        return `${snPicked.name} exiled — ${snToken.name} Wraith token enters attacking!`;
+        return `Zombie Wraith token enters attacking! (${snTokenName})`;
       }
       case 'sauron_necromancer_resolve': {
         // Called after human picks a GY creature for Sauron's attack trigger
@@ -5827,7 +5839,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         state.players[controllerId].zones.exile.add(snrCard);
 
         const snrToken = CardEngine.createToken(controllerId, 3, 3, snrCard.name, ['menace']);
-        snrToken.type_line = 'Token Creature — Wraith';
+        snrToken.type_line = 'Token Creature — Zombie Wraith';
         snrToken.colors = ['B']; snrToken.color_identity = ['B'];
         snrToken._tapped = true; snrToken._attacking = true;
         snrToken._wraith_from_sauron = true;
@@ -5842,7 +5854,7 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         if (!state._wraith_tokens_to_check) state._wraith_tokens_to_check = [];
         state._wraith_tokens_to_check.push({ uid: snrToken._uid, controllerId });
 
-        return `${snrCard.name} exiled — ${snrToken.name} Wraith token enters attacking!`;
+        return `${snrCard.name} exiled — Zombie Wraith token enters attacking!`;
       }
       case 'exile_gy_creatures_then_cast': {
         // Shadow of the Enemy: exile all creature cards from target player's GY, then cast any for free.
@@ -13116,6 +13128,21 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
         fromLibraryTop = true;
       }
     }
+    // Mayhem: cast from graveyard if discarded this turn
+    let _mayhemCostOverride: string | null = null;
+    if (!card) {
+      const gy = state.players[playerId].zones.graveyard;
+      const gyCard = gy.cards ? gy.cards.find((c: any) => c._uid === cardUid) : null;
+      if (gyCard) {
+        const mayhemDef = CardEngine.getPreprocessedEffects(gyCard)?.mayhem;
+        if (mayhemDef && gyCard._discardedOnTurn === state.turn) {
+          card = gyCard;
+          _mayhemCostOverride = mayhemDef.cost;
+          state._castingMayhem = true;
+        }
+      }
+    }
+
     if (!card) {
 
       return { success: false, msg: 'Card not found.' };
@@ -13196,6 +13223,12 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       useCost = effectiveCost;
       useCmc = ManaSystem.parseCost(effectiveCost).total || card.cmc || 0;
       useName = card.name;
+    }
+
+    // Apply mayhem cost override (card cast from GY via Mayhem)
+    if (_mayhemCostOverride) {
+      useCost = _mayhemCostOverride;
+      useCmc = ManaSystem.parseCost(_mayhemCostOverride).total || 0;
     }
 
     // Apply cost reduction from static abilities on battlefield
@@ -13481,6 +13514,29 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       }
     }
 
+    // Additional cost: teamwork (optional — tap creatures with total power >= N)
+    if (!isFreeFromExile && !isResuming && !state._skipAdditionalCostCheck) {
+      const addCostsTeamwork = CardEngine.getAdditionalCosts(card);
+      const teamworkCost = addCostsTeamwork.find((ac: any) => ac.type === 'teamwork');
+      if (teamworkCost) {
+        const requiredPower = teamworkCost.power || 0;
+        const bf = state.players[playerId].zones.battlefield.cards;
+        const untappedCreatures = bf.filter((c: any) => CardEngine.isCreature(c) && !c._tapped);
+        const totalPower = untappedCreatures.reduce((sum: number, c: any) => sum + (CardEngine.getPower(c) || 0), 0);
+        if (totalPower >= requiredPower) {
+          // AI/auto: tap creatures greedily until power threshold met
+          let powered = 0;
+          for (const c of untappedCreatures) {
+            if (powered >= requiredPower) break;
+            c._tapped = true;
+            powered += CardEngine.getPower(c) || 0;
+          }
+          state._teamworkPaidThisCast = true;
+          state.log.push(`${useName || card.name}: teamwork paid (tapped creatures with total power ${powered}).`);
+        }
+      }
+    }
+
     // Additional cost: discard (e.g. Quarrel's End)
     if (!isFreeFromExile && !isResuming && !state._skipAdditionalCostCheck) {
       const addCosts2 = CardEngine.getAdditionalCosts(card);
@@ -13510,6 +13566,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
           // AI: discard worst card(s) by CMC
           const sorted = handCards.slice().sort((a: any, b: any) => (a.cmc || 0) - (b.cmc || 0));
           for (let d = 0; d < discardAmt && d < sorted.length; d++) {
+            sorted[d]._discardedOnTurn = state.turn;
             hand.remove(sorted[d]._uid);
             state.players[playerId].zones.graveyard.add(sorted[d]);
             state.log.push(`AI discards ${sorted[d].name} as additional cost.`);
@@ -13726,8 +13783,13 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       }
     }
 
-    // Remove from hand, exile, or library top
-    if (fromExile) {
+    // Remove from hand, exile, library top, or graveyard (Mayhem)
+    if (state._castingMayhem) {
+      state.players[playerId].zones.graveyard.remove(cardUid);
+      delete state._castingMayhem;
+      card._castViaMayhem = true;
+      state.log.push(`${card.name} cast via Mayhem from graveyard.`);
+    } else if (fromExile) {
       state.players[playerId].zones.exile.remove(cardUid);
       delete state._exiledPlayable[cardUid];
       // Clean up _exiledCards visual on the source permanent that exiled this card
@@ -13865,6 +13927,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
           return { success: true, pendingStack: true };
         } else {
           // No responses - pop from stack, let normal flow continue
+          state.log.push(`${playerLabel} casts ${card.name}.`);
           state.stack.items.pop();
           // Process queued cast triggers (e.g. Erebor Flamesmith cast_instant_sorcery)
           if (!state._processingQueue) processGameQueue(state);
@@ -14130,6 +14193,7 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
 
       const stackLog = GameStack.resolve(state.stack, state);
       state.log.push(...stackLog);
+      delete state._teamworkPaidThisCast;
 
       // Spell copy
       if (state._pendingSpellCopy && state._pendingSpellCopy[playerId]) {
@@ -14151,8 +14215,12 @@ export function castSpell(state, playerId, cardUid, targets, castingAdventure, c
       // Non-permanent spells go to OWNER's graveyard after resolving (MTG rule 608.2)
       // Cards stolen from opponent (Kotis exile) have _ownerId set to original owner
       const gyDestPlayer = card._ownerId !== undefined ? card._ownerId : playerId;
-      // If modal/target selection is pending, defer GY move until after resolution
-      if (state.waitingForInput && (state.waitingForInput.type === 'modal_choice' || state.waitingForInput.type === 'post_modal_target' || state.waitingForInput.type === 'distribute_damage')) {
+      // Mayhem: exile after resolution instead of going to GY (like Flashback)
+      if (card._castViaMayhem) {
+        delete card._castViaMayhem;
+        state.players[gyDestPlayer].zones.exile.add(card);
+      } else if (state.waitingForInput && (state.waitingForInput.type === 'modal_choice' || state.waitingForInput.type === 'post_modal_target' || state.waitingForInput.type === 'distribute_damage')) {
+        // If modal/target selection is pending, defer GY move until after resolution
         state._pendingSpellToGY = { card, playerId: gyDestPlayer };
       } else {
         state.players[gyDestPlayer].zones.graveyard.add(card);
@@ -20659,6 +20727,8 @@ export function detectAndFireTapTriggers(state: any): string[] {
 
 /** After resolving interactive input, return to appropriate waiting state. */
 function _afterResolve(state: any): void {
+  // Clear per-cast flags
+  delete state._teamworkPaidThisCast;
   // Clear ETB-pause flag so next castSpell fires triggers normally
   delete state._castTriggersAlreadyFired;
   // combat_begin triggers resolve asynchronously (buff_choice etc.), so the normal

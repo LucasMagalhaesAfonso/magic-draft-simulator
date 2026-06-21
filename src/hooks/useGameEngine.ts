@@ -7,6 +7,9 @@ import { VfxManager, TRAVEL_MS } from '../components/game/VfxLayer';
 import { setVfxBridge, setVfxTextBridge, setCombatVfxBridge } from '../engine/vfx-bridge';
 import { aiBrain } from '../engine/ai-brain';
 import { SoundManager } from '../engine/sound-manager';
+import { getLlmTurnDecision } from '../engine/llm-ai';
+import { useAppStore } from '../store/useAppStore';
+import { gameRecorder } from '../engine/game-recorder';
 
 // ── Register VFX bridges so engine can trigger animations ─────────────────
 
@@ -737,6 +740,27 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
   const mountedRef = useRef(true);
   const trainedForGameRef = useRef(false);
 
+  // LLM AI settings from store — kept in refs so they're available inside callbacks
+  const aiDifficulty    = useAppStore(s => s.aiDifficulty);
+  const aiProvider      = useAppStore(s => s.aiProvider);
+  const anthropicApiKey = useAppStore(s => s.anthropicApiKey);
+  const ollamaUrl       = useAppStore(s => s.ollamaUrl);
+  const ollamaModel     = useAppStore(s => s.ollamaModel);
+
+  const aiDifficultyRef    = useRef(aiDifficulty);
+  const aiProviderRef      = useRef(aiProvider);
+  const anthropicApiKeyRef = useRef(anthropicApiKey);
+  const ollamaUrlRef       = useRef(ollamaUrl);
+  const ollamaModelRef     = useRef(ollamaModel);
+
+  aiDifficultyRef.current    = aiDifficulty;
+  aiProviderRef.current      = aiProvider;
+  anthropicApiKeyRef.current = anthropicApiKey;
+  ollamaUrlRef.current       = ollamaUrl;
+  ollamaModelRef.current     = ollamaModel;
+
+  const llmThinkingRef = useRef(false);
+
   // Pending timers — cleared on unmount to prevent memory leaks
   const pendingTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   function safeTimeout(fn: () => void, ms: number) {
@@ -788,6 +812,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
   //   - other phases → continues the current phase from where it paused
   const afterResolve = useCallback((gs: any) => {
     console.log(`[LOOP] afterResolve, phase=${gs.phase}, waitingForInput=${gs.waitingForInput?.type}, stack=${gs.stack?.items?.length}, winner=${gs.winner}`);
+    gameRecorder.setGs(gs);
     // AI untap visual pause: render the untapped state, then continue AI turn
     if (gs.waitingForInput?.type === 'ai_untap_visual' && _GS) {
       refresh();
@@ -816,13 +841,87 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
     if (!gs.waitingForInput && !gs.winner && _GS) {
       const ap = gs.activePlayer;
       if (!gs.players[ap]?.isHuman) {
-        // AI's turn — brief visual delay then continue so "thinking..." shows
-        safeTimeout(() => {
-          if (!gsRef.current || !_GS) return;
-          console.log(`[LOOP] AI step (afterResolve delay), phase=${gsRef.current.phase}, waitingForInput=${gsRef.current.waitingForInput?.type}, stack=${gsRef.current.stack?.items?.length}`);
-          _GS.reprocessCurrentPhase(gsRef.current);
+        const diff     = aiDifficultyRef.current;
+        const provider = aiProviderRef.current;
+        const isEasyMode = diff === 'easy';
+
+        // Determine if LLM is configured and ready
+        const llmReady = (diff === 'hard' || diff === 'extreme') && (
+          (provider === 'anthropic' && anthropicApiKeyRef.current) ||
+          (provider === 'ollama') // Ollama: always try, falls back to heuristic if not running
+        );
+
+        if (isEasyMode) {
+          gsRef.current._aiEasyMode = true;
+        } else {
+          delete gsRef.current?._aiEasyMode;
+        }
+
+        if (llmReady && !llmThinkingRef.current) {
+          // Build LLM config
+          const llmConfig = provider === 'anthropic'
+            ? { provider: 'anthropic' as const, difficulty: diff as 'hard' | 'extreme', anthropicApiKey: anthropicApiKeyRef.current }
+            : { provider: 'ollama' as const, difficulty: diff as 'hard' | 'extreme', ollamaUrl: ollamaUrlRef.current, ollamaModel: ollamaModelRef.current };
+
+          // Intercept for LLM: pause, call API, store decision, then continue
+          llmThinkingRef.current = true;
+          gsRef.current.waitingForInput = { type: 'ai_thinking_llm', playerId: ap };
           refresh();
-        }, 300);
+
+          getLlmTurnDecision(gsRef.current, ap, llmConfig)
+            .then(decision => {
+              if (!mountedRef.current || !gsRef.current || !_GS) return;
+              if (decision) {
+                console.log(`[LLM] Decision: ${decision.reasoning}`);
+                gsRef.current._llmDecision = {
+                  mainPlayUids: decision.mainPlayUids,
+                  attackerUids: decision.attackerUids,
+                };
+                if (decision.mainPlayUids?.length) {
+                  const hand = gsRef.current?.players[ap]?.zones.hand.getAll() || [];
+                  const names = decision.mainPlayUids
+                    .map((uid: string) => hand.find((c: any) => c._uid === uid)?.name)
+                    .filter(Boolean);
+                  if (names.length) gameRecorder.record({
+                    player: ap, isHuman: false, phase: 'main',
+                    description: `IA jogou: ${names.join(', ')}`, cards: names,
+                  });
+                }
+                if (decision.attackerUids?.length) {
+                  const bf = gsRef.current?.players[ap]?.zones.battlefield.getAll() || [];
+                  const names = decision.attackerUids
+                    .map((uid: string) => bf.find((c: any) => c._uid === uid)?.name)
+                    .filter(Boolean);
+                  if (names.length) gameRecorder.record({
+                    player: ap, isHuman: false, phase: 'attack',
+                    description: `IA atacou com: ${names.join(', ')}`, cards: names,
+                  });
+                }
+              } else {
+                console.warn('[LLM] No decision returned, falling back to heuristic');
+              }
+              gsRef.current.waitingForInput = null;
+              llmThinkingRef.current = false;
+              _GS.reprocessCurrentPhase(gsRef.current);
+              refresh();
+            })
+            .catch(err => {
+              console.warn('[LLM] Error:', err);
+              if (!mountedRef.current || !gsRef.current || !_GS) return;
+              gsRef.current.waitingForInput = null;
+              llmThinkingRef.current = false;
+              _GS.reprocessCurrentPhase(gsRef.current);
+              refresh();
+            });
+        } else {
+          // Standard AI path: brief visual delay then continue
+          safeTimeout(() => {
+            if (!gsRef.current || !_GS) return;
+            console.log(`[LOOP] AI step (afterResolve delay), phase=${gsRef.current.phase}, waitingForInput=${gsRef.current.waitingForInput?.type}, stack=${gsRef.current.stack?.items?.length}`);
+            _GS.reprocessCurrentPhase(gsRef.current);
+            refresh();
+          }, 300);
+        }
       } else {
         // Human's turn — continue immediately (restores main_phase WFI, etc.)
         console.log(`[LOOP] Human reprocess, phase=${gs.phase}, waitingForInput=${gs.waitingForInput?.type}`);
@@ -839,6 +938,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
       // AI is player 1; won = AI won
       const aiWon = snap.winner === 1;
       aiBrain.trainOnGame(aiWon).catch((e) => console.warn('[AiBrain] trainOnGame error:', e));
+      gameRecorder.endGame(snap.winner, snap.turn ?? 0).catch(() => {});
     }
     // Reset flag on new game (winner goes back to null)
     if (snap?.winner == null) {
@@ -932,6 +1032,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
   // Initialize
   useEffect(() => {
     mountedRef.current = true;
+    gameRecorder.load().catch(() => {});
 
     async function init() {
       try {
@@ -945,6 +1046,7 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
         // Mark players
         gs.players[0].isHuman = true;
         gs.players[1].isHuman = false;
+        gameRecorder.startGame(gs);
 
         // Don't call startGame yet — let mulligan screen handle it.
         // AI auto-mulligans: keep its opening hand immediately
@@ -1181,6 +1283,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
           isFreeCastFromExile = !!gs._exiledPlayable[cardUid].freeCast;
         }
         if (!card) { console.warn(`[castSpell] Card ${cardUid} not found in hand or exile`); return; }
+        gameRecorder.record({
+          player: 0, isHuman: true, phase: gs.phase || 'main',
+          description: `Conjurou: ${card.name}`,
+          cards: [card.name],
+        });
 
         // Free cast from exile: skip all mana handling, go straight to engine
         if (isFreeCastFromExile) {
@@ -1706,7 +1813,13 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
       const gs = gsRef.current;
       if (!gs || !_GS) return;
       try {
+        const landCard = gs.players[0].zones.hand.getAll().find((c: any) => c._uid === cardUid);
         _GS.playLand(gs, 0, cardUid);
+        gameRecorder.record({
+          player: 0, isHuman: true, phase: gs.phase || 'main',
+          description: `Jogou terreno: ${landCard?.name || cardUid}`,
+          cards: [landCard?.name || cardUid],
+        });
         clearManaUndo();
         refresh();
       } catch (e) {
@@ -1830,6 +1943,11 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
             const entry: any = { uid: cardUid, card };
             if (pwUid) entry.attackTarget = pwUid;
             gs.combat.attackers.push(entry);
+            gameRecorder.record({
+              player: 0, isHuman: true, phase: 'attack',
+              description: `Declarou atacante: ${card.name}`,
+              cards: [card.name],
+            });
           }
         }
         refresh();
@@ -2202,6 +2320,21 @@ export function useGameEngine(playerDeck: Card[], botDeck: Card[], isMultiplayer
         }
       }
 
+      if (gs.combat?.blockers) {
+        for (const [attackerUid, blockerList] of Object.entries(gs.combat.blockers as Record<string, any[]>)) {
+          for (const blockerEntry of (blockerList || [])) {
+            const blockerCard = blockerEntry?.card || blockerEntry;
+            const attackerCard = gs.players[gs.activePlayer]?.zones.battlefield.getAll().find((c: any) => c._uid === attackerUid);
+            if (blockerCard?.name) {
+              gameRecorder.record({
+                player: 0, isHuman: true, phase: 'block',
+                description: `Bloqueou ${attackerCard?.name || '?'} com ${blockerCard.name}`,
+                cards: [blockerCard.name, attackerCard?.name].filter(Boolean),
+              });
+            }
+          }
+        }
+      }
       gs.waitingForInput = null;
       try { _GS.advancePhase(gs); } catch (e) { console.warn('[confirmBlockers]', e); }
       refresh();

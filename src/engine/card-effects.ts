@@ -64,6 +64,20 @@ export const CardEffectsDB: Record<string, any> = {
     cast: [{ type: "counter_spell", target: "spell", unless_pay: 2, unless_pay_with_behold: 4 }]
   },
 
+  // =================== MARVEL SUPER HEROES (MSH/MSC) ===================
+  "cruel alliance": {
+    additional_costs: [{ type: "teamwork", power: 2, optional: true }],
+    cast: [
+      { type: "exile", target: "creature_mv3_or_less_unless_teamwork" },
+      { type: "gain_life", amount: 3, condition: "if_teamwork_paid" }
+    ]
+  },
+
+  "sadistic slash": {
+    cast: [{ type: "debuff", target: "creature", power: -5, toughness: -5 }],
+    mayhem: { cost: "{1}{B}" }
+  },
+
   "twin bolt": {
     // 2 damage divided as you choose among one or two targets
     cast: [{ type: "damage_divided", amount: 2, target: "any" }]
@@ -2056,7 +2070,9 @@ export const CardEffectsDB: Record<string, any> = {
     triggered: [{ event: "token_created", self: false, effects: [{ type: "counter", counter: "+1/+1", amount: 1, target: "own_creature", exclude_self: true }] }]
   },
   "samwise gamgee": {
-    // Oracle: ETB creates Food. Activated: Sacrifice three Foods → return target historic card from GY to hand.
+    // Oracle: ETB creates Food. When another nontoken creature enters, create a Food token.
+    // Activated: Sacrifice three Foods → return target historic card from GY to hand.
+    etb: [{ type: "create_token", power: 0, toughness: 0, name: "Food" }],
     triggered: [{ event: "other_creature_enters", self: false, condition: "nontoken_creature", effects: [{ type: "create_token", power: 0, toughness: 0, name: "Food" }] }],
     activated: [{ cost: { sacrifice: "Food", sacrifice_count: 3 }, effects: [{ type: "return_from_graveyard", target: "historic", to_hand: true }] }]
   },

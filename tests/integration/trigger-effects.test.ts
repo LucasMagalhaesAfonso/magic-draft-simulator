@@ -197,6 +197,12 @@ describe('Layer 4c: Trigger Effects Runtime', () => {
       'discard', 'sacrifice', 'enchanted_dies', 'attached_dies',
       'enchanted_attacks', 'equipped_deals_damage',
       'creature_dies_from_spider',
+      // Equipment-specific combat events
+      'equipped_blocked_by', 'equipped_blocks',
+      // Damage and phase events
+      'deals_damage_to_creature', 'phase_in',
+      // Token and specialized death events
+      'token_dies', 'opponent_creature_dies_from_damage',
     ];
 
     const dbCards = FIXTURES.filter(f => f.dbEntry !== null);

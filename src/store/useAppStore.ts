@@ -3,7 +3,14 @@ import type { Screen, Card, DeckList, MultiplayerRole, OnlineUser } from '../lib
 
 export type ThemeId = 'spark' | 'nyx' | 'phyrexian' | 'kamigawa' | 'obscura' | 'eldrazi';
 export type PlaymatId = 'default' | 'forest' | 'ocean' | 'mountain' | 'plains' | 'swamp' | 'nyx' | 'custom';
+export type AiDifficulty = 'easy' | 'medium' | 'hard' | 'extreme';
+export type AiProvider = 'ollama' | 'anthropic';
 
+const AI_DIFFICULTY_KEY  = 'mtg_draft_ai_difficulty';
+const AI_PROVIDER_KEY    = 'mtg_draft_ai_provider';
+const ANTHROPIC_KEY_KEY  = 'mtg_draft_anthropic_key';
+const OLLAMA_URL_KEY     = 'mtg_draft_ollama_url';
+const OLLAMA_MODEL_KEY   = 'mtg_draft_ollama_model';
 const PLAYMAT_KEY = 'mtg_draft_playmat';
 const PLAYMAT_ART_KEY = 'mtg_draft_playmat_art';
 const PLAYMAT_POS_KEY = 'mtg_draft_playmat_pos';
@@ -11,6 +18,11 @@ const PLAYMAT_SIZE_KEY = 'mtg_draft_playmat_size';
 const LAND_ARTS_KEY = 'mtg_draft_land_arts';
 const SLEEVE_ART_KEY = 'mtg_draft_sleeve_art';
 
+function loadAiDifficulty(): AiDifficulty { return (localStorage.getItem(AI_DIFFICULTY_KEY) as AiDifficulty) || 'medium'; }
+function loadAiProvider(): AiProvider { return (localStorage.getItem(AI_PROVIDER_KEY) as AiProvider) || 'ollama'; }
+function loadAnthropicKey(): string { return localStorage.getItem(ANTHROPIC_KEY_KEY) || ''; }
+function loadOllamaUrl(): string { return localStorage.getItem(OLLAMA_URL_KEY) || 'http://localhost:11434'; }
+function loadOllamaModel(): string { return localStorage.getItem(OLLAMA_MODEL_KEY) || 'llama3.2:3b'; }
 function loadPlaymat(): PlaymatId { return (localStorage.getItem(PLAYMAT_KEY) as PlaymatId) || 'default'; }
 function loadPlaymatArt(): string { return localStorage.getItem(PLAYMAT_ART_KEY) || ''; }
 function loadPlaymatPosition(): string { return localStorage.getItem(PLAYMAT_POS_KEY) || '50% 50%'; }
@@ -147,6 +159,18 @@ interface AppState {
   // Where to return after a game ends or player concedes (e.g. 'pod_lobby')
   gameReturnScreen: string | null;
   setGameReturnScreen: (screen: string | null) => void;
+
+  // AI settings
+  aiDifficulty: AiDifficulty;
+  setAiDifficulty: (d: AiDifficulty) => void;
+  aiProvider: AiProvider;
+  setAiProvider: (p: AiProvider) => void;
+  anthropicApiKey: string;
+  setAnthropicApiKey: (key: string) => void;
+  ollamaUrl: string;
+  setOllamaUrl: (url: string) => void;
+  ollamaModel: string;
+  setOllamaModel: (model: string) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -255,4 +279,31 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   gameReturnScreen: null,
   setGameReturnScreen: (gameReturnScreen) => set({ gameReturnScreen }),
+
+  aiDifficulty: loadAiDifficulty(),
+  setAiDifficulty: (aiDifficulty) => {
+    localStorage.setItem(AI_DIFFICULTY_KEY, aiDifficulty);
+    set({ aiDifficulty });
+  },
+  aiProvider: loadAiProvider(),
+  setAiProvider: (aiProvider) => {
+    localStorage.setItem(AI_PROVIDER_KEY, aiProvider);
+    set({ aiProvider });
+  },
+  anthropicApiKey: loadAnthropicKey(),
+  setAnthropicApiKey: (anthropicApiKey) => {
+    if (anthropicApiKey) localStorage.setItem(ANTHROPIC_KEY_KEY, anthropicApiKey);
+    else localStorage.removeItem(ANTHROPIC_KEY_KEY);
+    set({ anthropicApiKey });
+  },
+  ollamaUrl: loadOllamaUrl(),
+  setOllamaUrl: (ollamaUrl) => {
+    localStorage.setItem(OLLAMA_URL_KEY, ollamaUrl);
+    set({ ollamaUrl });
+  },
+  ollamaModel: loadOllamaModel(),
+  setOllamaModel: (ollamaModel) => {
+    localStorage.setItem(OLLAMA_MODEL_KEY, ollamaModel);
+    set({ ollamaModel });
+  },
 }));

@@ -707,7 +707,7 @@ function handleLookTop(gs: any): HumanAction {
 }
 
 function handleGraveyardChoice(gs: any): HumanAction {
-  const pending = gs._pendingGYReturn || gs._pendingGraveyardChoice || gs._pendingGraveyardCard;
+  const pending = gs._pendingGYReturn || gs._pendingGraveyardChoice || gs._pendingGraveyardCard || gs._pendingGraveyardCardChoice;
   const choices = pending?.cards || pending?.choices || [];
 
   if (choices.length > 0) {
@@ -730,16 +730,17 @@ function handleGraveyardChoice(gs: any): HumanAction {
 }
 
 function handleLegendRule(gs: any): HumanAction {
-  const pending = gs._pendingLegendRule;
-  const cards = pending?.cards || [];
+  const pending = gs._pendingLegendRuleSacrifice;
+  const candidates = pending?.candidates || [];
 
-  if (cards.length > 0) {
-    // Sacrifice the oldest one (first in list)
-    GameState.resolveLegendRuleSacrifice(gs, cards[0]._uid);
-    return { type: 'legend_rule', detail: `sacrificed ${cards[0].name}` };
+  if (candidates.length > 0) {
+    // Sacrifice the newly cast copy, keeping the one already on battlefield
+    const toSac = candidates.find((c: any) => c.isNew) || candidates[0];
+    GameState.resolveLegendRuleSacrifice(gs, toSac.uid);
+    return { type: 'legend_rule', detail: `sacrificed ${toSac.name}` };
   }
 
   gs.waitingForInput = null;
   GameState.reprocessCurrentPhase(gs);
-  return { type: 'legend_rule', detail: 'no cards' };
+  return { type: 'legend_rule', detail: 'no candidates' };
 }

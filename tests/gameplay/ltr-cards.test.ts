@@ -199,7 +199,7 @@ describe('Aragorn, Company Leader', () => {
       setCode: 'ltr',
       copies: 2,
       maxTurns: 25,
-      humanOptions: { forceModalChoice: 0 },
+      humanOptions: { forceModalChoice: 0, dontAttack: true },
       assertions: [
         assertNoCrash(),
         assertCardWasPlayed('Aragorn, Company Leader'),

@@ -1,5 +1,6 @@
 import type { CardRow } from './types';
 import { bulkInsertCards, setPref } from './database';
+import { processSetCards } from '../engine/generated-effects-db';
 
 const SCRYFALL_BULK_URL = 'https://api.scryfall.com/bulk-data';
 const BATCH_SIZE = 500;
@@ -211,6 +212,14 @@ export async function syncSingleSet(
       onProgress?.({ phase: 'inserting', current: inserted, total, message: `Inserting card ${inserted}/${total}...` });
     });
 
+    // Auto-generate effects for cards not in the hand-coded DB
+    processSetCards(allCards.map(c => ({
+      name: c.name,
+      oracle_text: c.oracle_text || c.card_faces?.[0]?.oracle_text,
+      type_line: c.type_line || c.card_faces?.[0]?.type_line,
+      keywords: c.keywords,
+    })), setCode);
+
     onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `Done! ${rows.length} cards. Fetching alt art...` });
 
     // Fetch alternate art variants (unique=prints) and store in localStorage
@@ -333,6 +342,14 @@ export async function seedBundledSets(
       await bulkInsertCards(rows, (inserted, total) => {
         onProgress?.({ phase: 'inserting', current: inserted, total, message: `Importing ${setCode.toUpperCase()}... ${inserted}/${total}` });
       });
+
+      // Auto-generate effects for cards not in the hand-coded DB
+      processSetCards(cards.map((c: ScryfallCard) => ({
+        name: c.name,
+        oracle_text: c.oracle_text || c.card_faces?.[0]?.oracle_text,
+        type_line: c.type_line || c.card_faces?.[0]?.type_line,
+        keywords: c.keywords,
+      })), setCode);
 
       onProgress?.({ phase: 'done', current: rows.length, total: rows.length, message: `${setCode.toUpperCase()} importado! Buscando artes alternativas...` });
 

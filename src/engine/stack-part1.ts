@@ -903,6 +903,9 @@ export function _resolveItem(item, state) {
             filterFn = (c: any) => !Cards.isLand(c);
           } else if (effect.target === 'own_creature') {
             filterFn = (c: any) => Cards.isCreature(c) && (!effect.other || c._uid !== card?._uid);
+          } else if (effect.target === 'creature_mv3_or_less_unless_teamwork') {
+            const noTeamwork = !gameState._teamworkPaidThisCast;
+            filterFn = (c: any) => Cards.isCreature(c) && (noTeamwork ? (c.cmc || 0) <= 3 : true);
           }
 
           const candidates = bf.cards

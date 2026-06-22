@@ -1053,8 +1053,10 @@ export const CardEffectsDB: Record<string, any> = {
   // --- Planeswalker (simplified) ---
 
   "ugin, eye of the storms": {
-    cast: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }],
-    triggered: [{ event: "cast_colorless", effects: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }] }],
+    triggered: [
+      { event: "cast_spell", self: true, effects: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }] },
+      { event: "cast_colorless", effects: [{ type: "exile", target: "colored_permanent", up_to_max: 1, optional: true }] }
+    ],
     activated: [
       { cost: { loyalty: 2 }, effects: [{ type: "gainLife", amount: 3 }, { type: "draw", amount: 1 }] },
       { cost: { loyalty: 0 }, effects: [{ type: "add_mana", color: "C", amount: 3 }] },

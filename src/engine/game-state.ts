@@ -3314,8 +3314,8 @@ export function _resolveSimpleEffect(state, controllerId, effect, data) {
         }
 
         // AI: always chooses counters (better for recursion) if creature exists
-        if (!endureCard._counters) endureCard._counters = { '+1/+1': 0, '-1/-1': 0 };
-        endureCard._counters['+1/+1'] += endureAmount;
+        if (!endureCard._counters) endureCard._counters = {};
+        endureCard._counters['+1/+1'] = (endureCard._counters['+1/+1'] || 0) + endureAmount;
         return `${endureCard.name} endure ${endureAmount}: +${endureAmount} counters +1/+1.`;
       }
       case 'stun_counter': {

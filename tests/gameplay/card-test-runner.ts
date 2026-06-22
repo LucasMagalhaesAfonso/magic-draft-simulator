@@ -132,6 +132,19 @@ function parseCMC(manaCost: string): number {
   return cmc;
 }
 
+function parseColorsFromManaCost(manaCost: string): string[] {
+  if (!manaCost) return ['W'];
+  const found = new Set<string>();
+  const matches = manaCost.match(/\{([WUBRG])(?:\/[WUBRG2])?\}/g) || [];
+  for (const m of matches) {
+    const inner = m.replace(/[{}]/g, '');
+    for (const ch of inner.split('/')) {
+      if ('WUBRG'.includes(ch)) found.add(ch);
+    }
+  }
+  return found.size > 0 ? [...found] : ['W'];
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Scryfall loader
 // ═══════════════════════════════════════════════════════════════════════
@@ -185,7 +198,7 @@ function scryfallToEngineCard(sc: any, uid: string): any {
 // ═══════════════════════════════════════════════════════════════════════
 
 function buildPlayerDeck(scryfallCard: any, copies = 3, setCode = 'ltr'): any[] {
-  const colors = scryfallCard.colors?.length > 0 ? scryfallCard.colors : ['W'];
+  const colors = scryfallCard.colors?.length > 0 ? scryfallCard.colors : parseColorsFromManaCost(scryfallCard.mana_cost || '');
   const cmc = scryfallCard.cmc || parseCMC(scryfallCard.mana_cost || '') || 3;
   const landCount = Math.min(22, Math.max(15, cmc + 10));
   const cards: any[] = [];
